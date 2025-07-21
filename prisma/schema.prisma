@@ -1,0 +1,206 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  password      String?
+  name          String?
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  accounts      Account[]
+  sessions      Session[]
+  teamMembers   TeamMember[]
+  createdAssets Asset[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Team {
+  id          String       @id @default(cuid())
+  name        String
+  description String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  
+  members     TeamMember[]
+  projects    Project[]
+}
+
+model TeamMember {
+  id        String   @id @default(cuid())
+  userId    String
+  teamId    String
+  role      TeamRole @default(MEMBER)
+  createdAt DateTime @default(now())
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, teamId])
+}
+
+enum TeamRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  teamId      String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  team        Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  assets      Asset[]
+  jobs        ProcessingJob[]
+}
+
+model Asset {
+  id              String   @id @default(cuid())
+  projectId       String
+  fileName        String
+  fileSize        Int
+  mimeType        String
+  storageUrl      String
+  thumbnailUrl    String?
+  
+  // Metadata from EXIF
+  metadata        Json?
+  gpsLatitude     Float?
+  gpsLongitude    Float?
+  altitude        Float?
+  gimbalRoll      Float?
+  gimbalPitch     Float?
+  gimbalYaw       Float?
+  cameraFov       Float?
+  imageWidth      Int?
+  imageHeight     Int?
+  lrfDistance     Float?
+  lrfTargetLat    Float?
+  lrfTargetLon    Float?
+  
+  createdAt       DateTime @default(now())
+  createdById     String
+  
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy       User     @relation(fields: [createdById], references: [id])
+  detections      Detection[]
+  processingJobs  ProcessingJob[]
+  
+  @@index([projectId])
+  @@index([gpsLatitude, gpsLongitude])
+}
+
+model ProcessingJob {
+  id          String       @id @default(cuid())
+  projectId   String
+  type        JobType
+  status      JobStatus    @default(PENDING)
+  config      Json?        // Job-specific configuration (e.g., Roboflow model ID)
+  progress    Int          @default(0)
+  errorMessage String?
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime     @default(now())
+  
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assets      Asset[]
+  detections  Detection[]
+  
+  @@index([projectId, status])
+}
+
+enum JobType {
+  AI_DETECTION
+  MANUAL_ANNOTATION
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model Detection {
+  id              String         @id @default(cuid())
+  jobId           String
+  assetId         String
+  type            DetectionType
+  className       String
+  confidence      Float?
+  
+  // Pixel coordinates
+  boundingBox     Json           // {x, y, width, height} or polygon points
+  
+  // Geographic coordinates
+  geoCoordinates  Json           // GeoJSON format
+  centerLat       Float?
+  centerLon       Float?
+  
+  // Additional data
+  metadata        Json?          // Any additional data (e.g., chemical recommendations)
+  verified        Boolean        @default(false)
+  
+  createdAt       DateTime       @default(now())
+  
+  job             ProcessingJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  asset           Asset          @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  
+  @@index([jobId])
+  @@index([assetId])
+  @@index([centerLat, centerLon])
+}
+
+enum DetectionType {
+  AI
+  MANUAL
+}
+
+model ChemicalRecommendation {
+  id          String   @id @default(cuid())
+  species     String   @unique
+  chemical    String
+  dosagePerHa Float
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}

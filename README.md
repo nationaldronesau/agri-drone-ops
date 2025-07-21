@@ -1,36 +1,115 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AgriDrone Ops - Agricultural Drone Operations Platform
+
+An AI-powered platform for agricultural drone operations. Upload drone imagery, detect weeds and crops using AI, manually annotate targets, and generate precise spray coordinates for your operations.
+
+## Features
+
+- 🚁 **Batch Image Upload** - Process thousands of drone images with automatic EXIF metadata extraction
+- 🤖 **AI Detection** - Powered by Roboflow models trained on wattle, lantana, and more species
+- 🎯 **Manual Annotation** - Draw polygons and bounding boxes for precise target identification
+- 🗺️ **Geo-Coordinates** - Convert pixel detections to real-world GPS coordinates
+- 👥 **Team Collaboration** - Create teams, manage permissions, and work together
+- 📊 **Historical Analysis** - Compare farm data over time
+- 💊 **Chemical Recommendations** - Get species-specific treatment suggestions
+- 📥 **Export Options** - Generate CSV/KML files for spray drones
+
+## Tech Stack
+
+- **Frontend**: Next.js 14, TypeScript, Tailwind CSS
+- **Authentication**: NextAuth.js
+- **Database**: PostgreSQL with Prisma ORM
+- **Maps**: Mapbox/Leaflet
+- **AI Integration**: Roboflow API
+- **Queue System**: BullMQ with Redis
+- **File Storage**: Local/S3 compatible
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
 
+- Node.js 18+
+- PostgreSQL database
+- Redis server (for job queue)
+- Roboflow account and API key
+- Mapbox access token (optional)
+
+### Installation
+
+1. Clone the repository:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+git clone <repository-url>
+cd agri-drone-ops
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+2. Install dependencies:
+```bash
+npm install
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+3. Set up environment variables:
+```bash
+cp .env.local.example .env.local
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Edit `.env.local` with your configuration:
+- Database connection string
+- NextAuth secret
+- Roboflow API credentials
+- Mapbox token
+- Redis URL
 
-## Learn More
+4. Set up the database:
+```bash
+npx prisma generate
+npx prisma migrate dev
+```
 
-To learn more about Next.js, take a look at the following resources:
+5. Run the development server:
+```bash
+npm run dev
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Open [http://localhost:3000](http://localhost:3000) to see the application.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Project Structure
 
-## Deploy on Vercel
+```
+agri-drone-ops/
+├── app/                    # Next.js app directory
+│   ├── api/               # API routes
+│   ├── auth/              # Authentication pages
+│   └── dashboard/         # Main app pages
+├── components/            # React components
+│   ├── ui/               # Reusable UI components
+│   ├── features/         # Feature-specific components
+│   └── layout/           # Layout components
+├── lib/                   # Utility functions
+│   ├── auth/             # Authentication config
+│   ├── db/               # Database client
+│   └── utils/            # Helper functions
+├── prisma/               # Database schema
+└── public/               # Static assets
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Current Progress
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+✅ Project setup with Next.js and TypeScript
+✅ Beautiful landing page with green/blue theme
+✅ Authentication system with NextAuth
+✅ Database schema design
+✅ Georeferencing utilities integrated
+
+🚧 Next steps:
+- Image upload functionality
+- Roboflow API integration
+- Manual annotation interface
+- Map visualization
+- Batch processing system
+
+## Contributing
+
+This is a private project for National Drones. Please contact the development team for access and contribution guidelines.
+
+## License
+
+Proprietary - National Drones © 2024
