@@ -1,6 +1,8 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Upload, Zap, Map, Plus, FolderOpen, Users, Settings } from "lucide-react";
+import { ImageUpload } from "@/components/features/image-upload";
+import Link from "next/link";
 
 export default function Dashboard() {
   return (
@@ -42,18 +44,20 @@ export default function Dashboard() {
 
         {/* Quick Actions */}
         <div className="grid md:grid-cols-4 gap-6 mb-8">
-          <Card className="hover:shadow-lg transition-shadow cursor-pointer border-green-200">
-            <CardHeader className="pb-4">
-              <div className="flex items-center justify-between">
-                <Upload className="w-8 h-8 text-green-600" />
-                <Plus className="w-5 h-5 text-gray-400" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <CardTitle className="text-lg mb-2">Upload Images</CardTitle>
-              <CardDescription>Upload drone imagery for processing</CardDescription>
-            </CardContent>
-          </Card>
+          <Link href="/upload">
+            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-green-200">
+              <CardHeader className="pb-4">
+                <div className="flex items-center justify-between">
+                  <Upload className="w-8 h-8 text-green-600" />
+                  <Plus className="w-5 h-5 text-gray-400" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <CardTitle className="text-lg mb-2">Upload Images</CardTitle>
+                <CardDescription>Upload drone imagery for processing</CardDescription>
+              </CardContent>
+            </Card>
+          </Link>
 
           <Card className="hover:shadow-lg transition-shadow cursor-pointer border-blue-200">
             <CardHeader className="pb-4">

@@ -1,6 +1,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Upload, Zap, Map, Plus, FolderOpen, Users, Settings } from "lucide-react";
+import { Upload, Zap, Map, Plus, FolderOpen, Users, Settings, Folder } from "lucide-react";
+import Link from "next/link";
 
 export default function TestDashboard() {
   return (
@@ -42,57 +43,65 @@ export default function TestDashboard() {
 
         {/* Quick Actions */}
         <div className="grid md:grid-cols-4 gap-6 mb-8">
-          <Card className="hover:shadow-lg transition-shadow cursor-pointer border-green-200">
-            <CardHeader className="pb-4">
-              <div className="flex items-center justify-between">
-                <Upload className="w-8 h-8 text-green-600" />
-                <Plus className="w-5 h-5 text-gray-400" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <CardTitle className="text-lg mb-2">Upload Images</CardTitle>
-              <CardDescription>Upload drone imagery for processing</CardDescription>
-            </CardContent>
-          </Card>
+          <Link href="/projects">
+            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-blue-200">
+              <CardHeader className="pb-4">
+                <div className="flex items-center justify-between">
+                  <Folder className="w-8 h-8 text-blue-600" />
+                  <Plus className="w-5 h-5 text-gray-400" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <CardTitle className="text-lg mb-2">Projects</CardTitle>
+                <CardDescription>Manage your survey projects</CardDescription>
+              </CardContent>
+            </Card>
+          </Link>
 
-          <Card className="hover:shadow-lg transition-shadow cursor-pointer border-blue-200">
-            <CardHeader className="pb-4">
-              <div className="flex items-center justify-between">
-                <Zap className="w-8 h-8 text-blue-600" />
-                <Plus className="w-5 h-5 text-gray-400" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <CardTitle className="text-lg mb-2">AI Detection</CardTitle>
-              <CardDescription>Run Roboflow models on your images</CardDescription>
-            </CardContent>
-          </Card>
+          <Link href="/upload">
+            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-green-200">
+              <CardHeader className="pb-4">
+                <div className="flex items-center justify-between">
+                  <Upload className="w-8 h-8 text-green-600" />
+                  <Plus className="w-5 h-5 text-gray-400" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <CardTitle className="text-lg mb-2">Upload Images</CardTitle>
+                <CardDescription>Upload drone imagery for processing</CardDescription>
+              </CardContent>
+            </Card>
+          </Link>
 
-          <Card className="hover:shadow-lg transition-shadow cursor-pointer border-green-200">
-            <CardHeader className="pb-4">
-              <div className="flex items-center justify-between">
-                <Map className="w-8 h-8 text-green-600" />
-                <Plus className="w-5 h-5 text-gray-400" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <CardTitle className="text-lg mb-2">Manual Annotation</CardTitle>
-              <CardDescription>Manually mark targets for training</CardDescription>
-            </CardContent>
-          </Card>
+          <Link href="/images">
+            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-green-200">
+              <CardHeader className="pb-4">
+                <div className="flex items-center justify-between">
+                  <Zap className="w-8 h-8 text-green-600" />
+                  <Plus className="w-5 h-5 text-gray-400" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <CardTitle className="text-lg mb-2">View Images</CardTitle>
+                <CardDescription>See uploaded images with GPS data</CardDescription>
+              </CardContent>
+            </Card>
+          </Link>
 
-          <Card className="hover:shadow-lg transition-shadow cursor-pointer border-gray-200">
-            <CardHeader className="pb-4">
-              <div className="flex items-center justify-between">
-                <FolderOpen className="w-8 h-8 text-gray-600" />
-                <Plus className="w-5 h-5 text-gray-400" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <CardTitle className="text-lg mb-2">New Project</CardTitle>
-              <CardDescription>Create a new project workspace</CardDescription>
-            </CardContent>
-          </Card>
+          <Link href="/map">
+            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-blue-200">
+              <CardHeader className="pb-4">
+                <div className="flex items-center justify-between">
+                  <Map className="w-8 h-8 text-blue-600" />
+                  <Plus className="w-5 h-5 text-gray-400" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <CardTitle className="text-lg mb-2">View Map</CardTitle>
+                <CardDescription>See images on interactive map</CardDescription>
+              </CardContent>
+            </Card>
+          </Link>
         </div>
 
         {/* Recent Projects */}

@@ -84,12 +84,35 @@ model Project {
   name        String
   description String?
   teamId      String
+  
+  // Enhanced fields for location-based grouping
+  location    String?  // Farm/property name
+  purpose     ProjectPurpose @default(WEED_DETECTION)
+  season      String?  // e.g., "2024 Spring", "Winter Survey"
+  
+  // Geographic center for map filtering
+  centerLat   Float?
+  centerLon   Float?
+  
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   
   team        Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
   assets      Asset[]
   jobs        ProcessingJob[]
+  
+  @@index([teamId])
+  @@index([location])
+  @@index([purpose, season])
+}
+
+enum ProjectPurpose {
+  WEED_DETECTION
+  CROP_HEALTH
+  SOIL_ANALYSIS
+  INFRASTRUCTURE
+  LIVESTOCK
+  ENVIRONMENTAL
 }
 
 model Asset {
@@ -100,6 +123,10 @@ model Asset {
   mimeType        String
   storageUrl      String
   thumbnailUrl    String?
+  
+  // Flight session grouping
+  flightSession   String?  // e.g., "Flight 1 - Section A", "Morning Survey"
+  flightDate      DateTime?
   
   // Metadata from EXIF
   metadata        Json?
@@ -125,6 +152,7 @@ model Asset {
   processingJobs  ProcessingJob[]
   
   @@index([projectId])
+  @@index([flightSession])
   @@index([gpsLatitude, gpsLongitude])
 }
 
