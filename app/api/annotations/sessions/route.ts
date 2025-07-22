@@ -118,6 +118,12 @@ export async function POST(request: NextRequest) {
             gimbalPitch: true,
             gimbalRoll: true,
             gimbalYaw: true,
+            project: {
+              select: {
+                name: true,
+                location: true,
+              }
+            }
           }
         },
         annotations: true,

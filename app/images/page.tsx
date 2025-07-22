@@ -130,8 +130,7 @@ export default function ImagesPage() {
                     <Link href={`/annotate/${asset.id}`}>
                       <Button
                         size="sm"
-                        variant="secondary"
-                        className="bg-white/90 hover:bg-green-100"
+                        className="bg-green-600 hover:bg-green-700 text-white shadow-lg"
                         title="Manual Annotation"
                       >
                         <Edit3 className="w-4 h-4" />
@@ -139,8 +138,7 @@ export default function ImagesPage() {
                     </Link>
                     <Button
                       size="sm"
-                      variant="secondary"
-                      className="bg-white/90"
+                      className="bg-blue-600 hover:bg-blue-700 text-white shadow-lg"
                       onClick={() => setSelectedAsset(asset)}
                       title="View Details"
                     >

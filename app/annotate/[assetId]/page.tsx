@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Save, Trash2, Undo, Check, Edit3, X } from "lucide-react";
+import { ArrowLeft, Save, Trash2, Undo, Check, Edit3, X, ZoomIn, ZoomOut, Maximize2, RotateCcw } from "lucide-react";
 import Link from "next/link";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -84,9 +84,13 @@ export default function AnnotatePage() {
   const [confidence, setConfidence] = useState("LIKELY");
   const [notes, setNotes] = useState("");
   
-  // Canvas scaling
+  // Canvas scaling and viewport
   const [scale, setScale] = useState(1);
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
+  const [lastPanPoint, setLastPanPoint] = useState({ x: 0, y: 0 });
 
   // Load annotation session
   useEffect(() => {
@@ -159,13 +163,23 @@ export default function AnnotatePage() {
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
+    // Save context for transformations
+    ctx.save();
+    
+    // Apply pan and zoom transformations
+    ctx.translate(panOffset.x, panOffset.y);
+    ctx.scale(zoomLevel, zoomLevel);
+    
+    // Draw the background image first - scale the image draw to match zoom
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    
     // Draw existing annotations
     annotations.forEach((annotation, index) => {
       const isSelected = selectedAnnotation === annotation.id;
       
       ctx.strokeStyle = isSelected ? '#FF0000' : '#00FF00';
       ctx.fillStyle = isSelected ? 'rgba(255, 0, 0, 0.1)' : 'rgba(0, 255, 0, 0.1)';
-      ctx.lineWidth = isSelected ? 3 : 2;
+      ctx.lineWidth = (isSelected ? 3 : 2) / zoomLevel; // Adjust line width for zoom
       
       if (annotation.coordinates.length > 2) {
         ctx.beginPath();
@@ -185,7 +199,7 @@ export default function AnnotatePage() {
         const centerY = annotation.coordinates.reduce((sum, [, y]) => sum + y, 0) / annotation.coordinates.length;
         
         ctx.fillStyle = '#000';
-        ctx.font = '12px Arial';
+        ctx.font = `${12 / zoomLevel}px Arial`; // Adjust font size for zoom
         ctx.fillText(
           `${annotation.weedType} (${annotation.confidence})`,
           centerX * scale,
@@ -198,7 +212,7 @@ export default function AnnotatePage() {
     if (currentPolygon.points.length > 0) {
       ctx.strokeStyle = '#0080FF';
       ctx.fillStyle = 'rgba(0, 128, 255, 0.1)';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2 / zoomLevel; // Adjust line width for zoom
       
       if (currentPolygon.points.length > 2) {
         ctx.beginPath();
@@ -216,36 +230,103 @@ export default function AnnotatePage() {
         ctx.stroke();
       }
       
-      // Draw points
+      // Draw points - adjust size for zoom
       currentPolygon.points.forEach(([x, y]) => {
         ctx.fillStyle = '#0080FF';
         ctx.beginPath();
-        ctx.arc(x * scale, y * scale, 4, 0, 2 * Math.PI);
+        ctx.arc(x * scale, y * scale, 4 / zoomLevel, 0, 2 * Math.PI);
         ctx.fill();
       });
     }
-  }, [annotations, currentPolygon, selectedAnnotation, scale, imageLoaded]);
+    
+    // Restore context
+    ctx.restore();
+  }, [annotations, currentPolygon, selectedAnnotation, scale, imageLoaded, zoomLevel, panOffset]);
 
   // Redraw when dependencies change
   useEffect(() => {
     redrawCanvas();
   }, [redrawCanvas]);
 
+  // Zoom functions
+  const handleZoomIn = () => {
+    setZoomLevel(prev => {
+      const newZoom = Math.min(prev * 1.2, 5);
+      console.log('Zoom in:', prev, '->', newZoom);
+      return newZoom;
+    });
+  };
+
+  const handleZoomOut = () => {
+    setZoomLevel(prev => {
+      const newZoom = Math.max(prev / 1.2, 0.1);
+      console.log('Zoom out:', prev, '->', newZoom);
+      return newZoom;
+    });
+  };
+
+  const handleResetView = () => {
+    setZoomLevel(1);
+    setPanOffset({ x: 0, y: 0 });
+  };
+
+  // Pan functions
+  const handleMouseDown = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (event.button === 1 || event.shiftKey) { // Middle mouse or Shift+click for panning
+      event.preventDefault();
+      setIsPanning(true);
+      const rect = event.currentTarget.getBoundingClientRect();
+      setLastPanPoint({
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+      });
+    }
+  }, []);
+
+  const handleMouseMove = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (isPanning) {
+      const rect = event.currentTarget.getBoundingClientRect();
+      const currentX = event.clientX - rect.left;
+      const currentY = event.clientY - rect.top;
+      
+      setPanOffset(prev => ({
+        x: prev.x + (currentX - lastPanPoint.x),
+        y: prev.y + (currentY - lastPanPoint.y),
+      }));
+      
+      setLastPanPoint({ x: currentX, y: currentY });
+    }
+  }, [isPanning, lastPanPoint]);
+
+  const handleMouseUp = useCallback(() => {
+    setIsPanning(false);
+  }, []);
+
   // Handle canvas clicks
   const handleCanvasClick = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
-    if (!canvas || currentPolygon.isComplete) return;
+    if (!canvas || currentPolygon.isComplete || isPanning) return;
+    
+    // Don't add points if shift is held (panning mode)
+    if (event.shiftKey) return;
     
     const rect = canvas.getBoundingClientRect();
-    const x = (event.clientX - rect.left) / scale;
-    const y = (event.clientY - rect.top) / scale;
+    
+    // Get click position relative to canvas
+    const canvasX = event.clientX - rect.left;
+    const canvasY = event.clientY - rect.top;
+    
+    // Convert to image coordinates accounting for zoom and pan
+    // Apply the inverse transformation that we apply in drawing
+    const x = (canvasX - panOffset.x) / (scale * zoomLevel);
+    const y = (canvasY - panOffset.y) / (scale * zoomLevel);
     
     // Check if clicking close to first point to close polygon
     if (currentPolygon.points.length > 2) {
       const [firstX, firstY] = currentPolygon.points[0];
       const distance = Math.sqrt((x - firstX) ** 2 + (y - firstY) ** 2);
       
-      if (distance < 10 / scale) {
+      if (distance < 10 / (scale * zoomLevel)) {
         // Close polygon
         setCurrentPolygon(prev => ({ ...prev, isComplete: true }));
         return;
@@ -261,7 +342,7 @@ export default function AnnotatePage() {
     if (!isDrawing) {
       setIsDrawing(true);
     }
-  }, [currentPolygon.points, currentPolygon.isComplete, isDrawing, scale]);
+  }, [currentPolygon.points, currentPolygon.isComplete, isDrawing, scale, zoomLevel, panOffset, isPanning]);
 
   // Save annotation
   const saveAnnotation = async () => {
@@ -429,23 +510,55 @@ export default function AnnotatePage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
+                {/* Zoom and Pan Controls */}
+                <div className="flex items-center justify-between mb-4 p-3 bg-gray-50 rounded-lg border">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-sm font-medium text-gray-700">View Controls:</span>
+                    <Button size="sm" variant="outline" onClick={handleZoomIn} title="Zoom In">
+                      <ZoomIn className="w-4 h-4" />
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={handleZoomOut} title="Zoom Out">
+                      <ZoomOut className="w-4 h-4" />
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={handleResetView} title="Reset View">
+                      <RotateCcw className="w-4 h-4" />
+                    </Button>
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    Zoom: {Math.round(zoomLevel * 100)}% | Shift+Click to Pan
+                  </div>
+                </div>
+                
                 <div className="relative">
                   <img
                     ref={imageRef}
                     src={session.asset.storageUrl}
                     alt={session.asset.fileName}
                     onLoad={handleImageLoad}
+                    onError={(e) => {
+                      console.error('Image failed to load:', session.asset.storageUrl);
+                      console.error('Error:', e);
+                    }}
                     className="hidden"
                   />
                   <canvas
                     ref={canvasRef}
                     onClick={handleCanvasClick}
-                    className="border border-gray-300 rounded cursor-crosshair max-w-full"
+                    onMouseDown={handleMouseDown}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseUp}
+                    className={`border border-gray-300 rounded max-w-full ${
+                      isPanning ? 'cursor-grabbing' : 'cursor-crosshair'
+                    }`}
                     style={{ display: imageLoaded ? 'block' : 'none' }}
                   />
                   {!imageLoaded && (
-                    <div className="flex items-center justify-center h-64 bg-gray-100 rounded">
-                      <p>Loading image...</p>
+                    <div className="flex items-center justify-center h-64 bg-gray-100 rounded border border-gray-300">
+                      <div className="text-center">
+                        <p className="text-gray-600 mb-2">Loading image...</p>
+                        <p className="text-xs text-gray-400">Image URL: {session.asset.storageUrl}</p>
+                      </div>
                     </div>
                   )}
                 </div>

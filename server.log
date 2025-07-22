@@ -1,0 +1,614 @@
+
+> agri-drone-ops@0.1.0 dev
+> next dev
+
+   ▲ Next.js 15.4.2
+   - Local:        http://localhost:3000
+   - Network:      http://192.168.0.41:3000
+   - Environments: .env.local, .env
+
+ ✓ Starting...
+ ✓ Ready in 1675ms
+ ○ Compiling /images ...
+ ✓ Compiled /images in 1034ms (732 modules)
+ HEAD /images 200 in 1257ms
+ ✓ Compiled in 82ms (296 modules)
+ ✓ Compiled /api/assets in 291ms (740 modules)
+ GET /api/assets 200 in 422ms
+ GET /images 200 in 148ms
+ GET /images 200 in 62ms
+ GET /api/assets 200 in 23ms
+ ○ Compiling /api/auth/[...nextauth] ...
+ ✓ Compiled /api/auth/[...nextauth] in 897ms (976 modules)
+ GET /api/auth/session 200 in 2074ms
+ GET /api/auth/session 200 in 19ms
+ GET /api/auth/session 200 in 6ms
+ ✓ Compiled /test-dashboard in 388ms (1003 modules)
+ GET /test-dashboard 200 in 508ms
+ ✓ Compiled /map in 351ms (1109 modules)
+ GET /map 200 in 407ms
+ GET /api/assets 200 in 43ms
+ ✓ Compiled /api/detections in 291ms (1111 modules)
+ GET /api/detections 200 in 325ms
+ GET /api/assets 200 in 279ms
+ GET /api/detections 200 in 3ms
+ GET /test-dashboard 200 in 91ms
+ ✓ Compiled /export in 434ms (1285 modules)
+ GET /export 200 in 474ms
+ ✓ Compiled /api/projects in 212ms (1287 modules)
+ GET /api/projects 200 in 235ms
+ GET /api/detections 200 in 236ms
+ GET /api/projects 200 in 4ms
+ GET /api/detections 200 in 7ms
+ GET /api/detections 200 in 10ms
+ ✓ Compiled /api/annotations/export in 269ms (1291 modules)
+ GET /api/detections 200 in 292ms
+Open Elevation service failed for -27.11710035012605,152.93804696942334: Error: Open Elevation API returned 429
+    at ElevationService.getAustralianElevation (lib/services/elevation.ts:102:14)
+    at async ElevationService.getElevation (lib/services/elevation.ts:48:23)
+    at async getTerrainElevation (lib/services/elevation.ts:316:17)
+    at async calculateWithLRFAndDSM (lib/utils/precision-georeferencing.ts:155:37)
+    at async precisionPixelToGeo (lib/utils/precision-georeferencing.ts:70:11)
+    at async eval (app/api/annotations/export/route.ts:80:34)
+    at async GET (app/api/annotations/export/route.ts:55:30)
+  100 |       
+  101 |       if (!response.ok) {
+> 102 |         throw new Error(`Open Elevation API returned ${response.status}`);
+      |              ^
+  103 |       }
+  104 |       
+  105 |       const data = await response.json();
+DSM Iteration 1: Lat=-27.117406, Lon=152.938641, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=99.1m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117559, Lon=152.938066, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.8m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117543, Lon=152.938082, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.6m, height_diff=90.7m
+Open Elevation service failed for -27.117497826610453,152.93807605717552: Error: Open Elevation API returned 429
+    at ElevationService.getAustralianElevation (lib/services/elevation.ts:102:14)
+    at async ElevationService.getElevation (lib/services/elevation.ts:48:23)
+    at async getTerrainElevation (lib/services/elevation.ts:316:17)
+    at async calculateWithLRFAndDSM (lib/utils/precision-georeferencing.ts:155:37)
+    at async precisionPixelToGeo (lib/utils/precision-georeferencing.ts:70:11)
+    at async eval (app/api/annotations/export/route.ts:80:34)
+    at async GET (app/api/annotations/export/route.ts:55:30)
+  100 |       
+  101 |       if (!response.ok) {
+> 102 |         throw new Error(`Open Elevation API returned ${response.status}`);
+      |              ^
+  103 |       }
+  104 |       
+  105 |       const data = await response.json();
+DSM Iteration 2: Lat=-27.117400, Lon=152.938515, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117510, Lon=152.938064, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117100, Lon=152.938047, Terrain=16.0m (diff: 11.6m)
+DSM Iteration 1: Updated distance=92.3m, height_diff=89.7m
+DSM Iteration 1: Lat=-27.117632, Lon=152.938044, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=92.9m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117624, Lon=152.938854, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=106.0m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117175, Lon=152.938050, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=93.3m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117498, Lon=152.938076, Terrain=16.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=90.6m, height_diff=89.7m
+DSM Iteration 2: Lat=-27.117584, Lon=152.938726, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+Open Elevation service failed for -27.117173135245974,152.93805033534687: Error: Open Elevation API returned 429
+    at ElevationService.getAustralianElevation (lib/services/elevation.ts:102:14)
+    at async ElevationService.getElevation (lib/services/elevation.ts:48:23)
+    at async getTerrainElevation (lib/services/elevation.ts:316:17)
+    at async calculateWithLRFAndDSM (lib/utils/precision-georeferencing.ts:155:37)
+    at async precisionPixelToGeo (lib/utils/precision-georeferencing.ts:70:11)
+    at async eval (app/api/annotations/export/route.ts:80:34)
+    at async GET (app/api/annotations/export/route.ts:55:30)
+  100 |       
+  101 |       if (!response.ok) {
+> 102 |         throw new Error(`Open Elevation API returned ${response.status}`);
+      |              ^
+  103 |       }
+  104 |       
+  105 |       const data = await response.json();
+DSM Iteration 2: Lat=-27.117565, Lon=152.938048, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 3: Lat=-27.117497, Lon=152.938076, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 3: Updated distance=91.6m, height_diff=90.7m
+Open Elevation service failed for -27.11772614511143,152.93812126222727: Error: Open Elevation API returned 429
+    at ElevationService.getAustralianElevation (lib/services/elevation.ts:102:14)
+    at async ElevationService.getElevation (lib/services/elevation.ts:48:23)
+    at async getTerrainElevation (lib/services/elevation.ts:316:17)
+    at async calculateWithLRFAndDSM (lib/utils/precision-georeferencing.ts:155:37)
+    at async precisionPixelToGeo (lib/utils/precision-georeferencing.ts:70:11)
+    at async eval (app/api/annotations/export/route.ts:80:34)
+    at async GET (app/api/annotations/export/route.ts:55:30)
+  100 |       
+  101 |       if (!response.ok) {
+> 102 |         throw new Error(`Open Elevation API returned ${response.status}`);
+      |              ^
+  103 |       }
+  104 |       
+  105 |       const data = await response.json();
+DSM Iteration 1: Lat=-27.117539, Lon=152.938867, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=105.9m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117602, Lon=152.938036, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=92.4m, height_diff=90.7m
+DSM Iteration 3: Lat=-27.117173, Lon=152.938050, Terrain=16.0m (diff: 1.0m)
+DSM Iteration 3: Updated distance=92.3m, height_diff=89.7m
+Open Elevation service failed for -27.117512878346005,152.9387353815764: Error: Open Elevation API returned 429
+    at ElevationService.getAustralianElevation (lib/services/elevation.ts:102:14)
+    at async ElevationService.getElevation (lib/services/elevation.ts:48:23)
+    at async getTerrainElevation (lib/services/elevation.ts:316:17)
+    at async calculateWithLRFAndDSM (lib/utils/precision-georeferencing.ts:155:37)
+    at async precisionPixelToGeo (lib/utils/precision-georeferencing.ts:70:11)
+    at async eval (app/api/annotations/export/route.ts:80:34)
+    at async GET (app/api/annotations/export/route.ts:55:30)
+  100 |       
+  101 |       if (!response.ok) {
+> 102 |         throw new Error(`Open Elevation API returned ${response.status}`);
+      |              ^
+  103 |       }
+  104 |       
+  105 |       const data = await response.json();
+DSM Iteration 1: Lat=-27.117726, Lon=152.938121, Terrain=16.0m (diff: 11.6m)
+DSM Iteration 1: Updated distance=93.7m, height_diff=89.7m
+DSM Iteration 2: Lat=-27.117542, Lon=152.938043, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117202, Lon=152.938044, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.8m, height_diff=90.7m
+Open Elevation service failed for -27.117250438661628,152.93804801232955: Error: Open Elevation API returned 429
+    at ElevationService.getAustralianElevation (lib/services/elevation.ts:102:14)
+    at async ElevationService.getElevation (lib/services/elevation.ts:48:23)
+    at async getTerrainElevation (lib/services/elevation.ts:316:17)
+    at async calculateWithLRFAndDSM (lib/utils/precision-georeferencing.ts:155:37)
+    at async precisionPixelToGeo (lib/utils/precision-georeferencing.ts:70:11)
+    at async eval (app/api/annotations/export/route.ts:80:34)
+    at async GET (app/api/annotations/export/route.ts:55:30)
+  100 |       
+  101 |       if (!response.ok) {
+> 102 |         throw new Error(`Open Elevation API returned ${response.status}`);
+      |              ^
+  103 |       }
+  104 |       
+  105 |       const data = await response.json();
+OpenTopoData elevation service failed for -27.117512878346005,152.9387353815764: Error: OpenTopoData API returned 429
+    at ElevationService.getAustralianElevationFallback (lib/services/elevation.ts:144:14)
+    at async ElevationService.getAustralianElevation (lib/services/elevation.ts:122:13)
+    at async ElevationService.getElevation (lib/services/elevation.ts:48:23)
+    at async getTerrainElevation (lib/services/elevation.ts:316:17)
+    at async calculateWithLRFAndDSM (lib/utils/precision-georeferencing.ts:155:37)
+    at async precisionPixelToGeo (lib/utils/precision-georeferencing.ts:70:11)
+    at async eval (app/api/annotations/export/route.ts:80:34)
+    at async GET (app/api/annotations/export/route.ts:55:30)
+  142 |       
+  143 |       if (!response.ok) {
+> 144 |         throw new Error(`OpenTopoData API returned ${response.status}`);
+      |              ^
+  145 |       }
+  146 |       
+  147 |       const data = await response.json();
+DSM Iteration 1: Lat=-27.117680, Lon=152.938060, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=93.7m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117636, Lon=152.938105, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=94.8m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117250, Lon=152.938048, Terrain=16.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=90.7m, height_diff=89.7m
+DSM Iteration 2: Lat=-27.117601, Lon=152.938060, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 3: Lat=-27.117639, Lon=152.938106, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 3 with 0.00m accuracy
+DSM Iteration 3: Lat=-27.117252, Lon=152.938048, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 3: Updated distance=91.8m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117734, Lon=152.938167, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=95.1m, height_diff=90.7m
+Open Elevation service failed for -27.117728554769492,152.93818437205124: Error: Open Elevation API returned 429
+    at ElevationService.getAustralianElevation (lib/services/elevation.ts:102:14)
+    at async ElevationService.getElevation (lib/services/elevation.ts:48:23)
+    at async getTerrainElevation (lib/services/elevation.ts:316:17)
+    at async calculateWithLRFAndDSM (lib/utils/precision-georeferencing.ts:155:37)
+    at async precisionPixelToGeo (lib/utils/precision-georeferencing.ts:70:11)
+    at async eval (app/api/annotations/export/route.ts:80:34)
+    at async GET (app/api/annotations/export/route.ts:55:30)
+  100 |       
+  101 |       if (!response.ok) {
+> 102 |         throw new Error(`Open Elevation API returned ${response.status}`);
+      |              ^
+  103 |       }
+  104 |       
+  105 |       const data = await response.json();
+Open Elevation service failed for -27.117645677469415,152.9381406246726: Error: Open Elevation API returned 429
+    at ElevationService.getAustralianElevation (lib/services/elevation.ts:102:14)
+    at async ElevationService.getElevation (lib/services/elevation.ts:48:23)
+    at async getTerrainElevation (lib/services/elevation.ts:316:17)
+    at async calculateWithLRFAndDSM (lib/utils/precision-georeferencing.ts:155:37)
+    at async precisionPixelToGeo (lib/utils/precision-georeferencing.ts:70:11)
+    at async eval (app/api/annotations/export/route.ts:80:34)
+    at async GET (app/api/annotations/export/route.ts:55:30)
+  100 |       
+  101 |       if (!response.ok) {
+> 102 |         throw new Error(`Open Elevation API returned ${response.status}`);
+      |              ^
+  103 |       }
+  104 |       
+  105 |       const data = await response.json();
+DSM Iteration 1: Lat=-27.117204, Lon=152.938077, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.7m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117729, Lon=152.938184, Terrain=16.0m (diff: 11.6m)
+DSM Iteration 1: Updated distance=94.0m, height_diff=89.7m
+OpenTopoData elevation service failed for -27.117645677469415,152.9381406246726: Error: OpenTopoData API returned 429
+    at ElevationService.getAustralianElevationFallback (lib/services/elevation.ts:144:14)
+    at async ElevationService.getAustralianElevation (lib/services/elevation.ts:122:13)
+    at async ElevationService.getElevation (lib/services/elevation.ts:48:23)
+    at async getTerrainElevation (lib/services/elevation.ts:316:17)
+    at async calculateWithLRFAndDSM (lib/utils/precision-georeferencing.ts:155:37)
+    at async precisionPixelToGeo (lib/utils/precision-georeferencing.ts:70:11)
+    at async eval (app/api/annotations/export/route.ts:80:34)
+    at async GET (app/api/annotations/export/route.ts:55:30)
+  142 |       
+  143 |       if (!response.ok) {
+> 144 |         throw new Error(`OpenTopoData API returned ${response.status}`);
+      |              ^
+  145 |       }
+  146 |       
+  147 |       const data = await response.json();
+DSM Iteration 2: Lat=-27.117251, Lon=152.938072, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117639, Lon=152.938152, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=95.1m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117109, Lon=152.938093, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=93.2m, height_diff=90.7m
+DSM Iteration 3: Lat=-27.117642, Lon=152.938153, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 3 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117540, Lon=152.938139, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.8m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117180, Lon=152.938085, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117496, Lon=152.938117, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+USGS elevation query failed for -27.117512878346005,152.9387353815764: SyntaxError: Unexpected token '<', "<!DOCTYPE "... is not valid JSON
+    at JSON.parse (<anonymous>)
+    at async ElevationService.getUSGSElevation (lib/services/elevation.ts:182:17)
+    at async ElevationService.getElevation (lib/services/elevation.ts:61:25)
+    at async getTerrainElevation (lib/services/elevation.ts:316:17)
+    at async calculateWithLRFAndDSM (lib/utils/precision-georeferencing.ts:155:37)
+    at async precisionPixelToGeo (lib/utils/precision-georeferencing.ts:70:11)
+    at async eval (app/api/annotations/export/route.ts:80:34)
+    at async GET (app/api/annotations/export/route.ts:55:30)
+  180 |     }
+  181 |     
+> 182 |     const data = await response.json();
+      |                 ^
+  183 |     
+  184 |     if (data?.USGS_Elevation_Point_Query_Service?.Elevation_Query?.Elevation) {
+  185 |       const elevation = parseFloat(data.USGS_Elevation_Point_Query_Service.Elevation_Query.Elevation);
+DSM Iteration 2: Lat=-27.117513, Lon=152.938735, Terrain=50.0m (diff: 35.0m)
+DSM Iteration 2: Updated distance=65.0m, height_diff=55.7m
+USGS elevation query failed for -27.117645677469415,152.9381406246726: SyntaxError: Unexpected token '<', "<!DOCTYPE "... is not valid JSON
+    at JSON.parse (<anonymous>)
+    at async ElevationService.getUSGSElevation (lib/services/elevation.ts:182:17)
+    at async ElevationService.getElevation (lib/services/elevation.ts:61:25)
+    at async getTerrainElevation (lib/services/elevation.ts:316:17)
+    at async calculateWithLRFAndDSM (lib/utils/precision-georeferencing.ts:155:37)
+    at async precisionPixelToGeo (lib/utils/precision-georeferencing.ts:70:11)
+    at async eval (app/api/annotations/export/route.ts:80:34)
+    at async GET (app/api/annotations/export/route.ts:55:30)
+  180 |     }
+  181 |     
+> 182 |     const data = await response.json();
+      |                 ^
+  183 |     
+  184 |     if (data?.USGS_Elevation_Point_Query_Service?.Elevation_Query?.Elevation) {
+  185 |       const elevation = parseFloat(data.USGS_Elevation_Point_Query_Service.Elevation_Query.Elevation);
+DSM Iteration 2: Lat=-27.117646, Lon=152.938141, Terrain=50.0m (diff: 35.0m)
+DSM Iteration 2: Updated distance=58.4m, height_diff=55.7m
+DSM Iteration 3: Lat=-27.117542, Lon=152.938109, Terrain=15.0m (diff: 35.0m)
+DSM Iteration 3: Updated distance=95.1m, height_diff=90.7m
+DSM Iteration 3: Lat=-27.117461, Lon=152.938475, Terrain=15.0m (diff: 35.0m)
+DSM Iteration 3: Updated distance=105.9m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117451, Lon=152.938928, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=107.4m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117688, Lon=152.938185, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=94.3m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117609, Lon=152.938153, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117440, Lon=152.938797, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117390, Lon=152.938845, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=104.8m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117561, Lon=152.938148, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=92.0m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117511, Lon=152.938124, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117388, Lon=152.938710, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117428, Lon=152.938724, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=101.4m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117418, Lon=152.938592, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+ GET /api/annotations/export 200 in 11196ms
+DSM Iteration 1: Lat=-27.117100, Lon=152.938047, Terrain=16.0m (diff: 11.6m)
+DSM Iteration 1: Updated distance=92.3m, height_diff=89.7m
+DSM Iteration 1: Lat=-27.117559, Lon=152.938066, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.8m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117406, Lon=152.938641, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=99.1m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117543, Lon=152.938082, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.6m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117175, Lon=152.938050, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=93.3m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117510, Lon=152.938064, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117400, Lon=152.938515, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117498, Lon=152.938076, Terrain=16.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=90.6m, height_diff=89.7m
+DSM Iteration 3: Lat=-27.117173, Lon=152.938050, Terrain=16.0m (diff: 1.0m)
+DSM Iteration 3: Updated distance=92.3m, height_diff=89.7m
+DSM Iteration 3: Lat=-27.117497, Lon=152.938076, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 3: Updated distance=91.6m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117632, Lon=152.938044, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=92.9m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117624, Lon=152.938854, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=106.0m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117202, Lon=152.938044, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.8m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117565, Lon=152.938048, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117584, Lon=152.938726, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117602, Lon=152.938036, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=92.4m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117250, Lon=152.938048, Terrain=16.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=90.7m, height_diff=89.7m
+DSM Iteration 2: Lat=-27.117542, Lon=152.938043, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 3: Lat=-27.117252, Lon=152.938048, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 3: Updated distance=91.8m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117726, Lon=152.938121, Terrain=16.0m (diff: 11.6m)
+DSM Iteration 1: Updated distance=93.7m, height_diff=89.7m
+DSM Iteration 1: Lat=-27.117539, Lon=152.938867, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=105.9m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117636, Lon=152.938105, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=94.8m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117680, Lon=152.938060, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=93.7m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117204, Lon=152.938077, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.7m, height_diff=90.7m
+DSM Iteration 3: Lat=-27.117639, Lon=152.938106, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 3 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117601, Lon=152.938060, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117251, Lon=152.938072, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117729, Lon=152.938184, Terrain=16.0m (diff: 11.6m)
+DSM Iteration 1: Updated distance=94.0m, height_diff=89.7m
+DSM Iteration 1: Lat=-27.117734, Lon=152.938167, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=95.1m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117109, Lon=152.938093, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=93.2m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117639, Lon=152.938152, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=95.1m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117180, Lon=152.938085, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 3: Lat=-27.117642, Lon=152.938153, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 3 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117540, Lon=152.938139, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.8m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117496, Lon=152.938117, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117646, Lon=152.938141, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117688, Lon=152.938185, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=94.3m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117609, Lon=152.938153, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117561, Lon=152.938148, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=92.0m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117511, Lon=152.938124, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117513, Lon=152.938735, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117451, Lon=152.938928, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=107.4m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117440, Lon=152.938797, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117390, Lon=152.938845, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=104.8m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117388, Lon=152.938710, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117428, Lon=152.938724, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=101.4m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117418, Lon=152.938592, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+ GET /api/annotations/export 200 in 514ms
+DSM Iteration 1: Lat=-27.117100, Lon=152.938047, Terrain=16.0m (diff: 11.6m)
+DSM Iteration 1: Updated distance=92.3m, height_diff=89.7m
+DSM Iteration 1: Lat=-27.117559, Lon=152.938066, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.8m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117406, Lon=152.938641, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=99.1m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117543, Lon=152.938082, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.6m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117175, Lon=152.938050, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=93.3m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117510, Lon=152.938064, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117400, Lon=152.938515, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117498, Lon=152.938076, Terrain=16.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=90.6m, height_diff=89.7m
+DSM Iteration 3: Lat=-27.117173, Lon=152.938050, Terrain=16.0m (diff: 1.0m)
+DSM Iteration 3: Updated distance=92.3m, height_diff=89.7m
+DSM Iteration 3: Lat=-27.117497, Lon=152.938076, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 3: Updated distance=91.6m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117632, Lon=152.938044, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=92.9m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117624, Lon=152.938854, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=106.0m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117202, Lon=152.938044, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.8m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117565, Lon=152.938048, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117584, Lon=152.938726, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117602, Lon=152.938036, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=92.4m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117250, Lon=152.938048, Terrain=16.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=90.7m, height_diff=89.7m
+DSM Iteration 2: Lat=-27.117542, Lon=152.938043, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 3: Lat=-27.117252, Lon=152.938048, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 3: Updated distance=91.8m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117726, Lon=152.938121, Terrain=16.0m (diff: 11.6m)
+DSM Iteration 1: Updated distance=93.7m, height_diff=89.7m
+DSM Iteration 1: Lat=-27.117539, Lon=152.938867, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=105.9m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117636, Lon=152.938105, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=94.8m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117513, Lon=152.938735, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117680, Lon=152.938060, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=93.7m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117204, Lon=152.938077, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.7m, height_diff=90.7m
+DSM Iteration 3: Lat=-27.117639, Lon=152.938106, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 3 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117601, Lon=152.938060, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117251, Lon=152.938072, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117451, Lon=152.938928, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=107.4m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117729, Lon=152.938184, Terrain=16.0m (diff: 11.6m)
+DSM Iteration 1: Updated distance=94.0m, height_diff=89.7m
+DSM Iteration 2: Lat=-27.117440, Lon=152.938797, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117734, Lon=152.938167, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=95.1m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117109, Lon=152.938093, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=93.2m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117639, Lon=152.938152, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=95.1m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117646, Lon=152.938141, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117180, Lon=152.938085, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 3: Lat=-27.117642, Lon=152.938153, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 3 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117390, Lon=152.938845, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=104.8m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117388, Lon=152.938710, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117688, Lon=152.938185, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=94.3m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117540, Lon=152.938139, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.8m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117609, Lon=152.938153, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117496, Lon=152.938117, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117428, Lon=152.938724, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=101.4m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117418, Lon=152.938592, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117561, Lon=152.938148, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=92.0m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117511, Lon=152.938124, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+ GET /api/annotations/export 200 in 5ms
+DSM Iteration 1: Lat=-27.117100, Lon=152.938047, Terrain=16.0m (diff: 11.6m)
+DSM Iteration 1: Updated distance=92.3m, height_diff=89.7m
+DSM Iteration 1: Lat=-27.117559, Lon=152.938066, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.8m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117406, Lon=152.938641, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=99.1m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117543, Lon=152.938082, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.6m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117175, Lon=152.938050, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=93.3m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117510, Lon=152.938064, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117400, Lon=152.938515, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117498, Lon=152.938076, Terrain=16.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=90.6m, height_diff=89.7m
+DSM Iteration 3: Lat=-27.117173, Lon=152.938050, Terrain=16.0m (diff: 1.0m)
+DSM Iteration 3: Updated distance=92.3m, height_diff=89.7m
+DSM Iteration 3: Lat=-27.117497, Lon=152.938076, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 3: Updated distance=91.6m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117632, Lon=152.938044, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=92.9m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117624, Lon=152.938854, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=106.0m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117202, Lon=152.938044, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.8m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117565, Lon=152.938048, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117584, Lon=152.938726, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117602, Lon=152.938036, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=92.4m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117250, Lon=152.938048, Terrain=16.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=90.7m, height_diff=89.7m
+DSM Iteration 2: Lat=-27.117542, Lon=152.938043, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 3: Lat=-27.117252, Lon=152.938048, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 3: Updated distance=91.8m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117726, Lon=152.938121, Terrain=16.0m (diff: 11.6m)
+DSM Iteration 1: Updated distance=93.7m, height_diff=89.7m
+DSM Iteration 1: Lat=-27.117539, Lon=152.938867, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=105.9m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117636, Lon=152.938105, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=94.8m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117513, Lon=152.938735, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117680, Lon=152.938060, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=93.7m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117204, Lon=152.938077, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.7m, height_diff=90.7m
+DSM Iteration 3: Lat=-27.117639, Lon=152.938106, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 3 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117601, Lon=152.938060, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117251, Lon=152.938072, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117451, Lon=152.938928, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=107.4m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117729, Lon=152.938184, Terrain=16.0m (diff: 11.6m)
+DSM Iteration 1: Updated distance=94.0m, height_diff=89.7m
+DSM Iteration 2: Lat=-27.117440, Lon=152.938797, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117734, Lon=152.938167, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=95.1m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117109, Lon=152.938093, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=93.2m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117639, Lon=152.938152, Terrain=15.0m (diff: 1.0m)
+DSM Iteration 2: Updated distance=95.1m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117646, Lon=152.938141, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117180, Lon=152.938085, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 3: Lat=-27.117642, Lon=152.938153, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 3 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117390, Lon=152.938845, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=104.8m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117388, Lon=152.938710, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117688, Lon=152.938185, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=94.3m, height_diff=90.7m
+DSM Iteration 1: Lat=-27.117540, Lon=152.938139, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=91.8m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117609, Lon=152.938153, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 2: Lat=-27.117496, Lon=152.938117, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117428, Lon=152.938724, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=101.4m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117418, Lon=152.938592, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+DSM Iteration 1: Lat=-27.117561, Lon=152.938148, Terrain=15.0m (diff: 10.6m)
+DSM Iteration 1: Updated distance=92.0m, height_diff=90.7m
+DSM Iteration 2: Lat=-27.117511, Lon=152.938124, Terrain=15.0m (diff: 0.0m)
+✓ DSM converged at iteration 2 with 0.00m accuracy
+ GET /api/annotations/export 200 in 5ms
+ ✓ Compiled in 525ms (601 modules)

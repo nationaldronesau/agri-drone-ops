@@ -22,6 +22,7 @@ interface Detection {
   confidence: number;
   centerLat: number | null;
   centerLon: number | null;
+  type?: 'ai' | 'manual';
   metadata: any;
   createdAt: string;
   asset: {
@@ -42,20 +43,18 @@ export default function ExportPage() {
   const [selectedClasses, setSelectedClasses] = useState<string[]>([]);
   const [exportFormat, setExportFormat] = useState<"csv" | "kml">("csv");
   const [includeMetadata, setIncludeMetadata] = useState(true);
+  const [includeAI, setIncludeAI] = useState(true);
+  const [includeManual, setIncludeManual] = useState(true);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     fetchProjects();
-    fetchDetections();
+    fetchAllDetections();
   }, []);
 
   useEffect(() => {
-    if (selectedProject !== "all") {
-      fetchDetections(selectedProject);
-    } else {
-      fetchDetections();
-    }
-  }, [selectedProject]);
+    fetchAllDetections();
+  }, [selectedProject, includeAI, includeManual]);
 
   const fetchProjects = async () => {
     try {
@@ -69,20 +68,40 @@ export default function ExportPage() {
     }
   };
 
-  const fetchDetections = async (projectId?: string) => {
+  const fetchAllDetections = async () => {
     try {
-      const url = projectId 
-        ? `/api/detections?projectId=${projectId}`
-        : '/api/detections';
-      const response = await fetch(url);
-      if (response.ok) {
-        const data = await response.json();
-        setDetections(data);
-        
-        // Extract unique classes
-        const classes = [...new Set(data.map((d: Detection) => d.className))];
-        setSelectedClasses(classes);
+      const allDetections: Detection[] = [];
+      
+      // Fetch AI detections if enabled
+      if (includeAI) {
+        const aiUrl = selectedProject !== "all" 
+          ? `/api/detections?projectId=${selectedProject}`
+          : '/api/detections';
+        const aiResponse = await fetch(aiUrl);
+        if (aiResponse.ok) {
+          const aiData = await aiResponse.json();
+          const aiDetections = aiData.map((d: any) => ({ ...d, type: 'ai' }));
+          allDetections.push(...aiDetections);
+        }
       }
+      
+      // Fetch manual annotations if enabled
+      if (includeManual) {
+        const manualUrl = selectedProject !== "all" 
+          ? `/api/annotations/export?projectId=${selectedProject}`
+          : '/api/annotations/export';
+        const manualResponse = await fetch(manualUrl);
+        if (manualResponse.ok) {
+          const manualData = await manualResponse.json();
+          allDetections.push(...manualData);
+        }
+      }
+      
+      setDetections(allDetections);
+      
+      // Extract unique classes
+      const classes = [...new Set(allDetections.map((d: Detection) => d.className))];
+      setSelectedClasses(classes);
     } catch (error) {
       console.error('Failed to fetch detections:', error);
     }
@@ -105,7 +124,7 @@ export default function ExportPage() {
 
   const exportAsCSV = () => {
     const headers = includeMetadata 
-      ? ['ID', 'Weed Type', 'Latitude', 'Longitude', 'Confidence', 'Altitude (m)', 'Image File', 'Project', 'Location', 'Detection Date']
+      ? ['ID', 'Weed Type', 'Latitude', 'Longitude', 'Confidence', 'Type', 'Altitude (m)', 'Image File', 'Project', 'Location', 'Detection Date']
       : ['Weed Type', 'Latitude', 'Longitude'];
     
     const rows = filteredDetections.map(d => {
@@ -120,6 +139,7 @@ export default function ExportPage() {
           d.id,
           ...baseData,
           (d.confidence * 100).toFixed(1) + '%',
+          d.type === 'manual' ? 'Manual' : 'AI',
           d.asset.altitude?.toFixed(1) || 'N/A',
           d.asset.fileName,
           d.asset.project.name,
@@ -158,21 +178,43 @@ export default function ExportPage() {
           <href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href>
         </Icon>
       </IconStyle>
+      <PolyStyle>
+        <color>7F${kmlColor(color).substring(2)}</color>
+        <fill>1</fill>
+        <outline>1</outline>
+      </PolyStyle>
+      <LineStyle>
+        <color>${kmlColor(color)}</color>
+        <width>2</width>
+      </LineStyle>
     </Style>`;
     }).join('')}
     ${filteredDetections.map(d => `
     <Placemark>
-      <name>${d.className}</name>
+      <name>${d.className} (${d.type === 'manual' ? 'Manual' : 'AI'})</name>
       <description>
+        Type: ${d.type === 'manual' ? 'Manual Annotation' : 'AI Detection'}
         Confidence: ${(d.confidence * 100).toFixed(1)}%
         Image: ${d.asset.fileName}
         Project: ${d.asset.project.name}
         ${d.asset.altitude ? `Altitude: ${d.asset.altitude.toFixed(1)}m` : ''}
+        ${d.metadata?.notes ? `Notes: ${d.metadata.notes}` : ''}
       </description>
       <styleUrl>#${d.className}</styleUrl>
+      ${d.type === 'manual' && d.metadata?.polygonCoordinates && d.metadata.polygonCoordinates.length > 0 ? `
+      <Polygon>
+        <outerBoundaryIs>
+          <LinearRing>
+            <coordinates>
+              ${d.metadata.polygonCoordinates.map(coord => `${coord[0]},${coord[1]},0`).join(' ')}
+              ${d.metadata.polygonCoordinates[0][0]},${d.metadata.polygonCoordinates[0][1]},0
+            </coordinates>
+          </LinearRing>
+        </outerBoundaryIs>
+      </Polygon>` : `
       <Point>
         <coordinates>${d.centerLon},${d.centerLat},0</coordinates>
-      </Point>
+      </Point>`}
     </Placemark>`).join('')}
   </Document>
 </kml>`;
@@ -324,6 +366,33 @@ export default function ExportPage() {
                 </div>
               </div>
 
+              {/* Data Source Options */}
+              <div className="space-y-2">
+                <Label>Data Sources</Label>
+                <div className="space-y-2">
+                  <div className="flex items-center space-x-2">
+                    <Checkbox 
+                      id="includeAI"
+                      checked={includeAI}
+                      onCheckedChange={(checked) => setIncludeAI(checked as boolean)}
+                    />
+                    <Label htmlFor="includeAI" className="cursor-pointer">
+                      Include AI Detections
+                    </Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Checkbox 
+                      id="includeManual"
+                      checked={includeManual}
+                      onCheckedChange={(checked) => setIncludeManual(checked as boolean)}
+                    />
+                    <Label htmlFor="includeManual" className="cursor-pointer">
+                      Include Manual Annotations
+                    </Label>
+                  </div>
+                </div>
+              </div>
+
               {/* Export Options */}
               <div className="space-y-2">
                 <Label>Export Options</Label>
@@ -346,6 +415,8 @@ export default function ExportPage() {
                 <h4 className="font-semibold text-blue-900 mb-2">Export Summary</h4>
                 <div className="space-y-1 text-sm text-blue-800">
                   <p>• {filteredDetections.length} detections will be exported</p>
+                  <p>• AI Detections: {filteredDetections.filter(d => d.type === 'ai').length}</p>
+                  <p>• Manual Annotations: {filteredDetections.filter(d => d.type === 'manual').length}</p>
                   <p>• Format: {exportFormat.toUpperCase()}</p>
                   <p>• Weed types: {selectedClasses.join(', ') || 'None selected'}</p>
                   {includeMetadata && <p>• Metadata included</p>}
