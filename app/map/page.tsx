@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, CircleMarker } from 'react-leaflet';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, MapPin, Camera, Layers, Settings, Download } from "lucide-react";
+import { ArrowLeft, MapPin, Camera, Layers, Settings, Download, Brain, AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 
 // Fix leaflet default marker icon issue
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -38,12 +40,31 @@ interface Asset {
   };
 }
 
+interface Detection {
+  id: string;
+  className: string;
+  confidence: number;
+  centerLat: number | null;
+  centerLon: number | null;
+  metadata: any;
+  asset: {
+    id: string;
+    fileName: string;
+    project: {
+      name: string;
+      location: string | null;
+    };
+  };
+}
+
 export default function MapPage() {
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [detections, setDetections] = useState<Detection[]>([]);
   const [loading, setLoading] = useState(true);
   const [mapCenter, setMapCenter] = useState<[number, number]>([-27.4698, 153.0251]); // Brisbane default
   const [satelliteLayer, setSatelliteLayer] = useState(true);
   const [showDroneImages, setShowDroneImages] = useState(true);
+  const [showDetections, setShowDetections] = useState(true);
   
   // Filtering state
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
@@ -52,6 +73,7 @@ export default function MapPage() {
 
   useEffect(() => {
     fetchAssets();
+    fetchDetections();
   }, []);
 
   const fetchAssets = async () => {
@@ -73,6 +95,21 @@ export default function MapPage() {
       console.error('Failed to fetch assets:', error);
     } finally {
       setLoading(false);
+    }
+  };
+  
+  const fetchDetections = async () => {
+    try {
+      const response = await fetch('/api/detections');
+      if (response.ok) {
+        const data = await response.json();
+        const detectionsWithGPS = data.filter((detection: Detection) => 
+          detection.centerLat !== null && detection.centerLon !== null
+        );
+        setDetections(detectionsWithGPS);
+      }
+    } catch (error) {
+      console.error('Failed to fetch detections:', error);
     }
   };
 
@@ -224,6 +261,38 @@ export default function MapPage() {
                             </Marker>
                           )
                         ))}
+                        
+                        {/* Detection Markers */}
+                        {showDetections && detections.map((detection) => (
+                          detection.centerLat && detection.centerLon && (
+                            <CircleMarker
+                              key={detection.id}
+                              center={[detection.centerLat, detection.centerLon]}
+                              radius={8}
+                              pathOptions={{
+                                fillColor: detection.metadata?.color || '#FF6B6B',
+                                color: '#000',
+                                weight: 2,
+                                opacity: 1,
+                                fillOpacity: 0.8,
+                              }}
+                            >
+                              <Popup>
+                                <div className="min-w-[150px]">
+                                  <h3 className="font-semibold text-sm mb-2 flex items-center">
+                                    <AlertTriangle className="w-4 h-4 mr-1 text-orange-500" />
+                                    {detection.className}
+                                  </h3>
+                                  <div className="text-xs text-gray-600 space-y-1">
+                                    <p>🎯 Confidence: {(detection.confidence * 100).toFixed(1)}%</p>
+                                    <p>📷 Image: {detection.asset.fileName}</p>
+                                    <p>📍 {detection.asset.project.location || 'Unknown location'}</p>
+                                  </div>
+                                </div>
+                              </Popup>
+                            </CircleMarker>
+                          )
+                        ))}
                       </MapContainer>
                     </div>
                   )}
@@ -296,6 +365,10 @@ export default function MapPage() {
                     <span className="font-semibold">{assets.length}</span>
                   </div>
                   <div className="flex justify-between">
+                    <span className="text-sm text-gray-600">Weed Detections:</span>
+                    <span className="font-semibold text-orange-600">{detections.length}</span>
+                  </div>
+                  <div className="flex justify-between">
                     <span className="text-sm text-gray-600">Coverage Area:</span>
                     <span className="font-semibold">~ {(filteredAssets.length * 0.5).toFixed(1)} ha</span>
                   </div>
@@ -335,8 +408,16 @@ export default function MapPage() {
                     />
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-400">Weed Detections</span>
-                    <input type="checkbox" disabled className="rounded opacity-50" />
+                    <span className="text-sm flex items-center">
+                      <Brain className="w-3 h-3 mr-1 text-green-600" />
+                      Weed Detections
+                    </span>
+                    <input 
+                      type="checkbox" 
+                      checked={showDetections} 
+                      onChange={() => setShowDetections(!showDetections)}
+                      className="rounded" 
+                    />
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-gray-400">Flight Path</span>

@@ -4,12 +4,16 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import exifr from 'exifr';
 import prisma from '@/lib/db';
+import { roboflowService, ROBOFLOW_MODELS, ModelType } from '@/lib/services/roboflow';
+import { pixelToGeo } from '@/lib/utils/georeferencing';
 
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const files = formData.getAll('files') as File[];
     const projectId = formData.get('projectId') as string || 'default-project';
+    const runDetection = formData.get('runDetection') === 'true';
+    const detectionModels = formData.get('detectionModels') as string || '';
     
     if (!files || files.length === 0) {
       return NextResponse.json(
@@ -229,6 +233,96 @@ export async function POST(request: NextRequest) {
         },
       });
 
+      // Run AI detection if requested
+      let detections = [];
+      if (runDetection && extractedData.gpsLatitude && extractedData.gpsLongitude) {
+        try {
+          console.log('Running Roboflow detection...');
+          
+          // Parse selected models
+          const selectedModels = detectionModels 
+            ? detectionModels.split(',').filter(m => m in ROBOFLOW_MODELS) as ModelType[]
+            : Object.keys(ROBOFLOW_MODELS) as ModelType[];
+          
+          // Convert buffer to base64
+          const imageBase64 = buffer.toString('base64');
+          
+          // Run detection on selected models
+          const detectionResults = await roboflowService.detectMultipleModels(
+            imageBase64,
+            selectedModels
+          );
+          
+          // Convert pixel coordinates to geographic coordinates
+          if (detectionResults.length > 0 && extractedData.imageWidth && extractedData.imageHeight) {
+            // Create a processing job
+            const job = await prisma.processingJob.create({
+              data: {
+                projectId: projectId,
+                type: 'AI_DETECTION',
+                status: 'COMPLETED',
+                config: { models: selectedModels },
+                completedAt: new Date(),
+              },
+            });
+            
+            // Save detections with georeferenced coordinates
+            for (const detection of detectionResults) {
+              // Convert pixel coordinates to geographic coordinates
+              const geoCoords = pixelToGeo(
+                detection.x,
+                detection.y,
+                extractedData.imageWidth,
+                extractedData.imageHeight,
+                extractedData.gpsLatitude,
+                extractedData.gpsLongitude,
+                extractedData.altitude || 100,
+                extractedData.gimbalPitch || 0,
+                extractedData.gimbalRoll || 0,
+                extractedData.gimbalYaw || 0
+              );
+              
+              const savedDetection = await prisma.detection.create({
+                data: {
+                  jobId: job.id,
+                  assetId: asset.id,
+                  type: 'AI',
+                  className: detection.class,
+                  confidence: detection.confidence,
+                  boundingBox: {
+                    x: detection.x,
+                    y: detection.y,
+                    width: detection.width,
+                    height: detection.height,
+                  },
+                  geoCoordinates: {
+                    type: 'Point',
+                    coordinates: [geoCoords.longitude, geoCoords.latitude],
+                  },
+                  centerLat: geoCoords.latitude,
+                  centerLon: geoCoords.longitude,
+                  metadata: {
+                    modelType: detection.modelType,
+                    color: detection.color,
+                  },
+                },
+              });
+              
+              detections.push({
+                ...detection,
+                geoCoordinates: geoCoords,
+                id: savedDetection.id,
+              });
+            }
+          }
+          
+          console.log(`Detection complete: ${detections.length} objects found`);
+        } catch (detectionError) {
+          console.error('Detection failed:', detectionError);
+          // Don't fail the upload if detection fails
+        }
+      }
+
         uploadResults.push({
           id: asset.id,
           name: file.name,
@@ -238,6 +332,7 @@ export async function POST(request: NextRequest) {
           gpsLatitude: extractedData.gpsLatitude,
           gpsLongitude: extractedData.gpsLongitude,
           altitude: extractedData.altitude,
+          detections: detections,
           success: true,
           warning: (!extractedData.gpsLatitude || !extractedData.gpsLongitude) ? 'No GPS data found in image' : null
         });

@@ -150,6 +150,7 @@ model Asset {
   createdBy       User     @relation(fields: [createdById], references: [id])
   detections      Detection[]
   processingJobs  ProcessingJob[]
+  annotationSessions AnnotationSession[]
   
   @@index([projectId])
   @@index([flightSession])
@@ -231,4 +232,63 @@ model ChemicalRecommendation {
   notes       String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+model AnnotationSession {
+  id            String               @id @default(cuid())
+  assetId       String
+  userId        String?              // Optional - for when auth is enabled
+  status        AnnotationStatus     @default(IN_PROGRESS)
+  createdAt     DateTime             @default(now())
+  completedAt   DateTime?
+  updatedAt     DateTime             @updatedAt
+  
+  asset         Asset                @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  annotations   ManualAnnotation[]
+  
+  @@index([assetId])
+  @@index([status])
+}
+
+model ManualAnnotation {
+  id              String           @id @default(cuid())
+  sessionId       String
+  weedType        String           // e.g., "Unknown Weed #1", "Suspected Lantana"
+  confidence      ConfidenceLevel  @default(LIKELY)
+  
+  // Pixel coordinates (polygon vertices)
+  coordinates     Json             // [[x1,y1], [x2,y2], ...] in pixels
+  
+  // Geographic coordinates (converted from pixels)
+  geoCoordinates  Json?            // GeoJSON polygon format
+  centerLat       Float?           // Center point for map display
+  centerLon       Float?
+  
+  // Additional metadata
+  notes           String?
+  verified        Boolean          @default(false)
+  verifiedBy      String?          // User who verified
+  verifiedAt      DateTime?
+  
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  
+  session         AnnotationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  @@index([sessionId])
+  @@index([weedType])
+  @@index([centerLat, centerLon])
+}
+
+enum AnnotationStatus {
+  IN_PROGRESS
+  COMPLETED
+  REVIEWED
+  ARCHIVED
+}
+
+enum ConfidenceLevel {
+  CERTAIN
+  LIKELY
+  UNCERTAIN
 }

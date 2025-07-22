@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, MapPin, Camera, Calendar, Download, Eye } from "lucide-react";
+import { ArrowLeft, MapPin, Camera, Calendar, Download, Eye, Edit3 } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
 
@@ -127,11 +127,22 @@ export default function ImagesPage() {
                     }}
                   />
                   <div className="absolute top-2 right-2 flex gap-2">
+                    <Link href={`/annotate/${asset.id}`}>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="bg-white/90 hover:bg-green-100"
+                        title="Manual Annotation"
+                      >
+                        <Edit3 className="w-4 h-4" />
+                      </Button>
+                    </Link>
                     <Button
                       size="sm"
                       variant="secondary"
                       className="bg-white/90"
                       onClick={() => setSelectedAsset(asset)}
+                      title="View Details"
                     >
                       <Eye className="w-4 h-4" />
                     </Button>
@@ -235,7 +246,13 @@ export default function ImagesPage() {
                     )}
                   </div>
                 </div>
-                <div className="mt-6 flex justify-end">
+                <div className="mt-6 flex justify-between">
+                  <Link href={`/annotate/${selectedAsset.id}`}>
+                    <Button className="bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600">
+                      <Edit3 className="w-4 h-4 mr-2" />
+                      Manual Annotation
+                    </Button>
+                  </Link>
                   <Button variant="outline" onClick={() => setSelectedAsset(null)}>
                     Close
                   </Button>

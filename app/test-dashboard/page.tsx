@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Upload, Zap, Map, Plus, FolderOpen, Users, Settings, Folder } from "lucide-react";
+import { Upload, Zap, Map, Plus, FolderOpen, Users, Settings, Folder, Download } from "lucide-react";
 import Link from "next/link";
 
 export default function TestDashboard() {
@@ -98,7 +98,22 @@ export default function TestDashboard() {
               </CardHeader>
               <CardContent>
                 <CardTitle className="text-lg mb-2">View Map</CardTitle>
-                <CardDescription>See images on interactive map</CardDescription>
+                <CardDescription>See images & detections on map</CardDescription>
+              </CardContent>
+            </Card>
+          </Link>
+
+          <Link href="/export">
+            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-orange-200">
+              <CardHeader className="pb-4">
+                <div className="flex items-center justify-between">
+                  <Download className="w-8 h-8 text-orange-600" />
+                  <Plus className="w-5 h-5 text-gray-400" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <CardTitle className="text-lg mb-2">Export Data</CardTitle>
+                <CardDescription>Export detections for spray drones</CardDescription>
               </CardContent>
             </Card>
           </Link>

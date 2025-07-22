@@ -8,10 +8,10 @@ AgriDrone Ops is an agricultural drone operations platform for National Drones t
 - **Advanced Map Visualization**: Interactive satellite maps with filtering by location, project, and survey purpose
 - **Complete EXIF Metadata Extraction**: GPS coordinates, altitude, gimbal angles, and laser rangefinder data
 - **Project-based Image Grouping**: Organize images by farm location, survey purpose, and season
-- **AI-powered Detection**: Roboflow integration for weed/crop detection (ready for implementation)
-- **Manual annotation** for model training improvement  
+- **AI-powered Detection**: Complete Roboflow integration with SAHI workflow for weed detection
+- **Manual Annotation System**: Canvas-based polygon drawing for training data and unknown weeds
 - **Pixel-to-geographic coordinate conversion** using custom georeferencing algorithm
-- **Multi-format Export**: CSV/KML coordinates for spray drone operations
+- **Multi-format Export**: CSV/KML coordinates for spray drone operations and GIS software
 - **Team collaboration** and **historical data comparison**
 - **Chemical recommendations** based on detected species
 
@@ -36,12 +36,16 @@ agri-drone-ops/
 │   ├── test-dashboard/           # Dashboard without auth (for development)
 │   ├── projects/                 # Project management with location/purpose fields
 │   ├── map/                      # Interactive satellite map with filtering
-│   ├── images/                   # Image gallery with metadata display
-│   ├── upload/                   # Drag & drop upload with project selection
+│   ├── images/                   # Image gallery with metadata display and annotation access
+│   ├── upload/                   # Drag & drop upload with AI detection options
+│   ├── export/                   # CSV/KML export with filtering
+│   ├── annotate/[assetId]/       # Canvas annotation interface with polygon drawing
 │   └── api/                      # API routes
 │       ├── projects/             # Project CRUD operations
 │       ├── assets/               # Asset retrieval with project relations
-│       ├── upload/               # Image upload with EXIF extraction
+│       ├── upload/               # Image upload with EXIF extraction and AI detection
+│       ├── annotations/          # Manual annotation CRUD endpoints
+│       ├── roboflow/             # AI detection service integration
 │       └── debug/                # EXIF debugging tools
 ├── components/
 │   ├── ui/                       # shadcn/ui components
@@ -88,12 +92,15 @@ git push
 ### Common Tasks
 
 **Access the application:**
-- Landing page: http://localhost:3001
-- Dashboard (no auth): http://localhost:3001/test-dashboard  
-- Projects Management: http://localhost:3001/projects
-- Interactive Map: http://localhost:3001/map
-- Image Gallery: http://localhost:3001/images
-- Upload Interface: http://localhost:3001/upload
+- Landing page: http://localhost:3000
+- Dashboard (no auth): http://localhost:3000/test-dashboard  
+- Projects Management: http://localhost:3000/projects
+- Interactive Map: http://localhost:3000/map (with AI detections!)
+- Image Gallery: http://localhost:3000/images (with annotation access!)
+- Upload Interface: http://localhost:3000/upload (with AI detection options!)
+- Export Data: http://localhost:3000/export (CSV/KML export!)
+- Manual Annotation: http://localhost:3000/annotate/[assetId] (NEW - polygon drawing!)
+- Debug Tools: http://localhost:3000/debug
 
 **Create a new page:**
 ```bash
@@ -386,9 +393,29 @@ The repository includes GitHub Actions workflow for @claude mentions:
 - **Prisma Docs**: https://www.prisma.io/docs
 - **shadcn/ui**: https://ui.shadcn.com/
 
-## 🎉 **Session Summary - 2025-01-21**
+## 🎉 **Session Summary - 2025-01-22**
 
-### ✅ **Today's Achievements**
+### ✅ **Today's Achievements - Complete Manual Annotation System**
+- **Manual Annotation System**: 
+  - Updated database schema with AnnotationSession and ManualAnnotation models
+  - Created complete CRUD API endpoints for sessions and annotations
+  - Built interactive canvas annotation interface with polygon drawing
+  - Implemented real-time visual feedback with color-coded polygons
+  - Added automatic pixel-to-GPS coordinate conversion for annotations
+  - Integrated annotation access buttons in image gallery
+- **Export Functionality for Spray Drones**:
+  - Created comprehensive export page with project/weed type filtering
+  - Implemented CSV export with coordinates and metadata
+  - Implemented KML export for Google Earth visualization
+  - Added export link to dashboard with orange theme
+- **Complete Roboflow AI Integration**: 
+  - Created Roboflow service layer with support for 4 weed detection models
+  - Updated upload API to run AI detection on images with GPS data
+  - Built model selection UI with color-coded weed types
+  - Implemented pixel-to-geographic coordinate conversion for detections
+  - Added detection markers to map with colored indicators
+
+### ✅ **Previous Session (2025-01-21)**
 - **Resolved all server startup issues**: Fixed TypeScript/ESLint errors blocking development
 - **Created missing UI components**: Added dialog component and fixed import errors
 - **Stable development environment**: Server now starts reliably with `./start-server.sh`
@@ -397,12 +424,36 @@ The repository includes GitHub Actions workflow for @claude mentions:
 
 ### 🚀 **Current Status**
 The AgriDrone Ops platform is now **fully functional in development** with:
-- Beautiful landing page with green/blue agricultural theme
-- Complete project management with hierarchical Location → Project → Flight structure
-- Working image upload with EXIF metadata extraction (GPS, altitude, gimbal data)
-- Interactive satellite map with filtering capabilities
-- Comprehensive debug tools for troubleshooting
-- All shadcn/ui components properly installed and themed
+- **Core Platform Features**:
+  - Beautiful landing page with green/blue agricultural theme
+  - Complete project management with hierarchical Location → Project → Flight structure
+  - Working image upload with EXIF metadata extraction (GPS, altitude, gimbal data)
+  - Interactive satellite map with filtering capabilities
+  - Comprehensive debug tools for troubleshooting
+  - All shadcn/ui components properly installed and themed
+
+- **AI Detection Features**:
+  - Roboflow integration with 4 weed models (Wattle, Lantana, Bellyache Bush, Calitropis)
+  - Real-time detection during upload with model selection
+  - Automatic georeferencing of detected weeds using drone metadata
+  - Color-coded detection markers on interactive map
+  - Toggle detection visibility with live statistics
+
+- **Manual Annotation System** (NEW):
+  - Interactive canvas-based polygon drawing interface
+  - Real-time visual feedback with color-coded annotations
+  - Complete session management workflow
+  - Automatic pixel-to-GPS coordinate conversion
+  - Integration with image gallery for easy access
+  - Support for confidence levels and notes
+
+- **Export Capabilities**:
+  - CSV export for spray drone mission planning
+  - KML export for Google Earth visualization
+  - Filter by project and weed type before export
+  - Optional metadata inclusion
+  - Ready for direct import into spray drone systems
+  - Manual annotations ready for shapefile export
 
 ### 📝 **Quick Start for Tomorrow**
 ```bash
@@ -412,13 +463,16 @@ cd /Users/benharris/test-new-project/agri-drone-ops
 Then access: http://localhost:3000
 
 ### 🎯 **Next Session Priorities**
-1. **AWS Production Setup** - Move to cloud environment
-2. **Roboflow AI Integration** - Add weed detection capabilities
-3. **Export Functionality** - CSV/KML coordinate export for spray drones
+1. **Shapefile Export** - Complete GIS integration for manual annotations
+2. **Display Manual Annotations on Map** - Show user-created polygons on interactive map
+3. **AWS Production Setup** - Your dev team can handle this with the documentation  
+4. **Batch Processing with BullMQ** - Handle thousands of images efficiently
+5. **Chemical Recommendations** - Add spray recommendations based on weed type
+6. **Coverage Area Calculations** - Calculate actual hectares covered
 
 ---
 
-**Last Updated**: 2025-01-21 Evening
-**Updated By**: Claude Code Assistant - Complete Platform Stabilization & Documentation
+**Last Updated**: 2025-01-22 Afternoon
+**Updated By**: Claude Code Assistant - Manual Annotation System Complete
 
 Remember: This is an agricultural platform where accuracy matters - coordinates generated here will be used by actual spray drones in the field!
