@@ -100,6 +100,7 @@ model Project {
   team        Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
   assets      Asset[]
   jobs        ProcessingJob[]
+  orthomosaics Orthomosaic[]
   
   @@index([teamId])
   @@index([location])
@@ -291,4 +292,48 @@ enum ConfidenceLevel {
   CERTAIN
   LIKELY
   UNCERTAIN
+}
+
+model Orthomosaic {
+  id            String           @id @default(cuid())
+  projectId     String
+  name          String
+  description   String?
+  
+  // File information
+  originalFile  String           // S3/local path to GeoTIFF
+  tilesetPath   String?          // Path to processed tiles
+  fileSize      BigInt
+  
+  // Georeferencing
+  bounds        Json             // GeoJSON bounds
+  centerLat     Float
+  centerLon     Float
+  minZoom       Int              @default(10)
+  maxZoom       Int              @default(22)
+  
+  // Metadata
+  captureDate   DateTime?
+  resolution    Float?           // cm/pixel
+  area          Float?           // hectares
+  imageCount    Int?             // number of source images
+  
+  // Processing status
+  status        ProcessingStatus @default(PENDING)
+  processingLog Json?
+  
+  // Relations
+  project       Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  
+  @@index([projectId])
+  @@index([status])
+}
+
+enum ProcessingStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
 }
