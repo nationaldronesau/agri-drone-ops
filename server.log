@@ -9,3 +9,19 @@
 
  ✓ Starting...
  ✓ Ready in 1400ms
+ ○ Compiling /test-dashboard ...
+ ✓ Compiled /test-dashboard in 1400ms (717 modules)
+ ✓ Compiled in 222ms (277 modules)
+ GET /test-dashboard 200 in 1735ms
+ ✓ Compiled /images in 350ms (746 modules)
+ GET /images 200 in 448ms
+ ✓ Compiled /api/assets in 244ms (768 modules)
+ GET /api/assets 200 in 422ms
+ GET /api/assets 200 in 5ms
+ ✓ Compiled /map in 421ms (874 modules)
+ GET /map 200 in 566ms
+ GET /api/assets 200 in 77ms
+ ✓ Compiled /api/detections in 237ms (876 modules)
+ GET /api/assets 200 in 206ms
+ GET /api/detections 200 in 285ms
+ GET /api/detections 200 in 7ms

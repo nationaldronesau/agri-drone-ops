@@ -517,13 +517,46 @@ app/api/tiles/[id]/[z]/[x]/[y]/route.ts  # Tile serving (placeholder)
 - View orthomosaic: `http://localhost:3000/orthomosaics/[id]`
 - Dashboard link: Orthomosaics section with upload and view options
 
+## 🚀 **AWS Production Deployment - READY**
+
+### ✅ **Complete Implementation Plan Available**
+A comprehensive 5-day AWS deployment plan has been created at `/docs/AWS_DEPLOYMENT_PLAN.md` covering:
+
+**Infrastructure Architecture:**
+- **Compute**: ECS Fargate containers for Next.js application
+- **Database**: RDS PostgreSQL Multi-AZ for high availability  
+- **Storage**: S3 with hierarchical project/flight structure + CloudFront CDN
+- **Cache/Queue**: ElastiCache Redis for BullMQ job processing
+- **Security**: VPC, SSL certificates, Secrets Manager integration
+
+**S3 Bucket Organization:**
+```
+agridrone-ops-production/
+├── projects/{projectId}/
+│   ├── raw-images/{flightSession}/     # Drone imagery by flight
+│   ├── orthomosaics/{orthomosaicId}/   # GeoTIFF + processed tiles  
+│   ├── processed/                      # AI detections, thumbnails
+│   └── exports/                        # KML, CSV, shapefiles
+```
+
+**Code Changes Required:**
+- New S3Service class for structured uploads
+- Updated upload API for project/session organization
+- Database schema additions for S3Key storage
+- Environment configuration for AWS services
+- Docker containerization with multi-stage builds
+
+**Cost Estimate**: $120-240/month (small scale), $300-600/month (production scale)
+
+**Deployment Timeline**: 5 days (Infrastructure → Application → Migration → Testing → Optimization)
+
 ### 🎯 **Next Session Priorities**
-1. **GeoTIFF Tile Processing** - Implement actual tile generation with gdal2tiles.py
-2. **Shapefile Export** - Complete GIS integration for manual annotations
-3. **Display Manual Annotations on Map** - Show user-created polygons on interactive map
-4. **Main Map Integration** - Add orthomosaics as base layers on main map
-5. **Measurement Tools** - Distance/area measurement on orthomosaic viewer
-6. **AWS Production Setup** - Your dev team can handle this with the documentation
+1. **AWS Production Deployment** - Your dev team can follow the complete implementation plan
+2. **GeoTIFF Tile Processing** - Implement actual tile generation with gdal2tiles.py
+3. **Shapefile Export** - Complete GIS integration for manual annotations
+4. **Display Manual Annotations on Map** - Show user-created polygons on interactive map
+5. **Main Map Integration** - Add orthomosaics as base layers on main map
+6. **Measurement Tools** - Distance/area measurement on orthomosaic viewer
 
 ---
 
