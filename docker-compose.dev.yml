@@ -1,0 +1,40 @@
+version: '3.8'
+
+# Development-specific docker-compose configuration
+# Use with: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    environment:
+      # Use SQLite for development
+      DATABASE_URL: "file:./dev.db"
+      NODE_ENV: development
+      # Disable auth for development
+      NEXT_PUBLIC_AUTH_MODE: disabled
+    volumes:
+      # Mount source code for hot reloading
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev
+
+  # Prisma Studio for database management
+  prisma-studio:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - .:/app
+    command: npx prisma studio
+    ports:
+      - "5555:5555"
+    environment:
+      DATABASE_URL: "file:./dev.db"
+    depends_on:
+      - app
+    networks:
+      - agridrone-network
+    profiles:
+      - tools

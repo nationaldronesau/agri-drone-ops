@@ -551,16 +551,62 @@ agridrone-ops-production/
 **Deployment Timeline**: 5 days (Infrastructure → Application → Migration → Testing → Optimization)
 
 ### 🎯 **Next Session Priorities**
-1. **AWS Production Deployment** - Your dev team can follow the complete implementation plan
-2. **GeoTIFF Tile Processing** - Implement actual tile generation with gdal2tiles.py
-3. **Shapefile Export** - Complete GIS integration for manual annotations
-4. **Display Manual Annotations on Map** - Show user-created polygons on interactive map
-5. **Main Map Integration** - Add orthomosaics as base layers on main map
-6. **Measurement Tools** - Distance/area measurement on orthomosaic viewer
+1. **Docker Containerization** - Create Dockerfile and docker-compose for CI/CD deployment
+2. **User Management & Organizations** - Implement team accounts with member invitations
+3. **AWS Production Deployment** - Your dev team can follow the complete implementation plan
+4. **GeoTIFF Tile Processing** - Implement actual tile generation with gdal2tiles.py
+5. **Shapefile Export** - Complete GIS integration for manual annotations
+6. **Display Manual Annotations on Map** - Show user-created polygons on interactive map
+7. **Main Map Integration** - Add orthomosaics as base layers on main map
+8. **Measurement Tools** - Distance/area measurement on orthomosaic viewer
+
+## 👥 **User Management & Organization Accounts (PLANNED)**
+
+### **Current State**
+- **Database Schema**: Already has User, Team, and TeamMember models with roles (OWNER, ADMIN, MEMBER)
+- **Authentication**: NextAuth.js configured but disabled for development
+- **Auto-team Creation**: New users automatically get a personal team
+
+### **Planned Implementation**
+1. **Dual-mode Authentication System**:
+   - Preserve test-dashboard functionality with AUTH_MODE environment variable
+   - Enable full authentication for production without breaking development
+
+2. **Team Management Features**:
+   - Organization creation and management UI
+   - Team member invitation system (email-based with 7-day expiry)
+   - Team switcher component in navigation
+   - Role-based access control (RBAC)
+
+3. **Database Additions**:
+   ```prisma
+   model TeamInvitation {
+     id         String   @id @default(cuid())
+     teamId     String
+     email      String
+     role       TeamRole @default(MEMBER)
+     token      String   @unique
+     expiresAt  DateTime
+     status     InvitationStatus @default(PENDING)
+     // ... relationships
+   }
+   ```
+
+4. **Implementation Approach**:
+   - Phase 1: Enable authentication with middleware
+   - Phase 2: Build team management UI
+   - Phase 3: Implement invitation flow
+   - Phase 4: Add audit logging and advanced features
+
+### **Key Benefits**
+- Multiple users can collaborate on projects
+- Organizations can manage multiple farms/properties
+- Secure role-based permissions
+- Full audit trail of team actions
 
 ---
 
-**Last Updated**: 2025-07-23 Morning
-**Updated By**: Claude Code Assistant - Orthomosaic Display Feature Complete
+**Last Updated**: 2025-07-28 Afternoon
+**Updated By**: Claude Code Assistant - Added Docker & User Management Priorities
 
 Remember: This is an agricultural platform where accuracy matters - coordinates generated here will be used by actual spray drones in the field!

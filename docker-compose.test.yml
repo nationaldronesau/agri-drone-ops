@@ -1,0 +1,24 @@
+version: '3.8'
+
+# Test-specific docker-compose configuration
+# Use with: docker-compose -f docker-compose.yml -f docker-compose.test.yml up
+
+services:
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    environment:
+      DATABASE_URL: "file:./test.db"
+      NODE_ENV: test
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: test-secret
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npm test
+    depends_on:
+      - db
+      - redis
+    networks:
+      - agridrone-network

@@ -1,0 +1,30 @@
+# Development Dockerfile for AgriDrone Ops Platform
+FROM node:20-alpine
+
+# Install dependencies for native modules
+RUN apk add --no-cache libc6-compat python3 make g++
+
+WORKDIR /app
+
+# Copy package files
+COPY package.json package-lock.json* ./
+COPY prisma ./prisma/
+
+# Install all dependencies (including devDependencies)
+RUN npm ci
+
+# Copy application code
+COPY . .
+
+# Generate Prisma client
+RUN npx prisma generate
+
+# Create uploads directory
+RUN mkdir -p /app/public/uploads
+
+# Expose ports
+EXPOSE 3000
+EXPOSE 5555
+
+# Start development server
+CMD ["npm", "run", "dev"]
