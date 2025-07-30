@@ -47,7 +47,7 @@ WORKDIR /app
 # Set environment
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV PORT=3000
+ENV PORT=80
 
 # Create non-root user
 RUN addgroup --system --gid 1001 nodejs && \
@@ -74,7 +74,7 @@ RUN mkdir -p /app/data && chown -R nextjs:nodejs /app/data
 USER nextjs
 
 # Expose port
-EXPOSE 3000
+EXPOSE 80
 
 # Start the application (Next.js production server)
 CMD ["npm", "run", "start"]
