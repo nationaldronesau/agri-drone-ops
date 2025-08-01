@@ -25,3 +25,4 @@
  GET /api/assets 200 in 206ms
  GET /api/detections 200 in 285ms
  GET /api/detections 200 in 7ms
+[?25h

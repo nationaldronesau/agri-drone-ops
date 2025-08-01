@@ -125,6 +125,12 @@ model Asset {
   storageUrl      String
   thumbnailUrl    String?
   
+  // S3 Storage (nullable for backward compatibility)
+  s3Key           String?  // S3 object key
+  s3Bucket        String?  // S3 bucket name
+  storageType     String   @default("local") // "local" or "s3"
+  uploadedAt      DateTime @default(now())
+  
   // Flight session grouping
   flightSession   String?  // e.g., "Flight 1 - Section A", "Morning Survey"
   flightDate      DateTime?
@@ -156,6 +162,7 @@ model Asset {
   @@index([projectId])
   @@index([flightSession])
   @@index([gpsLatitude, gpsLongitude])
+  @@index([s3Key])
 }
 
 model ProcessingJob {
@@ -304,6 +311,12 @@ model Orthomosaic {
   originalFile  String           // S3/local path to GeoTIFF
   tilesetPath   String?          // Path to processed tiles
   fileSize      BigInt
+  
+  // S3 Storage (nullable for backward compatibility)
+  s3Key         String?          // S3 object key for GeoTIFF
+  s3TilesetKey  String?          // S3 prefix for tiles
+  s3Bucket      String?          // S3 bucket name
+  storageType   String           @default("local") // "local" or "s3"
   
   // Georeferencing
   bounds        Json             // GeoJSON bounds

@@ -63,6 +63,7 @@ export default function MapPage() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [detections, setDetections] = useState<Detection[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isMounted, setIsMounted] = useState(false);
   const [mapCenter, setMapCenter] = useState<[number, number]>([-27.4698, 153.0251]); // Brisbane default
   const [satelliteLayer, setSatelliteLayer] = useState(true);
   const [showDroneImages, setShowDroneImages] = useState(true);
@@ -74,6 +75,7 @@ export default function MapPage() {
   const [selectedPurpose, setSelectedPurpose] = useState<string>('all');
 
   useEffect(() => {
+    setIsMounted(true);
     fetchAssets();
     fetchDetections();
   }, []);
