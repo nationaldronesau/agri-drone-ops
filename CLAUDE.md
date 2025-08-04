@@ -578,6 +578,46 @@ agridrone-ops-production/
 7. **Main Map Integration** - Add orthomosaics as base layers on main map
 8. **Measurement Tools** - Distance/area measurement on orthomosaic viewer
 
+## 🖥️ **Electron Desktop Application (NEW INITIATIVE)**
+
+### **Overview**
+A desktop version of AgriDrone Ops with offline capabilities and local orthomosaic processing using OpenDroneMap.
+
+### **Key Features**
+- **Offline-First**: Full functionality without internet connection
+- **Local Processing**: Generate orthomosaics using OpenDroneMap
+- **Data Sync**: Automatic synchronization with cloud when online
+- **Cross-Platform**: Windows, macOS, and Linux support
+- **Resource Management**: Optimized for processing thousands of images
+
+### **Architecture Decisions**
+1. **Separate Repository**: `agri-drone-ops-desktop` to avoid breaking web app
+2. **Technology Stack**:
+   - Electron + Next.js (share UI components)
+   - SQLite for local database
+   - OpenDroneMap via Docker for processing
+   - PouchDB-style sync with conflict resolution
+3. **File Organization**:
+   ```
+   userData/
+   ├── agridrone.db
+   └── projects/
+       └── {projectId}/
+           ├── images/
+           ├── orthomosaics/
+           └── odm/
+   ```
+
+### **Implementation Guides**
+- `/DESKTOP_APP_QUICKSTART.md` - Step-by-step setup guide
+- `/ODM_INTEGRATION_GUIDE.md` - OpenDroneMap integration details
+
+### **Development Timeline**
+- Week 1-2: Foundation (Electron setup, offline database)
+- Week 3-4: Synchronization engine
+- Week 5-6: OpenDroneMap integration
+- Week 7-8: Advanced features and optimization
+
 ## 👥 **User Management & Organization Accounts (PLANNED)**
 
 ### **Current State**
