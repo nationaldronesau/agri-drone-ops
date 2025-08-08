@@ -38,7 +38,6 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # Build the Next.js app
 RUN npm run build
 
-
 # Stage 3: Production image to run app
 FROM node:20-alpine AS runner
 
@@ -60,13 +59,14 @@ RUN apk add --no-cache libc6-compat
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
-
-# If you use Prisma in production (with PostgreSQL)
+# If you use Prisma in production (with PostgreSQL or MySQL)
 COPY --from=builder /app/prisma ./prisma
 
-# Create uploads directory with correct permissions (optional)
-RUN mkdir -p /app/public/uploads && chown -R nextjs:nodejs /app/public/uploads
+# Copy entrypoint script
+COPY docker-entrypoint.sh ./
+RUN chmod +x docker-entrypoint.sh
 
+RUN mkdir -p /app/public/uploads && chown -R nextjs:nodejs /app/public/uploads
 # Optional: SQLite support
 RUN mkdir -p /app/data && chown -R nextjs:nodejs /app/data
 
@@ -76,5 +76,4 @@ USER nextjs
 # Expose port
 EXPOSE 80
 
-# Start the application (Next.js production server)
-CMD ["npm", "run", "start"]
+ENTRYPOINT ["./scripts/docker-entrypoint.sh"]
