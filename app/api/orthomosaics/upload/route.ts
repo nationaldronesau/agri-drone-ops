@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import prisma from '@/lib/db';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { S3Service } from '@/lib/services/s3';
 
 const execAsync = promisify(exec);
 
@@ -32,18 +33,58 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create upload directory
-    const uploadDir = path.join(process.cwd(), 'public', 'uploads', 'orthomosaics');
-    await mkdir(uploadDir, { recursive: true });
-
-    // Save the file
+    // Generate unique file ID
     const fileId = uuidv4();
     const fileName = `${fileId}.tif`;
-    const filePath = path.join(uploadDir, fileName);
     
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
-    await writeFile(filePath, buffer);
+
+    // Determine storage type based on environment
+    const useS3 = process.env.AWS_S3_BUCKET && process.env.AWS_ACCESS_KEY_ID;
+    let storageUrl: string;
+    let s3Key: string | undefined;
+    let s3Bucket: string | undefined;
+    let storageType: string = 'local';
+    let filePath: string = '';
+
+    if (useS3) {
+      // Upload to S3
+      try {
+        const s3Result = await S3Service.uploadFile(buffer, {
+          projectId: projectId,
+          orthomosaicId: fileId,
+          filename: fileName,
+          contentType: file.type || 'image/tiff',
+          metadata: {
+            originalName: file.name,
+            uploadedBy: 'default-user', // TODO: Get from session
+          }
+        });
+
+        s3Key = s3Result.key;
+        s3Bucket = s3Result.bucket;
+        storageUrl = s3Result.location;
+        storageType = 's3';
+      } catch (s3Error) {
+        console.error('S3 upload failed, falling back to local storage:', s3Error);
+        // Fall back to local storage
+        const uploadDir = path.join(process.cwd(), 'public', 'uploads', 'orthomosaics');
+        await mkdir(uploadDir, { recursive: true });
+        
+        filePath = path.join(uploadDir, fileName);
+        await writeFile(filePath, buffer);
+        storageUrl = `/uploads/orthomosaics/${fileName}`;
+      }
+    } else {
+      // Save file to local storage
+      const uploadDir = path.join(process.cwd(), 'public', 'uploads', 'orthomosaics');
+      await mkdir(uploadDir, { recursive: true });
+      
+      filePath = path.join(uploadDir, fileName);
+      await writeFile(filePath, buffer);
+      storageUrl = `/uploads/orthomosaics/${fileName}`;
+    }
 
     // Extract metadata using gdalinfo (if available)
     let bounds = null;
@@ -119,8 +160,14 @@ export async function POST(request: NextRequest) {
         projectId,
         name,
         description,
-        originalFile: `/uploads/orthomosaics/${fileName}`,
+        originalFile: storageUrl,
         fileSize: file.size,
+        
+        // S3 fields
+        s3Key: s3Key,
+        s3Bucket: s3Bucket,
+        storageType: storageType,
+        
         bounds: bounds || {},
         centerLat,
         centerLon,

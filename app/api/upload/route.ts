@@ -6,6 +6,7 @@ import exifr from 'exifr';
 import prisma from '@/lib/db';
 import { roboflowService, ROBOFLOW_MODELS, ModelType } from '@/lib/services/roboflow';
 import { pixelToGeo } from '@/lib/utils/georeferencing';
+import { S3Service } from '@/lib/services/s3';
 
 export async function POST(request: NextRequest) {
   try {
@@ -197,20 +198,63 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      // Save file to local storage
-      const uploadDir = path.join(process.cwd(), 'public', 'uploads');
-      await mkdir(uploadDir, { recursive: true });
-      
-      const filePath = path.join(uploadDir, uniqueFilename);
-      await writeFile(filePath, buffer);
+      // Determine storage type based on environment
+      const useS3 = process.env.AWS_S3_BUCKET && process.env.AWS_ACCESS_KEY_ID;
+      let storageUrl: string;
+      let s3Key: string | undefined;
+      let s3Bucket: string | undefined;
+      let storageType: string = 'local';
+
+      if (useS3) {
+        // Upload to S3
+        try {
+          const s3Result = await S3Service.uploadFile(buffer, {
+            projectId: projectId,
+            flightSession: formData.get('flightSession') as string || 'default',
+            filename: uniqueFilename,
+            contentType: file.type,
+            metadata: {
+              originalName: file.name,
+              uploadedBy: 'default-user', // TODO: Get from session
+            }
+          });
+
+          s3Key = s3Result.key;
+          s3Bucket = s3Result.bucket;
+          storageUrl = s3Result.location;
+          storageType = 's3';
+        } catch (s3Error) {
+          console.error('S3 upload failed, falling back to local storage:', s3Error);
+          // Fall back to local storage
+          const uploadDir = path.join(process.cwd(), 'public', 'uploads');
+          await mkdir(uploadDir, { recursive: true });
+          
+          const filePath = path.join(uploadDir, uniqueFilename);
+          await writeFile(filePath, buffer);
+          storageUrl = `/uploads/${uniqueFilename}`;
+        }
+      } else {
+        // Save file to local storage
+        const uploadDir = path.join(process.cwd(), 'public', 'uploads');
+        await mkdir(uploadDir, { recursive: true });
+        
+        const filePath = path.join(uploadDir, uniqueFilename);
+        await writeFile(filePath, buffer);
+        storageUrl = `/uploads/${uniqueFilename}`;
+      }
 
       // Create database record
       const asset = await prisma.asset.create({
         data: {
           fileName: file.name,
-          storageUrl: `/uploads/${uniqueFilename}`,
+          storageUrl: storageUrl,
           mimeType: file.type,
           fileSize: file.size,
+          
+          // S3 fields
+          s3Key: s3Key,
+          s3Bucket: s3Bucket,
+          storageType: storageType,
           
           // Use extracted data from two-pronged approach
           gpsLatitude: extractedData.gpsLatitude,
@@ -230,6 +274,9 @@ export async function POST(request: NextRequest) {
           // Use projectId from form data
           projectId: projectId,
           createdById: "default-user", // TODO: Get from session
+          
+          // Flight session
+          flightSession: formData.get('flightSession') as string || null,
         },
       });
 
