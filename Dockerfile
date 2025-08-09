@@ -46,7 +46,7 @@ WORKDIR /app
 # Set environment
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV PORT=80
+ENV PORT=8080
 
 # Create non-root user
 RUN addgroup --system --gid 1001 nodejs && \
@@ -55,10 +55,11 @@ RUN addgroup --system --gid 1001 nodejs && \
 # Install runtime dependencies
 RUN apk add --no-cache libc6-compat
 
-# Copy necessary build output
+# Copy required build output
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package*.json ./
 # If you use Prisma in production (with PostgreSQL or MySQL)
 COPY --from=builder /app/prisma ./prisma
 
@@ -74,6 +75,6 @@ RUN mkdir -p /app/data && chown -R nextjs:nodejs /app/data
 USER nextjs
 
 # Expose port
-EXPOSE 80
+EXPOSE 8080
 
 ENTRYPOINT ["./scripts/docker-entrypoint.sh"]
