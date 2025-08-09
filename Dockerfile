@@ -55,11 +55,12 @@ RUN addgroup --system --gid 1001 nodejs && \
 # Install runtime dependencies
 RUN apk add --no-cache libc6-compat
 
-# Copy required build output
-COPY --from=builder /app/public ./public
+# Copy necessary files from the builder stage
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/package.json ./package.json
+
 # If you use Prisma in production (with PostgreSQL or MySQL)
 COPY --from=builder /app/prisma ./prisma
 
