@@ -10,7 +10,7 @@ services:
       - "3000:3000"
     environment:
       # Database
-      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:password@db:5432/agridrone}
+      DATABASE_URL: mysql://willy:willy@db:3306/agridrone
       
       # NextAuth
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
@@ -27,7 +27,7 @@ services:
       S3_BUCKET: ${S3_BUCKET}
       
       # Redis
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      REDIS_URL: redis://redis:6379
       
       # Mapbox
       NEXT_PUBLIC_MAPBOX_TOKEN: ${NEXT_PUBLIC_MAPBOX_TOKEN}
@@ -47,25 +47,27 @@ services:
       - agridrone-network
     restart: unless-stopped
 
-  # PostgreSQL database (for production)
-  db:
-    image: postgres:15-alpine
+  # Mysql database (for production)
+   db:
+    image: mysql:8.0
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: agridrone
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: agridrone
+      MYSQL_USER: willy
+      MYSQL_PASSWORD: willy
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mysql_data:/var/lib/mysql
     ports:
-      - "5432:5432"
+      - "3306:3306"
     networks:
       - agridrone-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "willy", "-pwilly"]
       interval: 10s
       timeout: 5s
       retries: 5
+
 
   # Redis for BullMQ job processing
   redis:
@@ -74,7 +76,7 @@ services:
     volumes:
       - redis_data:/data
     ports:
-      - "6379:6379"
+      - "6380:6379"
     networks:
       - agridrone-network
     restart: unless-stopped
