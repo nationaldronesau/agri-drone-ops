@@ -7,10 +7,11 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      - "3001:8080"
     environment:
       # Database
-      DATABASE_URL: mysql://willy:willy@db:3306/agridrone
+      # DATABASE_URL: "mysql://willy:willy@localhost:3306/agrodrone"
+      DATABASE_URL: "mysql://willy:willy@db:3306/agrodrone"
       
       # NextAuth
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
@@ -44,30 +45,29 @@ services:
       - db
       - redis
     networks:
-      - agridrone-network
+      - agrodrone-network
     restart: unless-stopped
 
-  # Mysql database (for production)
-   db:
+  # MySQL database
+  db:
     image: mysql:8.0
     environment:
       MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: agridrone
+      MYSQL_DATABASE: agrodrone
       MYSQL_USER: willy
       MYSQL_PASSWORD: willy
     volumes:
       - mysql_data:/var/lib/mysql
     ports:
-      - "3306:3306"
+      - "3307:3306"
     networks:
-      - agridrone-network
+      - agrodrone-network
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "willy", "-pwilly"]
       interval: 10s
       timeout: 5s
       retries: 5
-
 
   # Redis for BullMQ job processing
   redis:
@@ -78,7 +78,7 @@ services:
     ports:
       - "6380:6379"
     networks:
-      - agridrone-network
+      - agrodrone-network
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -98,15 +98,15 @@ services:
     depends_on:
       - app
     networks:
-      - agridrone-network
+      - agrodrone-network
     restart: unless-stopped
     profiles:
       - production
 
 volumes:
-  postgres_data:
+  mysql_data:
   redis_data:
 
 networks:
-  agridrone-network:
+  agrodrone-network:
     driver: bridge
