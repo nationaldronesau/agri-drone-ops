@@ -53,7 +53,7 @@
     # Environment settings
     ENV NODE_ENV=production
     ENV NEXT_TELEMETRY_DISABLED=1
-    ENV PORT=8080
+    ENV PORT=3000
     
     # Install runtime-only dependencies
     RUN apk add --no-cache libc6-compat
@@ -84,7 +84,7 @@
     USER nextjs
     
     # Expose container port (Beanstalk/Nginx can map this to port 80)
-    EXPOSE 8080
+    EXPOSE 3000
     
     # Run entrypoint script (handles migrations & starts server)
     ENTRYPOINT ["./scripts/docker-entrypoint.sh"]
