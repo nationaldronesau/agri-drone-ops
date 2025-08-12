@@ -7,7 +7,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "3001:3000"
+      - "3001:8080"
     environment:
       # Database
       # DATABASE_URL: "mysql://willy:willy@localhost:3306/agrodrone"
