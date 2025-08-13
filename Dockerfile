@@ -72,7 +72,7 @@ RUN mkdir -p .next && chown -R nextjs:nodejs .next \
 USER nextjs
 
 # Match Beanstalk’s default Nginx proxy mapping
-EXPOSE $PORT
+EXPOSE 8080
 
 ##############################################################################
 # Run docker-entrypoint.sh script when the container starts.
