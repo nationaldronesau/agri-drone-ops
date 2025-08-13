@@ -71,11 +71,11 @@ RUN mkdir -p .next && chown -R nextjs:nodejs .next \
 
 USER nextjs
 
+# Match Beanstalk’s default Nginx proxy mapping
+EXPOSE $PORT
+
 ##############################################################################
 # Run docker-entrypoint.sh script when the container starts.
 # Note: If you run migrations etc outside CMD, env vars won't be available!
 ##############################################################################
 CMD ["sh", "./deploy/container_start.sh"]
-
-# Match Beanstalk’s default Nginx proxy mapping
-EXPOSE 8080
