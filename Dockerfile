@@ -16,7 +16,7 @@
     
     # Copy Prisma schema early to run generate
     COPY prisma ./prisma/
-    RUN sudo npx prisma generate
+    RUN npx prisma generate
     
     
     # ----------------------
@@ -32,7 +32,7 @@
     ENV NODE_ENV=production
     ENV NEXT_TELEMETRY_DISABLED=1
     
-    RUN sudo npm run build
+    RUN npm run build
     
     
     # ----------------------
