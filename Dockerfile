@@ -78,4 +78,4 @@ EXPOSE $PORT
 # Run docker-entrypoint.sh script when the container starts.
 # Note: If you run migrations etc outside CMD, env vars won't be available!
 ##############################################################################
-CMD ["sh", "./deploy/container_start.sh"]
+CMD ["sh", "./scripts/docker-entrypoint.sh"]
