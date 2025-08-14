@@ -7,10 +7,11 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      - "3001:8080"
     environment:
       # Database
-      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:password@db:5432/agridrone}
+      # DATABASE_URL: "mysql://willy:willy@localhost:3306/agrodrone"
+      DATABASE_URL: "mysql://willy:willy@db:3306/agrodrone"
       
       # NextAuth
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
@@ -27,7 +28,7 @@ services:
       S3_BUCKET: ${S3_BUCKET}
       
       # Redis
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      REDIS_URL: redis://redis:6379
       
       # Mapbox
       NEXT_PUBLIC_MAPBOX_TOKEN: ${NEXT_PUBLIC_MAPBOX_TOKEN}
@@ -44,25 +45,26 @@ services:
       - db
       - redis
     networks:
-      - agridrone-network
+      - agrodrone-network
     restart: unless-stopped
 
-  # PostgreSQL database (for production)
+  # MySQL database
   db:
-    image: postgres:15-alpine
+    image: mysql:8.0
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: agridrone
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: agrodrone
+      MYSQL_USER: willy
+      MYSQL_PASSWORD: willy
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mysql_data:/var/lib/mysql
     ports:
-      - "5432:5432"
+      - "3307:3306"
     networks:
-      - agridrone-network
+      - agrodrone-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "willy", "-pwilly"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -74,9 +76,9 @@ services:
     volumes:
       - redis_data:/data
     ports:
-      - "6379:6379"
+      - "6380:6379"
     networks:
-      - agridrone-network
+      - agrodrone-network
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -88,23 +90,21 @@ services:
   nginx:
     image: nginx:alpine
     ports:
-      - "80:80"
-      - "443:443"
+      - "8080:80"
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/nginx/ssl:ro
+      - ./nginx.dev.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - app
     networks:
-      - agridrone-network
+      - agrodrone-network
     restart: unless-stopped
     profiles:
       - production
 
 volumes:
-  postgres_data:
+  mysql_data:
   redis_data:
 
 networks:
-  agridrone-network:
+  agrodrone-network:
     driver: bridge

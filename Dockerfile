@@ -1,80 +1,81 @@
+# ----------------------
 # Stage 1: Install dependencies
+# ----------------------
 FROM node:20-alpine AS deps
 
-# Install compatibility libs for native modules
+# Install compatibility libs for Prisma & native modules
 RUN apk add --no-cache libc6-compat
 
-# Set working directory
 WORKDIR /app
 
-# Copy only package files for caching
+# Copy only package files first (for better layer caching)
 COPY package.json package-lock.json* ./
 
-# Install full dependencies (including dev for build)
+# Install dependencies (dev + prod for build)
 RUN npm ci
 
-# Copy Prisma schema for generation (if using Prisma)
+# Copy Prisma schema early to run generate
 COPY prisma ./prisma/
-
-# Generate Prisma client
 RUN npx prisma generate
 
 
+# ----------------------
 # Stage 2: Build the Next.js app
+# ----------------------
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Copy installed node_modules from deps stage
 COPY --from=deps /app/node_modules ./node_modules
-
-# Copy the full app source code
 COPY . .
 
-# Set env for production build
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Build the Next.js app
 RUN npm run build
 
-# Stage 3: Production image to run app
+
+# ----------------------
+# Stage 3: Production runtime
+# ----------------------
 FROM node:20-alpine AS runner
 
 WORKDIR /app
 
-# Set environment
+# Environment settings — Beanstalk will set PORT, default to 8080
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=8080
 
-# Create non-root user
-RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 nextjs
-
-# Install runtime dependencies
 RUN apk add --no-cache libc6-compat
 
-# Copy required build output
-COPY --from=builder /app/public ./public
+# Create non-root user
+RUN addgroup --system --gid 1001 nodejs \
+    && adduser --system --uid 1001 nextjs
+
+# Copy built files
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package*.json ./
-# If you use Prisma in production (with PostgreSQL or MySQL)
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/prisma ./prisma
 
 # Copy entrypoint script
-COPY docker-entrypoint.sh ./
-RUN chmod +x docker-entrypoint.sh
+COPY ./scripts/docker-entrypoint.sh ./scripts/
+RUN chmod +x ./scripts/docker-entrypoint.sh
 
-RUN mkdir -p /app/public/uploads && chown -R nextjs:nodejs /app/public/uploads
-# Optional: SQLite support
-RUN mkdir -p /app/data && chown -R nextjs:nodejs /app/data
+# Writable dirs
+RUN mkdir -p .next && chown -R nextjs:nodejs .next \
+    && mkdir -p /app/public/uploads && chown -R nextjs:nodejs /app/public/uploads \
+    && mkdir -p /app/data && chown -R nextjs:nodejs /app/data
 
-# Switch to non-root user
 USER nextjs
 
-# Expose port
+# Match Beanstalk’s default Nginx proxy mapping
 EXPOSE 8080
 
-ENTRYPOINT ["./scripts/docker-entrypoint.sh"]
+##############################################################################
+# Run docker-entrypoint.sh script when the container starts.
+# Note: If you run migrations etc outside CMD, env vars won't be available!
+##############################################################################
+CMD ["sh", "./scripts/docker-entrypoint.sh"]

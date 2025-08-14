@@ -7,6 +7,7 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  allowedDevOrigins: ['localhost', 'localhost'],
   output: 'standalone',
   images: {
     domains: ['localhost'],

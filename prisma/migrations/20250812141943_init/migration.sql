@@ -94,6 +94,10 @@ CREATE TABLE `Asset` (
     `mimeType` VARCHAR(191) NOT NULL,
     `storageUrl` VARCHAR(191) NOT NULL,
     `thumbnailUrl` VARCHAR(191) NULL,
+    `s3Key` VARCHAR(191) NULL,
+    `s3Bucket` VARCHAR(191) NULL,
+    `storageType` VARCHAR(191) NOT NULL DEFAULT 'local',
+    `uploadedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `flightSession` VARCHAR(191) NULL,
     `flightDate` DATETIME(3) NULL,
     `metadata` JSON NULL,
@@ -115,6 +119,7 @@ CREATE TABLE `Asset` (
     INDEX `Asset_projectId_idx`(`projectId`),
     INDEX `Asset_flightSession_idx`(`flightSession`),
     INDEX `Asset_gpsLatitude_gpsLongitude_idx`(`gpsLatitude`, `gpsLongitude`),
+    INDEX `Asset_s3Key_idx`(`s3Key`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -218,6 +223,10 @@ CREATE TABLE `Orthomosaic` (
     `originalFile` VARCHAR(191) NOT NULL,
     `tilesetPath` VARCHAR(191) NULL,
     `fileSize` BIGINT NOT NULL,
+    `s3Key` VARCHAR(191) NULL,
+    `s3TilesetKey` VARCHAR(191) NULL,
+    `s3Bucket` VARCHAR(191) NULL,
+    `storageType` VARCHAR(191) NOT NULL DEFAULT 'local',
     `bounds` JSON NOT NULL,
     `centerLat` DOUBLE NOT NULL,
     `centerLon` DOUBLE NOT NULL,
