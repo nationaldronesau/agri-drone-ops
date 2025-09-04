@@ -233,14 +233,15 @@ export async function POST(request: NextRequest) {
           storageUrl = s3Result.location;
           storageType = 's3';
         } catch (s3Error) {
-          console.error('S3 upload failed, falling back to local storage:', s3Error);
-          // Fall back to local storage
-          const uploadDir = path.join(process.cwd(), 'public', 'uploads');
-          await mkdir(uploadDir, { recursive: true });
-          
-          const filePath = path.join(uploadDir, uniqueFilename);
-          await writeFile(filePath, buffer);
-          storageUrl = `/uploads/${uniqueFilename}`;
+          console.error('Upload error:', s3Error);
+          return NextResponse.json(
+            { 
+              error: 'Failed to upload files',
+              details: s3Error.message,
+              type: s3Error.name
+            },
+            { status: 500 }
+          );
         }
       } else {
         // Save file to local storage
