@@ -7,9 +7,18 @@ import prisma from '@/lib/db';
 import { roboflowService, ROBOFLOW_MODELS, ModelType } from '@/lib/services/roboflow';
 import { pixelToGeo } from '@/lib/utils/georeferencing';
 import { S3Service } from '@/lib/services/s3';
+import { getToken } from 'next-auth/jwt';
 
 export async function POST(request: NextRequest) {
   try {
+    // ---- Authenticate: read JWT from cookies using next-auth/jwt ----
+    // Make sure NEXTAUTH_SECRET is set in your env
+    const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
+    const userId = token?.id as string | undefined;
+
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
     const formData = await request.formData();
     const files = formData.getAll('files') as File[];
     const projectId = formData.get('projectId') as string || 'default-project';
@@ -199,7 +208,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Determine storage type based on environment
-      const useS3 = process.env.AWS_S3_BUCKET && process.env.AWS_ACCESS_KEY_ID;
+      const useS3 = Boolean(process.env.AWS_S3_BUCKET && process.env.AWS_ACCESS_KEY_ID);
       let storageUrl: string;
       let s3Key: string | undefined;
       let s3Bucket: string | undefined;
@@ -215,7 +224,7 @@ export async function POST(request: NextRequest) {
             contentType: file.type,
             metadata: {
               originalName: file.name,
-              uploadedBy: 'default-user', // TODO: Get from session
+              uploadedBy: userId,
             }
           });
 
@@ -273,7 +282,7 @@ export async function POST(request: NextRequest) {
           metadata: fullMetadata,
           // Use projectId from form data
           projectId: projectId,
-          createdById: "default-user", // TODO: Get from session
+          createdById: userId,
           
           // Flight session
           flightSession: formData.get('flightSession') as string || null,
