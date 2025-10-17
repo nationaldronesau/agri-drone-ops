@@ -65,13 +65,12 @@
   RUN chmod +x ./scripts/docker-entrypoint.sh
   
   # Writable dirs
-  RUN mkdir -p .next && chown -R nextjs:nodejs .next \
-      && mkdir -p /app/public/uploads && chown -R nextjs:nodejs /app/public/uploads \
-      && mkdir -p /app/data && chown -R nextjs:nodejs /app/data
+  RUN mkdir -p .next && chown -R nextjs:nodejs .next
+  RUN mkdir -p /app/data && chown -R nextjs:nodejs /app/data
   
   USER nextjs
   
   # Match Beanstalk’s default Nginx proxy mapping
   EXPOSE 8080
   
-  ENTRYPOINT ["./scripts/docker-entrypoint.sh"]  
+  ENTRYPOINT ["./scripts/docker-entrypoint.sh"]

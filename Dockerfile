@@ -64,10 +64,10 @@ COPY --from=builder /app/prisma ./prisma
 COPY ./scripts/docker-entrypoint.sh ./scripts/
 RUN chmod +x ./scripts/docker-entrypoint.sh
 
-# Writable dirs
-RUN mkdir -p .next && chown -R nextjs:nodejs .next \
-    && mkdir -p /app/public/uploads && chown -R nextjs:nodejs /app/public/uploads \
-    && mkdir -p /app/data && chown -R nextjs:nodejs /app/data
+# Ensure writable directories exist
+RUN mkdir -p .next && chown -R nextjs:nodejs .next
+# Optional: SQLite support
+RUN mkdir -p /app/data && chown -R nextjs:nodejs /app/data
 
 USER nextjs
 

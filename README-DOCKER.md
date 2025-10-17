@@ -176,8 +176,8 @@ docker-compose logs -f db
 
 3. **Permission Issues**:
    ```bash
-   # Fix upload directory permissions
-   docker-compose exec app chown -R nextjs:nodejs /app/public/uploads
+   # Verify AWS credentials mounted correctly
+   docker-compose exec app env | grep AWS
    ```
 
 ### Debug Commands

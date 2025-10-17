@@ -1,214 +1,255 @@
 "use client";
 
-import { useState, useCallback } from 'react';
-import { useDropzone } from 'react-dropzone';
-import { Upload, X, CheckCircle, AlertCircle, Image as ImageIcon } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Progress } from '@/components/ui/progress';
-import { Card } from '@/components/ui/card';
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
+import { AlertCircle, Upload } from "lucide-react";
+import {
+  UppyUploader,
+  type UploadApiResponse,
+} from "@/components/UppyUploader";
+import { ROBOFLOW_MODELS } from "@/lib/services/roboflow";
 
-interface UploadedFile {
-  id?: string;
+interface Project {
+  id: string;
   name: string;
-  size: number;
-  path?: string;
-  metadata?: any;
-  success?: boolean;
-  error?: string;
-  progress?: number;
-  file?: File;
+  location: string | null;
+  purpose: string;
 }
 
 export function ImageUpload() {
-  const [files, setFiles] = useState<UploadedFile[]>([]);
-  const [uploading, setUploading] = useState(false);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProject, setSelectedProject] = useState<string>("");
+  const [runDetection, setRunDetection] = useState<boolean>(true);
+  const [selectedModels, setSelectedModels] = useState<string[]>(() =>
+    Object.keys(ROBOFLOW_MODELS).filter(
+      (key) => !ROBOFLOW_MODELS[key as keyof typeof ROBOFLOW_MODELS].disabled,
+    ),
+  );
+  const [processing, setProcessing] = useState<boolean>(false);
+  const [processingError, setProcessingError] = useState<string | null>(null);
+  const [uploadResponse, setUploadResponse] = useState<UploadApiResponse | null>(
+    null,
+  );
 
-  const onDrop = useCallback((acceptedFiles: File[]) => {
-    const newFiles = acceptedFiles.map(file => ({
-      name: file.name,
-      size: file.size,
-      file: file,
-      progress: 0
-    }));
-    setFiles(prev => [...prev, ...newFiles]);
+  useEffect(() => {
+    fetch("/api/projects")
+      .then((res) => res.json())
+      .then((data: Project[]) => {
+        setProjects(data);
+        if (data.length > 0) {
+          setSelectedProject(data[0].id);
+        }
+      })
+      .catch((error) => {
+        console.error("Unable to fetch projects:", error);
+        setProcessingError("Failed to load projects. Please refresh the page.");
+      });
   }, []);
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: {
-      'image/*': ['.jpeg', '.jpg', '.png', '.tiff', '.tif']
-    },
-    multiple: true
-  });
+  const toggleModel = useCallback((model: string) => {
+    setSelectedModels((prev) =>
+      prev.includes(model) ? prev.filter((m) => m !== model) : [...prev, model],
+    );
+  }, []);
 
-  const uploadFiles = async () => {
-    setUploading(true);
-    
-    const formData = new FormData();
-    files.forEach(file => {
-      if (file.file) {
-        formData.append('files', file.file);
-      }
-    });
-
-    try {
-      // Show progress immediately
-      setFiles(prevFiles => 
-        prevFiles.map(file => ({
-          ...file,
-          progress: 50
-        }))
-      );
-
-      const response = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData,
-      });
-
-      const result = await response.json();
-      console.log('Upload response:', result);
-      
-      if (response.ok) {
-        // Update files with results
-        setFiles(prevFiles => 
-          prevFiles.map(file => {
-            const uploadedFile = result.files.find((f: any) => f.name === file.name);
-            if (uploadedFile) {
-              return {
-                ...file,
-                ...uploadedFile,
-                progress: 100
-              };
-            }
-            return file;
-          })
-        );
-        
-        // Show success message
-        alert(`Success! Uploaded ${result.files.filter((f: any) => f.success).length} images. Check console for details.`);
-      } else {
-        console.error('Upload failed:', result.error);
-        alert('Upload failed: ' + (result.error || 'Unknown error'));
-      }
-    } catch (error) {
-      console.error('Upload error:', error);
-      alert('Upload error: ' + error);
-    } finally {
-      setUploading(false);
+  const detectionSummary = useMemo(() => {
+    if (!runDetection) {
+      return "AI detection disabled.";
     }
-  };
+    if (selectedModels.length === 0) {
+      return "Select at least one detection model.";
+    }
+    return selectedModels
+      .map(
+        (model) =>
+          ROBOFLOW_MODELS[model as keyof typeof ROBOFLOW_MODELS]?.name ?? model,
+      )
+      .join(", ");
+  }, [runDetection, selectedModels]);
 
-  const removeFile = (index: number) => {
-    setFiles(files.filter((_, i) => i !== index));
-  };
+  const onProcessingStart = useCallback(() => {
+    setProcessing(true);
+    setProcessingError(null);
+  }, []);
 
-  const formatFileSize = (bytes: number) => {
-    if (bytes < 1024) return bytes + ' bytes';
-    if (bytes < 1048576) return Math.round(bytes / 1024) + ' KB';
-    return Math.round(bytes / 1048576) + ' MB';
-  };
+  const onProcessingComplete = useCallback((response: UploadApiResponse) => {
+    setProcessing(false);
+    setUploadResponse(response);
+  }, []);
+
+  const onProcessingError = useCallback((error: Error) => {
+    setProcessing(false);
+    setProcessingError(error.message);
+  }, []);
 
   return (
-    <div className="space-y-6">
-      {/* Dropzone */}
-      <div
-        {...getRootProps()}
-        className={`
-          border-2 border-dashed rounded-lg p-8 text-center cursor-pointer
-          transition-colors duration-200
-          ${isDragActive 
-            ? 'border-green-500 bg-green-50' 
-            : 'border-gray-300 hover:border-green-400 hover:bg-gray-50'
-          }
-        `}
-      >
-        <input {...getInputProps()} />
-        <Upload className="w-12 h-12 mx-auto mb-4 text-gray-400" />
-        {isDragActive ? (
-          <p className="text-lg text-green-600">Drop the images here...</p>
-        ) : (
-          <>
-            <p className="text-lg text-gray-600 mb-2">
-              Drag & drop drone images here, or click to select
-            </p>
-            <p className="text-sm text-gray-500">
-              Supports JPEG, PNG, TIFF formats • Multiple files allowed
-            </p>
-          </>
-        )}
-      </div>
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-xl">Quick Upload</CardTitle>
+        <CardDescription>
+          Upload imagery straight to S3. Processing runs after the files land in
+          the bucket.
+        </CardDescription>
+      </CardHeader>
 
-      {/* File list */}
-      {files.length > 0 && (
-        <Card className="p-6">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold">
-              {files.length} file{files.length > 1 ? 's' : ''} selected
-            </h3>
-            {files.length > 0 && !uploading && (
-              <Button 
-                onClick={uploadFiles}
-                className="bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600"
+      <CardContent className="space-y-6">
+        <section className="grid gap-4 lg:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="dashboard-project">Project</Label>
+            <Select
+              value={selectedProject}
+              onValueChange={setSelectedProject}
+            >
+              <SelectTrigger id="dashboard-project">
+                <SelectValue placeholder="Select a project" />
+              </SelectTrigger>
+              <SelectContent>
+                {projects.map((project) => (
+                  <SelectItem key={project.id} value={project.id}>
+                    {project.name}
+                    {project.location ? ` – ${project.location}` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-3 rounded-lg border border-green-200 bg-green-50 p-3">
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="dashboard-run-detection"
+                checked={runDetection}
+                onCheckedChange={(checked) => setRunDetection(Boolean(checked))}
+              />
+              <Label
+                htmlFor="dashboard-run-detection"
+                className="flex cursor-pointer items-center"
               >
-                Upload All
-              </Button>
+                <Upload className="mr-2 h-4 w-4 text-green-600" />
+                Run AI detection
+              </Label>
+            </div>
+
+            {runDetection && (
+              <div className="space-y-2 pl-6">
+                <p className="text-xs text-gray-600">
+                  Choose which models to run:
+                </p>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {Object.entries(ROBOFLOW_MODELS).map(([key, model]) => (
+                    <div
+                      key={key}
+                      className={`flex items-center space-x-2 ${model.disabled ? "opacity-60" : ""}`}
+                    >
+                      <Checkbox
+                        id={`dashboard-model-${key}`}
+                        disabled={model.disabled}
+                        checked={selectedModels.includes(key)}
+                        onCheckedChange={() => toggleModel(key)}
+                      />
+                      <Label
+                        htmlFor={`dashboard-model-${key}`}
+                        className="flex cursor-pointer items-center text-xs"
+                      >
+                        <span
+                          className="mr-2 h-3 w-3 rounded-full"
+                          style={{ backgroundColor: model.color }}
+                        />
+                        {model.name}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-500">{detectionSummary}</p>
+              </div>
             )}
           </div>
+        </section>
 
-          <div className="space-y-3">
-            {files.map((file, index) => (
-              <div
-                key={index}
-                className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-              >
-                <div className="flex items-center space-x-3 flex-1">
-                  <ImageIcon className="w-8 h-8 text-gray-400" />
-                  <div className="flex-1">
-                    <p className="font-medium text-gray-900">{file.name}</p>
-                    <div className="flex items-center space-x-4 text-sm text-gray-500">
-                      <span>{formatFileSize(file.size)}</span>
-                      {file.metadata && (
-                        <>
-                          {file.metadata.latitude && (
-                            <span>
-                              GPS: {file.metadata.latitude.toFixed(6)}, 
-                              {file.metadata.longitude.toFixed(6)}
-                            </span>
-                          )}
-                          {file.metadata.altitude && (
-                            <span>Alt: {Math.round(file.metadata.altitude)}m</span>
-                          )}
-                        </>
-                      )}
-                    </div>
-                    {file.progress !== undefined && file.progress < 100 && (
-                      <Progress value={file.progress} className="mt-2 h-2" />
-                    )}
+        {!selectedProject && (
+          <div className="flex items-center space-x-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+            <AlertCircle className="h-4 w-4 flex-shrink-0" />
+            <span>Select a project before uploading files.</span>
+          </div>
+        )}
+
+        <UppyUploader
+          projectId={selectedProject || null}
+          runDetection={runDetection}
+          detectionModels={selectedModels}
+          disabled={!selectedProject}
+          onProcessingStart={onProcessingStart}
+          onProcessingComplete={onProcessingComplete}
+          onProcessingError={onProcessingError}
+        />
+
+        {processing && (
+          <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">
+            Processing uploaded files… metadata parsing and detections are in
+            progress.
+          </div>
+        )}
+
+        {processingError && (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">
+            {processingError}
+          </div>
+        )}
+
+        {uploadResponse && uploadResponse.files.length > 0 && (
+          <>
+            <h4 className="text-sm font-semibold">Latest Results</h4>
+            <div className="space-y-3">
+              {uploadResponse.files.map((file) => (
+                <div
+                  key={`${file.name}-${file.url}`}
+                  className="rounded-lg border border-gray-100 bg-gray-50 p-3 text-xs text-gray-700"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">{file.name}</span>
+                    <span>{file.size?.toLocaleString()} bytes</span>
                   </div>
-                </div>
-
-                <div className="flex items-center space-x-2">
-                  {file.success && (
-                    <CheckCircle className="w-5 h-5 text-green-500" />
+                  <p className="truncate text-gray-500">{file.url}</p>
+                  {file.warning && (
+                    <p className="mt-2 text-yellow-700">{file.warning}</p>
                   )}
                   {file.error && (
-                    <AlertCircle className="w-5 h-5 text-red-500" />
+                    <p className="mt-2 text-red-700">{file.error}</p>
                   )}
-                  {!uploading && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => removeFile(index)}
-                    >
-                      <X className="w-4 h-4" />
-                    </Button>
+                  {file.detections && file.detections.length > 0 && (
+                    <p className="mt-2 text-green-700">
+                      {file.detections.length} detections saved.
+                    </p>
                   )}
                 </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
-    </div>
+              ))}
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setUploadResponse(null)}
+            >
+              Clear Results
+            </Button>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
