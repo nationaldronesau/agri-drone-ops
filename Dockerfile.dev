@@ -19,9 +19,6 @@ COPY . .
 # Generate Prisma client
 RUN npx prisma generate
 
-# Create uploads directory
-RUN mkdir -p /app/public/uploads
-
 # Expose ports
 EXPOSE 3000
 EXPOSE 5555

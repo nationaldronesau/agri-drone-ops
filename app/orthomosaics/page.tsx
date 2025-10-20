@@ -4,12 +4,13 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { MapPin, Upload, Calendar, Ruler, Mountain, AlertCircle, CheckCircle, Clock, Loader2 } from 'lucide-react';
+import { Textarea } from "@/components/ui/textarea";
+import { MapPin, Calendar, Mountain, AlertCircle, CheckCircle, Clock, Loader2 } from 'lucide-react';
 import { formatBytes, formatDate } from '@/lib/utils';
+import { OrthomosaicUploader } from '@/components/OrthomosaicUploader';
 
 interface Orthomosaic {
   id: string;
@@ -31,13 +32,22 @@ interface Orthomosaic {
   };
 }
 
+interface Project {
+  id: string;
+  name: string;
+  location: string | null;
+}
+
 export default function OrthomosaicsPage() {
   const [orthomosaics, setOrthomosaics] = useState<Orthomosaic[]>([]);
-  const [projects, setProjects] = useState<any[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
+  const [orthomosaicName, setOrthomosaicName] = useState<string>('');
+  const [orthomosaicDescription, setOrthomosaicDescription] = useState<string>('');
+  const [processing, setProcessing] = useState<boolean>(false);
+  const [processingError, setProcessingError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
     fetchOrthomosaics();
@@ -62,7 +72,7 @@ export default function OrthomosaicsPage() {
     try {
       const response = await fetch('/api/projects');
       if (response.ok) {
-        const data = await response.json();
+        const data: Project[] = await response.json();
         setProjects(data);
       }
     } catch (error) {
@@ -70,42 +80,23 @@ export default function OrthomosaicsPage() {
     }
   };
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file || !selectedProjectId) return;
+  const handleProcessingStart = () => {
+    setProcessing(true);
+    setProcessingError(null);
+    setSuccessMessage(null);
+  };
 
-    setUploading(true);
-    setUploadProgress(0);
+  const handleProcessingComplete = (orthomosaic: Orthomosaic) => {
+    setProcessing(false);
+    setSuccessMessage(`Uploaded ${orthomosaic.name}. Processing tiles shortly.`);
+    setOrthomosaicName('');
+    setOrthomosaicDescription('');
+    fetchOrthomosaics();
+  };
 
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('projectId', selectedProjectId);
-    formData.append('name', file.name.replace(/\.[^/.]+$/, '')); // Remove extension
-
-    try {
-      const xhr = new XMLHttpRequest();
-      
-      xhr.upload.addEventListener('progress', (e) => {
-        if (e.lengthComputable) {
-          const percentComplete = (e.loaded / e.total) * 100;
-          setUploadProgress(percentComplete);
-        }
-      });
-
-      xhr.addEventListener('load', () => {
-        if (xhr.status === 200) {
-          fetchOrthomosaics(); // Refresh list
-          setUploadProgress(0);
-          setUploading(false);
-        }
-      });
-
-      xhr.open('POST', '/api/orthomosaics/upload');
-      xhr.send(formData);
-    } catch (error) {
-      console.error('Error uploading orthomosaic:', error);
-      setUploading(false);
-    }
+  const handleProcessingError = (error: Error) => {
+    setProcessing(false);
+    setProcessingError(error.message);
   };
 
   const getStatusIcon = (status: string) => {
@@ -177,29 +168,73 @@ export default function OrthomosaicsPage() {
               </Select>
             </div>
 
-            {selectedProjectId && (
-              <div>
-                <Label htmlFor="file">GeoTIFF File</Label>
-                <Input
-                  id="file"
-                  type="file"
-                  accept=".tif,.tiff,.geotiff"
-                  onChange={handleFileUpload}
-                  disabled={uploading}
-                />
-                <p className="text-sm text-muted-foreground mt-1">
-                  Maximum file size: 2GB. Supported format: GeoTIFF
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-4">
+                <div>
+                  <Label htmlFor="orthomosaicName">Orthomosaic Name</Label>
+                  <Input
+                    id="orthomosaicName"
+                    placeholder="e.g. Southern Paddock Mosaic"
+                    value={orthomosaicName}
+                    onChange={(event) => setOrthomosaicName(event.target.value)}
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Defaults to the file name if left blank.
+                  </p>
+                </div>
+
+                <div>
+                  <Label htmlFor="orthomosaicDescription">Description</Label>
+                  <Textarea
+                    id="orthomosaicDescription"
+                    placeholder="Notes about this orthomosaic (optional)"
+                    value={orthomosaicDescription}
+                    onChange={(event) =>
+                      setOrthomosaicDescription(event.target.value)
+                    }
+                  />
+                </div>
+
+                <p className="text-xs text-muted-foreground">
+                  Files upload directly to S3 using multipart uploads. GDAL metadata
+                  extraction runs after upload completes.
                 </p>
+              </div>
+
+              <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-3">
+                {selectedProjectId ? (
+                  <OrthomosaicUploader
+                    projectId={selectedProjectId || null}
+                    name={orthomosaicName}
+                    description={orthomosaicDescription}
+                    disabled={!selectedProjectId}
+                    onProcessingStart={handleProcessingStart}
+                    onProcessingComplete={handleProcessingComplete}
+                    onProcessingError={handleProcessingError}
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-sm text-gray-500">
+                    Select a project to enable uploads.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {processing && (
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+                Upload complete. Extracting metadata and queueing tile generation…
               </div>
             )}
 
-            {uploading && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm">
-                  <span>Uploading...</span>
-                  <span>{Math.round(uploadProgress)}%</span>
-                </div>
-                <Progress value={uploadProgress} />
+            {processingError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                {processingError}
+              </div>
+            )}
+
+            {successMessage && (
+              <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+                {successMessage}
               </div>
             )}
           </div>

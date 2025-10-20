@@ -37,8 +37,6 @@ services:
       NEXT_PUBLIC_AUTH_MODE: ${NEXT_PUBLIC_AUTH_MODE:-disabled}
       
     volumes:
-      # Persist uploads in development
-      - ./public/uploads:/app/public/uploads
       # Persist SQLite database (if using in dev)
       - ./prisma/dev.db:/app/prisma/dev.db
     depends_on:
