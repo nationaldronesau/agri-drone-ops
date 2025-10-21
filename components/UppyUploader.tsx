@@ -125,6 +125,7 @@ export function UppyUploader({
     });
 
     uppy.use(AwsS3, {
+      shouldUseMultipart: true,
       limit: 4,
       retryDelays: [0, 1000, 3000, 5000],
       createMultipartUpload: async (file) => {
@@ -270,7 +271,7 @@ export function UppyUploader({
 
         const payload = (await response.json()) as UploadApiResponse;
         callbacksRef.current.onProcessingComplete?.(payload);
-        uppy.reset();
+        uppy.resetProgress()
       } catch (error) {
         console.error("Post-upload processing failed:", error);
         if (error instanceof Error) {
@@ -289,7 +290,9 @@ export function UppyUploader({
     uppyRef.current = uppy;
 
     return () => {
-      uppy.close();
+      uppy.cancelAll()
+      uppy.resetProgress()
+      uppy.getFiles().forEach(file => uppy.removeFile(file.id))
       uppyRef.current = null;
     };
   // We intentionally initialize Uppy once and rely on refs for latest props.

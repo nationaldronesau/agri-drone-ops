@@ -121,7 +121,7 @@ export function OrthomosaicUploader({
       },
       signPart: async (_file, { uploadId, key, partNumber, body, signal }) => {
         const response = await fetch("/api/s3/multipart/sign", {
-          method: "POST",
+          method: "PUT",
           headers: { "Content-Type": "application/json" },
           signal,
           body: JSON.stringify({
