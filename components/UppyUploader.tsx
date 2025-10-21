@@ -126,6 +126,7 @@ export function UppyUploader({
 
     uppy.use(AwsS3, {
       limit: 4,
+      shouldUseMultipart: () => true,
       retryDelays: [0, 1000, 3000, 5000],
       createMultipartUpload: async (file) => {
         const settings = latestSettingsRef.current;
@@ -201,6 +202,12 @@ export function UppyUploader({
       },
     });
 
+    uppy.on("upload-progress", (file, progress) => {
+      console.debug(
+        `[Uppy] upload-progress ${file.name}: ${progress.bytesUploaded}/${progress.bytesTotal}`,
+      );
+    });
+
     uppy.on("upload-error", (_file, error, response) => {
       console.error("Upload error:", error, response);
       const message =
@@ -229,6 +236,19 @@ export function UppyUploader({
           key?: string;
           bucket?: string;
         };
+        const responseBody = file.response?.body as
+          | { key?: string; bucket?: string; url?: string }
+          | undefined;
+        const resolvedKey =
+          responseBody?.key ||
+          awsMeta.key ||
+          (() => {
+            try {
+              return new URL(file.uploadURL ?? "").pathname.replace(/^\//, "");
+            } catch {
+              return undefined;
+            }
+          })();
 
         return {
           url: file.uploadURL,
@@ -238,8 +258,8 @@ export function UppyUploader({
             file.type ||
             (file.data instanceof File ? file.data.type : undefined) ||
             "application/octet-stream",
-          key: awsMeta.key,
-          bucket: awsMeta.bucket,
+          key: resolvedKey,
+          bucket: responseBody?.bucket || awsMeta.bucket,
         };
       });
 

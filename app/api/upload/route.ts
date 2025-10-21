@@ -97,6 +97,11 @@ export async function POST(request: NextRequest) {
 
     const uploadResults: any[] = [];
 
+    const cloudFrontBase =
+      process.env.CLOUDFRONT_BASE_URL ??
+      process.env.NEXT_PUBLIC_CLOUDFRONT_BASE_URL ??
+      null;
+
     for (const file of files) {
       try {
         let bucket = file.bucket || null;
@@ -114,6 +119,10 @@ export async function POST(request: NextRequest) {
 
         if (bucket !== S3Service.bucketName) {
           throw new Error("File is stored in an unsupported S3 bucket.");
+        }
+
+        if (!S3Service.isKeyWithinUserScope(key, session.user.id)) {
+          throw new Error("Provided S3 key is outside of the allowed prefix.");
         }
 
         const buffer = await S3Service.downloadFile(key, bucket);
@@ -252,10 +261,15 @@ export async function POST(request: NextRequest) {
           console.error("Error parsing EXIF/XMP:", metadataError);
         }
 
+        const cloudFrontUrl =
+          key && cloudFrontBase
+            ? `${cloudFrontBase.replace(/\/$/, "")}/${key}`
+            : file.url;
+
         const asset = await prisma.asset.create({
           data: {
             fileName: file.name,
-            storageUrl: file.url,
+            storageUrl: cloudFrontUrl,
             mimeType: file.mimeType || "application/octet-stream",
             fileSize: file.size,
             s3Key: key,
@@ -359,7 +373,9 @@ export async function POST(request: NextRequest) {
         uploadResults.push({
           id: asset.id,
           name: file.name,
-          url: file.url,
+          url: cloudFrontUrl,
+          bucket,
+          s3Key: key,
           size: file.size,
           metadata: fullMetadata,
           gpsLatitude: extractedData.gpsLatitude,
