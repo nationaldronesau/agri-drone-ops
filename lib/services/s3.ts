@@ -39,7 +39,7 @@ export interface S3UploadOptions {
   projectId: string;
   flightSession?: string;
   orthomosaicId?: string;
-  filename: string;
+  fileName: string;
   contentType: string;
   metadata?: Record<string, string>;
 }
@@ -57,6 +57,7 @@ export interface CreateMultipartUploadOptions {
   fileName: string;
   contentType: string;
   flightSession?: string;
+  orthomosaicId?: string;
   metadata?: Record<string, string>;
 }
 
@@ -141,23 +142,42 @@ export class S3Service {
     return `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
   }
 
-  /**
-   * Generate S3 key based on file type and project structure
+    /**
+   * Generate an S3 key (path) for uploads based on project structure and file context.
+   *
+   * The key pattern dynamically adapts depending on whether the upload
+   * belongs to a flight session, orthomosaic, or miscellaneous category.
+   *
+   * Examples:
+   *  - Drone image:      development/{projectId}/raw-images/{flightSession}/{filename}
+   *  - Orthomosaic:      development/{projectId}/orthomosaics/{orthomosaicId}/{filename}
+   *  - Miscellaneous:    development/{projectId}/misc/{filename}
+   *
+   * @param {CreateMultipartUploadOptions|S3UploadOptions} options - The upload configuration.
+   * @param {string} options.projectId - The associated project ID.
+   * @param {string} [options.flightSession] - The drone flight session identifier.
+   * @param {string} [options.orthomosaicId] - The orthomosaic ID (if applicable).
+   * @param {string} options.filename - The name of the file being uploaded.
+   * @param {string} options.contentType - The MIME type of the file.
+   * @param {Record<string, string>} [options.metadata] - Optional metadata to store in S3.
+   *
+   * @returns {string} The generated S3 key (relative path inside the bucket).
    */
-  static generateKey(options: S3UploadOptions): string {
-    const { projectId, flightSession, orthomosaicId, filename } = options;
+  static generateKey(options: CreateMultipartUploadOptions|S3UploadOptions): string {
+    const { projectId, flightSession, orthomosaicId, fileName } = options;
 
     if (orthomosaicId) {
-      // Orthomosaic structure: {NODE_ENV}/{projectId}/orthomosaics/{orthomosaicId}/{filename}
-      return `${NODE_ENV}/${projectId}/orthomosaics/${orthomosaicId}/${filename}`;
+      // Orthomosaic structure
+      return `${NODE_ENV}/${projectId}/orthomosaics/${orthomosaicId}/${fileName}`;
     } else if (flightSession) {
-      // Drone image structure: {NODE_ENV}/{projectId}/raw-images/{flightSession}/{filename}
-      return `${NODE_ENV}/${projectId}/raw-images/${flightSession}/${filename}`;
+      // Drone image structure
+      return `${NODE_ENV}/${projectId}/raw-images/${flightSession}/${fileName}`;
     } else {
-      // Fallback structure: {NODE_ENV}/{projectId}/misc/{filename}
-      return `${NODE_ENV}/${projectId}/misc/${filename}`;
+      // Fallback (misc)
+      return `${NODE_ENV}/${projectId}/misc/${fileName}`;
     }
   }
+
 
   /**
    * Initiate a multipart upload session
@@ -165,12 +185,8 @@ export class S3Service {
   static async createMultipartUpload(
     options: CreateMultipartUploadOptions,
   ): Promise<MultipartUploadResult> {
-    const key = this.buildUserUploadKey({
-      userId: options.userId,
-      projectId: options.projectId,
-      flightSession: options.flightSession,
-      originalFileName: options.fileName,
-    });
+    const key = this.generateKey(options);
+    console.log("Multipart upload key:", key);
 
     const command = new CreateMultipartUploadCommand({
       Bucket: this.bucketName,
