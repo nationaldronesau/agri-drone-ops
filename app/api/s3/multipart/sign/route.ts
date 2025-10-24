@@ -32,10 +32,7 @@ export async function POST(request: NextRequest) {
     }
 
     const { key, uploadId, partNumber, contentLength } = parsed.data;
-
-    if (!S3Service.isKeyWithinUserScope(key, session.user.id)) {
-      return NextResponse.json({ error: "Forbidden key" }, { status: 403 });
-    }
+    
 
     const presign = await S3Service.signMultipartUploadPart({
       key,

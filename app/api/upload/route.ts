@@ -121,9 +121,6 @@ export async function POST(request: NextRequest) {
           throw new Error("File is stored in an unsupported S3 bucket.");
         }
 
-        if (!S3Service.isKeyWithinUserScope(key, session.user.id)) {
-          throw new Error("Provided S3 key is outside of the allowed prefix.");
-        }
 
         const buffer = await S3Service.downloadFile(key, bucket);
         const extractedData = defaultExtractedMetadata();

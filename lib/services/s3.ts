@@ -32,18 +32,6 @@ const SIGNED_URL_EXPIRY = 3600; // 1 hour
 const DEFAULT_PART_SIZE = 10 * 1024 * 1024; // 10MB chunks for multipart upload
 const MULTIPART_SIGNED_URL_TTL = 900; // 15 minutes
 
-const sanitizeSegment = (value: string): string =>
-  value.replace(/[^a-zA-Z0-9_\-./]/g, "_");
-
-export interface S3UploadOptions {
-  projectId: string;
-  flightSession?: string;
-  orthomosaicId?: string;
-  filename: string;
-  contentType: string;
-  metadata?: Record<string, string>;
-}
-
 export interface S3UploadResult {
   key: string;
   bucket: string;
@@ -57,6 +45,7 @@ export interface CreateMultipartUploadOptions {
   fileName: string;
   contentType: string;
   flightSession?: string;
+  orthomosaicId?: string;
   metadata?: Record<string, string>;
 }
 
@@ -85,36 +74,6 @@ export class S3Service {
     return APP_ENV;
   }
 
-  static getUserUploadPrefix(userId: string): string {
-    return `uploads/${this.environmentSegment}/${sanitizeSegment(userId)}/`;
-  }
-
-  static buildUserUploadKey(options: {
-    userId: string;
-    projectId: string;
-    flightSession?: string | null;
-    originalFileName: string;
-  }): string {
-    const { userId, projectId, flightSession, originalFileName } = options;
-
-    const userPrefix = this.getUserUploadPrefix(userId);
-    const projectSegment = sanitizeSegment(projectId || "unassigned");
-    const sessionSegment = sanitizeSegment(
-      flightSession && flightSession.trim().length > 0
-        ? flightSession
-        : "default",
-    );
-    const extension = path.extname(originalFileName || "").toLowerCase();
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const uniqueId = randomUUID();
-
-    return `${userPrefix}${projectSegment}/${sessionSegment}/${timestamp}_${uniqueId}${extension}`;
-  }
-
-  static isKeyWithinUserScope(key: string, userId: string): boolean {
-    return key.startsWith(this.getUserUploadPrefix(userId));
-  }
-
   static parseS3Url(url: string): { bucket: string; key: string } {
     const parsed = new URL(url);
     const hostSegments = parsed.hostname.split(".");
@@ -141,23 +100,42 @@ export class S3Service {
     return `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
   }
 
-  /**
-   * Generate S3 key based on file type and project structure
+    /**
+   * Generate an S3 key (path) for uploads based on project structure and file context.
+   *
+   * The key pattern dynamically adapts depending on whether the upload
+   * belongs to a flight session, orthomosaic, or miscellaneous category.
+   *
+   * Examples:
+   *  - Drone image:      development/{projectId}/raw-images/{flightSession}/{filename}
+   *  - Orthomosaic:      development/{projectId}/orthomosaics/{orthomosaicId}/{filename}
+   *  - Miscellaneous:    development/{projectId}/misc/{filename}
+   *
+   * @param {CreateMultipartUploadOptions} options - The upload configuration.
+   * @param {string} options.projectId - The associated project ID.
+   * @param {string} [options.flightSession] - The drone flight session identifier.
+   * @param {string} [options.orthomosaicId] - The orthomosaic ID (if applicable).
+   * @param {string} options.filename - The name of the file being uploaded.
+   * @param {string} options.contentType - The MIME type of the file.
+   * @param {Record<string, string>} [options.metadata] - Optional metadata to store in S3.
+   *
+   * @returns {string} The generated S3 key (relative path inside the bucket).
    */
-  static generateKey(options: S3UploadOptions): string {
-    const { projectId, flightSession, orthomosaicId, filename } = options;
+  static generateKey(options: CreateMultipartUploadOptions): string {
+    const { projectId, flightSession, orthomosaicId, fileName } = options;
 
     if (orthomosaicId) {
-      // Orthomosaic structure: {NODE_ENV}/{projectId}/orthomosaics/{orthomosaicId}/{filename}
-      return `${NODE_ENV}/${projectId}/orthomosaics/${orthomosaicId}/${filename}`;
+      // Orthomosaic structure
+      return `${NODE_ENV}/${projectId}/orthomosaics/${orthomosaicId}/${fileName}`;
     } else if (flightSession) {
-      // Drone image structure: {NODE_ENV}/{projectId}/raw-images/{flightSession}/{filename}
-      return `${NODE_ENV}/${projectId}/raw-images/${flightSession}/${filename}`;
+      // Drone image structure
+      return `${NODE_ENV}/${projectId}/raw-images/${flightSession}/${fileName}`;
     } else {
-      // Fallback structure: {NODE_ENV}/{projectId}/misc/{filename}
-      return `${NODE_ENV}/${projectId}/misc/${filename}`;
+      // Fallback (misc)
+      return `${NODE_ENV}/${projectId}/misc/${fileName}`;
     }
   }
+
 
   /**
    * Initiate a multipart upload session
@@ -165,12 +143,8 @@ export class S3Service {
   static async createMultipartUpload(
     options: CreateMultipartUploadOptions,
   ): Promise<MultipartUploadResult> {
-    const key = this.buildUserUploadKey({
-      userId: options.userId,
-      projectId: options.projectId,
-      flightSession: options.flightSession,
-      originalFileName: options.fileName,
-    });
+    const key = this.generateKey(options);
+    console.log("Multipart upload key:", key);
 
     const command = new CreateMultipartUploadCommand({
       Bucket: this.bucketName,
@@ -322,44 +296,6 @@ export class S3Service {
       expiresIn,
       uploadUrl: signedUrl,
     };
-  }
-
-  /**
-   * Upload a file to S3
-   */
-  static async uploadFile(
-    buffer: Buffer,
-    options: S3UploadOptions
-  ): Promise<S3UploadResult> {
-    const key = this.generateKey(options);
-
-    const uploadParams: PutObjectCommandInput = {
-      Bucket: BUCKET_NAME,
-      Key: key,
-      Body: buffer,
-      ContentType: options.contentType,
-      Metadata: {
-        projectId: options.projectId,
-        uploadedAt: new Date().toISOString(),
-        environment: NODE_ENV,
-        ...options.metadata,
-      },
-    };
-
-    try {
-      const command = new PutObjectCommand(uploadParams);
-      const response = await s3Client.send(command);
-
-      return {
-        key,
-        bucket: BUCKET_NAME,
-        location: `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION || "ap-southeast-2"}.amazonaws.com/${key}`,
-        etag: response.ETag,
-      };
-    } catch (error) {
-      console.error("S3 upload error:", error);
-      throw new Error(`Failed to upload file to S3: ${error instanceof Error ? error.message : "Unknown error"}`);
-    }
   }
 
   /**
