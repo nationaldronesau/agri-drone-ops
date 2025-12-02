@@ -216,6 +216,11 @@ model Detection {
   // Additional data
   metadata        Json?          // Any additional data (e.g., chemical recommendations)
   verified        Boolean        @default(false)
+  reviewedAt      DateTime?
+  reviewedBy      String?
+  rejected        Boolean        @default(false)
+  userCorrected   Boolean        @default(false)
+  originalClass   String?
   
   createdAt       DateTime       @default(now())
   
@@ -225,6 +230,8 @@ model Detection {
   @@index([jobId])
   @@index([assetId])
   @@index([centerLat, centerLon])
+  @@index([verified])
+  @@index([rejected])
 }
 
 enum DetectionType {

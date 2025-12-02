@@ -11,6 +11,15 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
+function hexToRgba(hex: string, alpha: number): string {
+  const normalized = hex.replace("#", "");
+  if (normalized.length !== 6) return `rgba(14,165,233,${alpha})`;
+  const r = parseInt(normalized.slice(0, 2), 16);
+  const g = parseInt(normalized.slice(2, 4), 16);
+  const b = parseInt(normalized.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 interface Asset {
   id: string;
   fileName: string;
@@ -42,6 +51,21 @@ interface ManualAnnotation {
   pushedToTraining?: boolean;
   pushedAt?: string | null;
   roboflowImageId?: string | null;
+}
+
+interface AiSuggestion {
+  id: string;
+  className: string;
+  confidence: number | null;
+  boundingBox?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  verified: boolean;
+  rejected: boolean;
+  color?: string;
 }
 
 interface DrawingPolygon {
@@ -84,6 +108,11 @@ export default function AnnotatePage() {
   const [selectedAnnotation, setSelectedAnnotation] = useState<string | null>(null);
   const [pushingId, setPushingId] = useState<string | null>(null);
   const [pushError, setPushError] = useState<string | null>(null);
+  const [aiSuggestions, setAiSuggestions] = useState<AiSuggestion[]>([]);
+  const [showAiSuggestions, setShowAiSuggestions] = useState(true);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [bulkAction, setBulkAction] = useState<"accept" | "reject" | null>(null);
   
   // Annotation form state
   const [weedType, setWeedType] = useState(WEED_TYPES[0]);
@@ -138,6 +167,37 @@ export default function AnnotatePage() {
     }
   }, [assetId]);
 
+  const fetchAiDetections = useCallback(async () => {
+    if (!assetId) return;
+    try {
+      setAiLoading(true);
+      setAiError(null);
+      const response = await fetch(`/api/detections?assetId=${assetId}`);
+      if (!response.ok) {
+        throw new Error("Failed to load AI detections");
+      }
+      const data = await response.json();
+      const mapped: AiSuggestion[] = (data || []).map((det: any) => ({
+        id: det.id,
+        className: det.className || "Unknown",
+        confidence: typeof det.confidence === "number" ? det.confidence : null,
+        boundingBox: det.boundingBox || det.bounding_box || undefined,
+        verified: Boolean(det.verified),
+        rejected: Boolean(det.rejected),
+        color: det.metadata?.color,
+      }));
+      setAiSuggestions(mapped);
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : "Failed to load AI detections");
+    } finally {
+      setAiLoading(false);
+    }
+  }, [assetId]);
+
+  useEffect(() => {
+    fetchAiDetections();
+  }, [fetchAiDetections]);
+
   // Setup canvas when image loads
   const handleImageLoad = useCallback(() => {
     const canvas = canvasRef.current;
@@ -178,6 +238,34 @@ export default function AnnotatePage() {
     
     // Draw the background image first - scale the image draw to match zoom
     ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    // Draw AI suggestions as dashed boxes
+    if (showAiSuggestions) {
+      aiSuggestions
+        .filter(s => s.boundingBox && !s.rejected)
+        .forEach((suggestion) => {
+          const color = suggestion.color || '#0ea5e9';
+          const bbox = suggestion.boundingBox!;
+          const startX = (bbox.x - bbox.width / 2) * scale;
+          const startY = (bbox.y - bbox.height / 2) * scale;
+          const boxWidth = bbox.width * scale;
+          const boxHeight = bbox.height * scale;
+
+          ctx.save();
+          ctx.setLineDash([6, 4]);
+          ctx.lineWidth = 2 / zoomLevel;
+          ctx.strokeStyle = color;
+          ctx.fillStyle = hexToRgba(color, suggestion.verified ? 0.25 : 0.12);
+          ctx.strokeRect(startX, startY, boxWidth, boxHeight);
+          ctx.fillRect(startX, startY, boxWidth, boxHeight);
+          ctx.font = `${12 / zoomLevel}px Arial`;
+          ctx.fillStyle = '#0f172a';
+          const label = `${suggestion.className} ${suggestion.confidence !== null ? `(${Math.round(suggestion.confidence * 100)}%)` : ''}`;
+          ctx.fillText(label.trim(), startX + 4 / zoomLevel, startY + 14 / zoomLevel);
+          ctx.restore();
+        });
+      ctx.setLineDash([]);
+    }
     
     // Draw existing annotations
     annotations.forEach((annotation, index) => {
@@ -247,7 +335,7 @@ export default function AnnotatePage() {
     
     // Restore context
     ctx.restore();
-  }, [annotations, currentPolygon, selectedAnnotation, scale, imageLoaded, zoomLevel, panOffset]);
+  }, [annotations, currentPolygon, selectedAnnotation, scale, imageLoaded, zoomLevel, panOffset, aiSuggestions, showAiSuggestions]);
 
   // Redraw when dependencies change
   useEffect(() => {
@@ -477,6 +565,118 @@ export default function AnnotatePage() {
     }
   };
 
+  const acceptDetection = async (detectionId: string) => {
+    const detection = aiSuggestions.find((d) => d.id === detectionId);
+    if (!detection) return;
+    try {
+      await fetch(`/api/detections/${detectionId}/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          verified: true,
+          className: detection.className,
+          boundingBox: detection.boundingBox,
+        }),
+      });
+      setAiSuggestions((prev) =>
+        prev.map((item) =>
+          item.id === detectionId
+            ? { ...item, verified: true, rejected: false }
+            : item,
+        ),
+      );
+    } catch (error) {
+      setAiError(
+        error instanceof Error ? error.message : "Failed to accept detection",
+      );
+    }
+  };
+
+  const rejectDetection = async (detectionId: string) => {
+    try {
+      await fetch(`/api/detections/${detectionId}/reject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      setAiSuggestions((prev) =>
+        prev.map((item) =>
+          item.id === detectionId ? { ...item, rejected: true } : item,
+        ),
+      );
+    } catch (error) {
+      setAiError(
+        error instanceof Error ? error.message : "Failed to reject detection",
+      );
+    }
+  };
+
+  const acceptAllDetections = async () => {
+    if (aiSuggestions.length === 0) return;
+    setBulkAction("accept");
+    try {
+      await Promise.all(
+        aiSuggestions
+          .filter((d) => !d.rejected)
+          .map((d) =>
+            fetch(`/api/detections/${d.id}/verify`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                verified: true,
+                className: d.className,
+                boundingBox: d.boundingBox,
+              }),
+            }),
+          ),
+      );
+      setAiSuggestions((prev) =>
+        prev.map((item) =>
+          item.rejected ? item : { ...item, verified: true, rejected: false },
+        ),
+      );
+    } catch (error) {
+      setAiError(
+        error instanceof Error ? error.message : "Failed to accept all",
+      );
+    } finally {
+      setBulkAction(null);
+    }
+  };
+
+  const rejectAllDetections = async () => {
+    if (aiSuggestions.length === 0) return;
+    setBulkAction("reject");
+    try {
+      await Promise.all(
+        aiSuggestions
+          .filter((d) => !d.rejected)
+          .map((d) =>
+            fetch(`/api/detections/${d.id}/reject`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+            }),
+          ),
+      );
+      setAiSuggestions((prev) =>
+        prev.map((item) => ({ ...item, rejected: true, verified: false })),
+      );
+    } catch (error) {
+      setAiError(
+        error instanceof Error ? error.message : "Failed to reject all",
+      );
+    } finally {
+      setBulkAction(null);
+    }
+  };
+
+  const updateSuggestionClass = (detectionId: string, newClass: string) => {
+    setAiSuggestions((prev) =>
+      prev.map((item) =>
+        item.id === detectionId ? { ...item, className: newClass } : item,
+      ),
+    );
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -628,6 +828,145 @@ export default function AnnotatePage() {
 
           {/* Annotation Panel */}
           <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>AI Suggestions</CardTitle>
+                    <CardDescription>
+                      {aiLoading
+                        ? "Loading detections..."
+                        : `${aiSuggestions.filter((s) => !s.rejected).length} pending`}
+                    </CardDescription>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={fetchAiDetections}
+                      disabled={aiLoading}
+                    >
+                      Refresh
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={showAiSuggestions ? "default" : "outline"}
+                      onClick={() => setShowAiSuggestions((prev) => !prev)}
+                    >
+                      {showAiSuggestions ? "Hide" : "Show"}
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {aiError && (
+                  <div className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+                    {aiError}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    className="flex-1"
+                    onClick={acceptAllDetections}
+                    disabled={bulkAction !== null || aiSuggestions.length === 0}
+                  >
+                    {bulkAction === "accept" ? "Accepting..." : "Accept All"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="flex-1"
+                    onClick={rejectAllDetections}
+                    disabled={bulkAction !== null || aiSuggestions.length === 0}
+                  >
+                    {bulkAction === "reject" ? "Rejecting..." : "Reject All"}
+                  </Button>
+                </div>
+
+                {aiSuggestions.length === 0 ? (
+                  <p className="text-sm text-gray-500">
+                    No AI detections for this asset.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {aiSuggestions.map((suggestion) => (
+                      <div
+                        key={suggestion.id}
+                        className="rounded border border-gray-200 bg-gray-50 p-3"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex flex-col">
+                            <Badge variant={suggestion.verified ? "default" : "secondary"}>
+                              {suggestion.className}
+                            </Badge>
+                            <span className="text-xs text-gray-500">
+                              {suggestion.confidence !== null
+                                ? `${Math.round(suggestion.confidence * 100)}%`
+                                : "No confidence"}
+                            </span>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => acceptDetection(suggestion.id)}
+                              disabled={suggestion.verified || suggestion.rejected}
+                            >
+                              ✓ Accept
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-red-600"
+                              onClick={() => rejectDetection(suggestion.id)}
+                              disabled={suggestion.rejected}
+                            >
+                              ✗ Reject
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="mt-2">
+                          <Label className="text-xs">Edit class</Label>
+                          <Select
+                            value={suggestion.className}
+                            onValueChange={(value) =>
+                              updateSuggestionClass(suggestion.id, value)
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {WEED_TYPES.map((type) => (
+                                <SelectItem key={type} value={type}>
+                                  {type}
+                                </SelectItem>
+                              ))}
+                              {!WEED_TYPES.includes(suggestion.className) && (
+                                <SelectItem value={suggestion.className}>
+                                  {suggestion.className}
+                                </SelectItem>
+                              )}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {suggestion.rejected && (
+                          <p className="mt-2 text-xs text-red-600">
+                            Rejected — hidden from canvas
+                          </p>
+                        )}
+                        {suggestion.verified && !suggestion.rejected && (
+                          <p className="mt-2 text-xs text-green-700">
+                            Accepted — ready for training push
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
             {/* Current Annotation Form */}
             <Card>
               <CardHeader>
