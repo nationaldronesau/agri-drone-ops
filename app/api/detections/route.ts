@@ -9,7 +9,13 @@ export async function GET(request: NextRequest) {
     const needsReview = searchParams.get('needsReview');
     const maxConfidence = searchParams.get('maxConfidence');
     
-    const where: any = {};
+    const where: {
+      job?: { projectId: string };
+      assetId?: string;
+      verified?: boolean;
+      rejected?: boolean;
+      confidence?: { lt: number };
+    } = {};
     if (projectId) {
       where.job = {
         projectId: projectId

@@ -135,9 +135,9 @@ export default function AnnotatePage() {
         
         // Try to get existing session
         let response = await fetch(`/api/annotations/sessions?assetId=${assetId}`);
-        let sessions = await response.json();
-        
-        let currentSession = sessions.find((s: any) => s.status === 'IN_PROGRESS');
+        const sessions = await response.json();
+
+        let currentSession = sessions.find((s: { status: string }) => s.status === 'IN_PROGRESS');
         
         // Create new session if none exists
         if (!currentSession) {
@@ -177,7 +177,16 @@ export default function AnnotatePage() {
         throw new Error("Failed to load AI detections");
       }
       const data = await response.json();
-      const mapped: AiSuggestion[] = (data || []).map((det: any) => ({
+      const mapped: AiSuggestion[] = (data || []).map((det: {
+        id: string;
+        className?: string;
+        confidence?: number;
+        boundingBox?: { x: number; y: number; width: number; height: number };
+        bounding_box?: { x: number; y: number; width: number; height: number };
+        verified?: boolean;
+        rejected?: boolean;
+        metadata?: { color?: string };
+      }) => ({
         id: det.id,
         className: det.className || "Unknown",
         confidence: typeof det.confidence === "number" ? det.confidence : null,
@@ -268,7 +277,7 @@ export default function AnnotatePage() {
     }
     
     // Draw existing annotations
-    annotations.forEach((annotation, index) => {
+    annotations.forEach((annotation) => {
       const isSelected = selectedAnnotation === annotation.id;
       
       ctx.strokeStyle = isSelected ? '#FF0000' : '#00FF00';
@@ -1040,7 +1049,7 @@ export default function AnnotatePage() {
                 <p className="text-gray-500 text-center py-4">No annotations yet</p>
               ) : (
                 <div className="space-y-2">
-                  {annotations.map((annotation, index) => (
+                  {annotations.map((annotation) => (
                       <div
                         key={annotation.id}
                         className={`p-3 rounded border cursor-pointer transition-colors ${
