@@ -6,8 +6,16 @@ export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
     const projectId = searchParams.get('projectId');
     const assetId = searchParams.get('assetId');
+    const needsReview = searchParams.get('needsReview');
+    const maxConfidence = searchParams.get('maxConfidence');
     
-    const where: any = {};
+    const where: {
+      job?: { projectId: string };
+      assetId?: string;
+      verified?: boolean;
+      rejected?: boolean;
+      confidence?: { lt: number };
+    } = {};
     if (projectId) {
       where.job = {
         projectId: projectId
@@ -15,6 +23,13 @@ export async function GET(request: NextRequest) {
     }
     if (assetId) {
       where.assetId = assetId;
+    }
+    if (needsReview === 'true') {
+      where.verified = false;
+      where.rejected = false;
+      where.confidence = {
+        lt: maxConfidence ? parseFloat(maxConfidence) : 0.7
+      };
     }
     
     const detections = await prisma.detection.findMany({
@@ -41,7 +56,9 @@ export async function GET(request: NextRequest) {
         job: true,
       },
       orderBy: {
-        createdAt: 'desc'
+        ...(needsReview === 'true'
+          ? { confidence: 'asc' as const }
+          : { createdAt: 'desc' as const })
       }
     });
     

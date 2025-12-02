@@ -216,6 +216,11 @@ model Detection {
   // Additional data
   metadata        Json?          // Any additional data (e.g., chemical recommendations)
   verified        Boolean        @default(false)
+  reviewedAt      DateTime?
+  reviewedBy      String?
+  rejected        Boolean        @default(false)
+  userCorrected   Boolean        @default(false)
+  originalClass   String?
   
   createdAt       DateTime       @default(now())
   
@@ -225,6 +230,8 @@ model Detection {
   @@index([jobId])
   @@index([assetId])
   @@index([centerLat, centerLon])
+  @@index([verified])
+  @@index([rejected])
 }
 
 enum DetectionType {
@@ -277,7 +284,11 @@ model ManualAnnotation {
   verified        Boolean          @default(false)
   verifiedBy      String?          // User who verified
   verifiedAt      DateTime?
-  
+  // Training integration
+  pushedToTraining Boolean         @default(false)
+  pushedAt         DateTime?
+  roboflowImageId  String?
+
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   
@@ -286,6 +297,7 @@ model ManualAnnotation {
   @@index([sessionId])
   @@index([weedType])
   @@index([centerLat, centerLon])
+  @@index([pushedToTraining])
 }
 
 enum AnnotationStatus {

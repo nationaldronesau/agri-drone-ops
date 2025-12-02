@@ -23,6 +23,10 @@ export async function GET(request: NextRequest) {
             id: true,
             fileName: true,
             storageUrl: true,
+            imageWidth: true,
+            imageHeight: true,
+            gpsLatitude: true,
+            gpsLongitude: true,
             project: {
               select: {
                 name: true,
@@ -37,6 +41,9 @@ export async function GET(request: NextRequest) {
             weedType: true,
             confidence: true,
             verified: true,
+            pushedToTraining: true,
+            pushedAt: true,
+            roboflowImageId: true,
           }
         },
         _count: {

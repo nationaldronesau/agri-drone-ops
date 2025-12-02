@@ -27,7 +27,9 @@ export function useSignedUrl(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
-  const fetchSignedUrl = async () => {
+  const timerRef = { current: null as NodeJS.Timeout | null };
+
+  const fetchSignedUrl = async (): Promise<void> => {
     if (!assetId) {
       setUrl(null);
       return;
@@ -37,12 +39,12 @@ export function useSignedUrl(
     setError(null);
 
     try {
-      const endpoint = type === 'asset' 
+      const endpoint = type === 'asset'
         ? `/api/assets/${assetId}/signed-url`
         : `/api/orthomosaics/${assetId}/signed-url`;
 
       const response = await fetch(endpoint);
-      
+
       if (!response.ok) {
         throw new Error(`Failed to fetch signed URL: ${response.statusText}`);
       }
@@ -54,14 +56,15 @@ export function useSignedUrl(
       if (data.expiresIn && data.storageType === 's3') {
         // Refresh 5 minutes before expiry
         const refreshTime = (data.expiresIn - 300) * 1000;
-        const timer = setTimeout(fetchSignedUrl, refreshTime);
-        
-        return () => clearTimeout(timer);
+        if (timerRef.current) {
+          clearTimeout(timerRef.current);
+        }
+        timerRef.current = setTimeout(() => { fetchSignedUrl(); }, refreshTime);
       }
     } catch (err) {
       console.error('Error fetching signed URL:', err);
       setError(err instanceof Error ? err : new Error('Unknown error'));
-      
+
       // Fallback to initial URL if provided
       if (initialUrl) {
         setUrl(initialUrl);
@@ -72,12 +75,13 @@ export function useSignedUrl(
   };
 
   useEffect(() => {
-    const cleanup = fetchSignedUrl();
+    fetchSignedUrl();
     return () => {
-      if (cleanup && typeof cleanup === 'function') {
-        cleanup();
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
       }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assetId, type]);
 
   return { url, loading, error, refresh: fetchSignedUrl };
