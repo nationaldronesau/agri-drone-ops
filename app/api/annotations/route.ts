@@ -8,6 +8,7 @@ export async function GET(request: NextRequest) {
     const sessionId = searchParams.get('sessionId');
     const weedType = searchParams.get('weedType');
     const verified = searchParams.get('verified');
+    const pushedToTraining = searchParams.get('pushedToTraining');
     
     const where: any = {};
     if (sessionId) {
@@ -18,6 +19,9 @@ export async function GET(request: NextRequest) {
     }
     if (verified !== null) {
       where.verified = verified === 'true';
+    }
+    if (pushedToTraining !== null) {
+      where.pushedToTraining = pushedToTraining === 'true';
     }
     
     const annotations = await prisma.manualAnnotation.findMany({

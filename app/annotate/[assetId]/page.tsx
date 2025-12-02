@@ -4,7 +4,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Save, Trash2, Undo, Check, Edit3, X, ZoomIn, ZoomOut, Maximize2, RotateCcw } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { ArrowLeft, Save, Trash2, Check, X, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
 import Link from "next/link";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -38,6 +39,9 @@ interface ManualAnnotation {
   coordinates: [number, number][];
   notes?: string;
   verified: boolean;
+  pushedToTraining?: boolean;
+  pushedAt?: string | null;
+  roboflowImageId?: string | null;
 }
 
 interface DrawingPolygon {
@@ -78,6 +82,8 @@ export default function AnnotatePage() {
   const [currentPolygon, setCurrentPolygon] = useState<DrawingPolygon>({ points: [], isComplete: false });
   const [annotations, setAnnotations] = useState<ManualAnnotation[]>([]);
   const [selectedAnnotation, setSelectedAnnotation] = useState<string | null>(null);
+  const [pushingId, setPushingId] = useState<string | null>(null);
+  const [pushError, setPushError] = useState<string | null>(null);
   
   // Annotation form state
   const [weedType, setWeedType] = useState(WEED_TYPES[0]);
@@ -435,6 +441,42 @@ export default function AnnotatePage() {
     }
   };
 
+  const pushToTraining = async (annotationId: string) => {
+    try {
+      setPushingId(annotationId);
+      setPushError(null);
+
+      const response = await fetch("/api/roboflow/training/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ annotationId }),
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body?.error || "Failed to push annotation to training");
+      }
+
+      setAnnotations((prev) =>
+        prev.map((annotation) =>
+          annotation.id === annotationId
+            ? {
+                ...annotation,
+                pushedToTraining: true,
+                pushedAt: new Date().toISOString(),
+              }
+            : annotation,
+        ),
+      );
+    } catch (err) {
+      setPushError(
+        err instanceof Error ? err.message : "Failed to push to training",
+      );
+    } finally {
+      setPushingId(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -647,14 +689,19 @@ export default function AnnotatePage() {
             {/* Existing Annotations */}
             <Card>
               <CardHeader>
-                <CardTitle>Annotations ({annotations.length})</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {annotations.length === 0 ? (
-                  <p className="text-gray-500 text-center py-4">No annotations yet</p>
-                ) : (
-                  <div className="space-y-2">
-                    {annotations.map((annotation, index) => (
+              <CardTitle>Annotations ({annotations.length})</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {pushError && (
+                <div className="mb-3 rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+                  {pushError}
+                </div>
+              )}
+              {annotations.length === 0 ? (
+                <p className="text-gray-500 text-center py-4">No annotations yet</p>
+              ) : (
+                <div className="space-y-2">
+                  {annotations.map((annotation, index) => (
                       <div
                         key={annotation.id}
                         className={`p-3 rounded border cursor-pointer transition-colors ${
@@ -673,6 +720,27 @@ export default function AnnotatePage() {
                             {annotation.notes && (
                               <p className="text-xs text-gray-600 mt-1">{annotation.notes}</p>
                             )}
+                            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-gray-500">
+                              <Badge variant={annotation.verified ? "default" : "outline"}>
+                                {annotation.verified ? "Verified" : "Unverified"}
+                              </Badge>
+                              {annotation.pushedToTraining ? (
+                                <Badge variant="secondary">Sent to Training</Badge>
+                              ) : annotation.verified ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="text-xs"
+                                  disabled={pushingId === annotation.id}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    pushToTraining(annotation.id);
+                                  }}
+                                >
+                                  {pushingId === annotation.id ? "Pushing..." : "Push to Training"}
+                                </Button>
+                              ) : null}
+                            </div>
                           </div>
                           <Button
                             size="sm"

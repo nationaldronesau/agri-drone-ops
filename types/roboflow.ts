@@ -46,3 +46,46 @@ export interface DetectionResult {
     gimbalYaw?: number;
   };
 }
+
+// Training upload types
+export interface AnnotationBox {
+  x: number; // center x in pixels
+  y: number; // center y in pixels
+  width: number;
+  height: number;
+  class: string;
+}
+
+export interface UploadResponse {
+  id: string;
+  success: boolean;
+  error?: string;
+}
+
+export interface BatchUploadResponse {
+  success: number;
+  failed: number;
+  errors: { id: string; error: string }[];
+}
+
+export interface DatasetStats {
+  totalImages: number;
+  byClass: Record<string, number>;
+}
+
+export interface TrainingOptions {
+  split?: "train" | "valid" | "test";
+}
+
+export interface TrainingJob {
+  id: string;
+  status: string;
+}
+
+export interface TrainingStatus {
+  id: string;
+  status: string;
+  progress?: number;
+  startedAt?: string;
+  completedAt?: string;
+}
