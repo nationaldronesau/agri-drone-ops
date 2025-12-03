@@ -70,6 +70,28 @@ resource "aws_s3_bucket" "processing" {
   }
 }
 
+# Block all public access to S3 bucket
+resource "aws_s3_bucket_public_access_block" "processing" {
+  bucket = aws_s3_bucket.processing.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# Enable server-side encryption by default
+resource "aws_s3_bucket_server_side_encryption_configuration" "processing" {
+  bucket = aws_s3_bucket.processing.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+    bucket_key_enabled = true
+  }
+}
+
 resource "aws_s3_bucket_versioning" "processing" {
   bucket = aws_s3_bucket.processing.id
   versioning_configuration {
@@ -130,7 +152,21 @@ resource "aws_s3_bucket_notification" "processing_notification" {
     lambda_function_arn = aws_lambda_function.sam3_trigger.arn
     events              = ["s3:ObjectCreated:*"]
     filter_prefix       = "incoming/"
+    filter_suffix       = ".tiff"
+  }
+
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.sam3_trigger.arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "incoming/"
     filter_suffix       = ".jpg"
+  }
+
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.sam3_trigger.arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "incoming/"
+    filter_suffix       = ".jpeg"
   }
 
   lambda_function {
@@ -228,23 +264,40 @@ resource "aws_iam_instance_profile" "gpu_instance" {
 # SQS Queue for Job Management
 #------------------------------------------------------------------------------
 
+resource "aws_sqs_queue" "processing_dlq" {
+  name                      = "${local.resource_prefix}-processing-dlq"
+  message_retention_seconds = 1209600 # 14 days for debugging failed messages
+
+  tags = {
+    Name = "SAM3 Processing Dead Letter Queue"
+  }
+}
+
 resource "aws_sqs_queue" "processing_queue" {
   name                       = "${local.resource_prefix}-processing-queue"
   visibility_timeout_seconds = 3600 # 1 hour per image
   message_retention_seconds  = 86400 # 24 hours
   receive_wait_time_seconds  = 20 # Long polling
 
+  # Attach DLQ - move messages here after 3 failed attempts
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.processing_dlq.arn
+    maxReceiveCount     = 3
+  })
+
   tags = {
     Name = "SAM3 Processing Queue"
   }
 }
 
-resource "aws_sqs_queue" "processing_dlq" {
-  name = "${local.resource_prefix}-processing-dlq"
+# Allow main queue to send to DLQ
+resource "aws_sqs_queue_redrive_allow_policy" "processing_dlq" {
+  queue_url = aws_sqs_queue.processing_dlq.id
 
-  tags = {
-    Name = "SAM3 Processing Dead Letter Queue"
-  }
+  redrive_allow_policy = jsonencode({
+    redrivePermission = "byQueue"
+    sourceQueueArns   = [aws_sqs_queue.processing_queue.arn]
+  })
 }
 
 #------------------------------------------------------------------------------
@@ -369,12 +422,14 @@ resource "aws_iam_role_policy" "lambda_trigger_policy" {
         Resource = "arn:aws:logs:*:*:*"
       },
       {
-        Effect = "Allow"
-        Action = [
-          "ec2:DescribeInstances",
-          "ec2:StartInstances"
-        ]
+        Effect   = "Allow"
+        Action   = ["ec2:DescribeInstances"]
         Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = ["ec2:StartInstances"]
+        Resource = aws_instance.gpu_processor.arn
       },
       {
         Effect = "Allow"
@@ -467,5 +522,67 @@ resource "aws_cloudwatch_metric_alarm" "gpu_idle" {
 
   tags = {
     Name = "GPU Idle Monitor"
+  }
+}
+
+#------------------------------------------------------------------------------
+# EventBridge Rule - SQS Queue Depth Monitor (fixes stalled queue issue)
+# Triggers Lambda periodically to check queue and restart GPU if needed
+#------------------------------------------------------------------------------
+
+resource "aws_cloudwatch_event_rule" "sqs_queue_monitor" {
+  name                = "${local.resource_prefix}-sqs-monitor"
+  description         = "Periodically check SQS queue depth and restart GPU if messages are waiting"
+  schedule_expression = "rate(5 minutes)"
+
+  tags = {
+    Name = "SQS Queue Monitor"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "sqs_queue_monitor_lambda" {
+  rule      = aws_cloudwatch_event_rule.sqs_queue_monitor.name
+  target_id = "TriggerSAM3Lambda"
+  arn       = aws_lambda_function.sam3_trigger.arn
+
+  # Pass empty event - Lambda will check queue depth
+  input = jsonencode({
+    source      = "scheduled-check"
+    detail-type = "SQS Queue Monitor"
+  })
+}
+
+resource "aws_lambda_permission" "allow_eventbridge" {
+  statement_id  = "AllowExecutionFromEventBridge"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.sam3_trigger.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.sqs_queue_monitor.arn
+}
+
+#------------------------------------------------------------------------------
+# CloudWatch Alarm - DLQ Messages (alert on failed processing)
+#------------------------------------------------------------------------------
+
+resource "aws_cloudwatch_metric_alarm" "dlq_messages" {
+  alarm_name          = "${local.resource_prefix}-dlq-alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  namespace           = "AWS/SQS"
+  period              = 300 # 5 minutes
+  statistic           = "Sum"
+  threshold           = 0
+  alarm_description   = "Alert when messages appear in DLQ (failed processing)"
+
+  dimensions = {
+    QueueName = aws_sqs_queue.processing_dlq.name
+  }
+
+  # TODO: Add SNS topic for notifications
+  # alarm_actions = [aws_sns_topic.alerts.arn]
+
+  tags = {
+    Name = "DLQ Monitor"
   }
 }

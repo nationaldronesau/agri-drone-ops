@@ -118,11 +118,38 @@ def is_valid_image(key: str) -> bool:
     return ext in valid_extensions
 
 
+def check_and_start_gpu_if_needed():
+    """
+    Check queue depth and start GPU instance if messages are waiting.
+    This handles the case where EC2 crashes with messages still in queue.
+    """
+    queue_depth = get_queue_depth()
+    instance_state = get_instance_state(GPU_INSTANCE_ID)
+
+    logger.info(f"Queue check: depth={queue_depth}, instance_state={instance_state}")
+
+    # Start instance if there are messages and instance is stopped
+    if queue_depth > 0 and instance_state == 'stopped':
+        logger.info(f"Found {queue_depth} messages in queue with stopped instance. Starting GPU...")
+        if start_instance(GPU_INSTANCE_ID):
+            logger.info("GPU instance started successfully")
+            return True
+        else:
+            logger.error("Failed to start GPU instance")
+            return False
+
+    return False
+
+
 def lambda_handler(event, context):
     """
-    Main Lambda handler - processes S3 events.
+    Main Lambda handler - processes S3 events and scheduled checks.
 
-    Event structure (S3 notification):
+    Event sources:
+    1. S3 notification (new image uploaded)
+    2. EventBridge scheduled rule (periodic queue check)
+
+    S3 Event structure:
     {
         "Records": [
             {
@@ -133,9 +160,30 @@ def lambda_handler(event, context):
             }
         ]
     }
+
+    EventBridge Event structure:
+    {
+        "source": "scheduled-check",
+        "detail-type": "SQS Queue Monitor"
+    }
     """
     logger.info(f"Received event: {json.dumps(event)}")
 
+    # Handle scheduled queue check (from EventBridge)
+    if event.get('source') == 'scheduled-check':
+        logger.info("Processing scheduled queue check")
+        started = check_and_start_gpu_if_needed()
+        return {
+            'statusCode': 200,
+            'body': json.dumps({
+                'source': 'scheduled-check',
+                'gpu_started': started,
+                'queue_depth': get_queue_depth(),
+                'instance_state': get_instance_state(GPU_INSTANCE_ID)
+            })
+        }
+
+    # Handle S3 events
     queued_count = 0
     errors = []
 

@@ -75,18 +75,47 @@ if [ -z "$HF_TOKEN" ]; then
     log "WARNING: HuggingFace token not found. SAM3 may fail if not cached."
 fi
 
-# Clone/update SAM3 tools
-log "Setting up SAM3 annotation tools..."
-if [ ! -d "agri-drone-ops" ]; then
-    git clone --depth 1 https://github.com/nationaldronesau/agri-drone-ops.git
-fi
-cd agri-drone-ops/tools/sam3-annotation
+# Download versioned SAM3 tools artifact from S3 (reviewed code, no supply-chain drift)
+SAM3_TOOLS_DIR="$WORK_DIR/sam3-tools"
+ARTIFACT_KEY="artifacts/sam3-tools-latest.tar.gz"
 
-# Setup Python environment
+log "Downloading SAM3 tools artifact from S3..."
+mkdir -p "$SAM3_TOOLS_DIR"
+
+# Try to download versioned artifact, fall back to latest
+if aws s3 cp "s3://$S3_BUCKET/$ARTIFACT_KEY" /tmp/sam3-tools.tar.gz --region $AWS_REGION 2>/dev/null; then
+    log "Extracting SAM3 tools artifact..."
+    tar -xzf /tmp/sam3-tools.tar.gz -C "$SAM3_TOOLS_DIR"
+    rm /tmp/sam3-tools.tar.gz
+else
+    log "WARNING: No artifact found in S3. Falling back to git clone (not recommended for production)"
+    log "Upload artifact with: ./deploy.sh upload-artifact"
+    if [ ! -d "$SAM3_TOOLS_DIR/sam3-annotation" ]; then
+        git clone --depth 1 https://github.com/nationaldronesau/agri-drone-ops.git /tmp/agri-drone-ops
+        cp -r /tmp/agri-drone-ops/tools/sam3-annotation "$SAM3_TOOLS_DIR/"
+        rm -rf /tmp/agri-drone-ops
+    fi
+fi
+
+cd "$SAM3_TOOLS_DIR/sam3-annotation"
+
+# Setup Python environment (cached in instance storage for faster subsequent runs)
 log "Setting up Python environment..."
-python3 -m venv venv 2>/dev/null || true
+if [ ! -d "venv" ]; then
+    python3 -m venv venv
+fi
 source venv/bin/activate
-pip install -q -r requirements.txt
+
+# Install dependencies only if requirements changed
+REQUIREMENTS_HASH=$(md5sum requirements.txt 2>/dev/null | cut -d' ' -f1 || echo "none")
+INSTALLED_HASH=$(cat .requirements_hash 2>/dev/null || echo "")
+if [ "$REQUIREMENTS_HASH" != "$INSTALLED_HASH" ]; then
+    log "Installing Python dependencies..."
+    pip install -q -r requirements.txt
+    echo "$REQUIREMENTS_HASH" > .requirements_hash
+else
+    log "Python dependencies already installed (cached)"
+fi
 
 # HuggingFace authentication
 if [ -n "$HF_TOKEN" ]; then

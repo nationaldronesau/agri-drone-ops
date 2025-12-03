@@ -143,24 +143,83 @@ terraform_destroy() {
     fi
 }
 
+upload_artifact() {
+    log_info "Packaging and uploading SAM3 tools artifact..."
+
+    cd "$TERRAFORM_DIR"
+
+    S3_BUCKET=$(terraform output -raw s3_bucket_name 2>/dev/null)
+    if [ -z "$S3_BUCKET" ] || [ "$S3_BUCKET" = "N/A" ]; then
+        log_error "S3 bucket not found. Deploy infrastructure first."
+        exit 1
+    fi
+
+    # Find the SAM3 tools directory
+    SAM3_TOOLS_DIR="$SCRIPT_DIR/../../tools/sam3-annotation"
+    if [ ! -d "$SAM3_TOOLS_DIR" ]; then
+        log_error "SAM3 tools not found at $SAM3_TOOLS_DIR"
+        exit 1
+    fi
+
+    # Create temporary directory for artifact
+    TEMP_DIR=$(mktemp -d)
+    ARTIFACT_DIR="$TEMP_DIR/sam3-annotation"
+    mkdir -p "$ARTIFACT_DIR"
+
+    # Copy SAM3 tools (excluding venv, __pycache__, etc.)
+    log_info "Copying SAM3 tools..."
+    rsync -av --exclude='venv' --exclude='__pycache__' --exclude='*.pyc' \
+        --exclude='.eggs' --exclude='*.egg-info' --exclude='sam3_output' \
+        --exclude='roboflow_export' --exclude='*_annotations.json' \
+        --exclude='*_masks.tif' \
+        "$SAM3_TOOLS_DIR/" "$ARTIFACT_DIR/"
+
+    # Create versioned artifact
+    VERSION=$(date +%Y%m%d-%H%M%S)
+    COMMIT_HASH=$(git -C "$SAM3_TOOLS_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    ARTIFACT_NAME="sam3-tools-${VERSION}-${COMMIT_HASH}.tar.gz"
+
+    log_info "Creating artifact: $ARTIFACT_NAME"
+    tar -czf "$TEMP_DIR/$ARTIFACT_NAME" -C "$TEMP_DIR" sam3-annotation
+
+    # Upload versioned artifact
+    log_info "Uploading to s3://$S3_BUCKET/artifacts/$ARTIFACT_NAME"
+    aws s3 cp "$TEMP_DIR/$ARTIFACT_NAME" "s3://$S3_BUCKET/artifacts/$ARTIFACT_NAME"
+
+    # Also upload as latest
+    log_info "Updating latest artifact..."
+    aws s3 cp "$TEMP_DIR/$ARTIFACT_NAME" "s3://$S3_BUCKET/artifacts/sam3-tools-latest.tar.gz"
+
+    # Cleanup
+    rm -rf "$TEMP_DIR"
+
+    log_info "Artifact upload complete!"
+    log_info "  Versioned: s3://$S3_BUCKET/artifacts/$ARTIFACT_NAME"
+    log_info "  Latest:    s3://$S3_BUCKET/artifacts/sam3-tools-latest.tar.gz"
+    log_info ""
+    log_info "EC2 instances will now use this reviewed artifact instead of git clone."
+}
+
 show_usage() {
     echo "SAM3 GPU Processing Infrastructure Deployment"
     echo ""
     echo "Usage: $0 [command]"
     echo ""
     echo "Commands:"
-    echo "  init      Initialize Terraform and check prerequisites"
-    echo "  plan      Show planned infrastructure changes"
-    echo "  apply     Apply infrastructure changes"
-    echo "  destroy   Destroy all infrastructure"
-    echo "  secrets   Setup AWS Secrets Manager secrets"
-    echo "  status    Show current infrastructure status"
-    echo "  upload    Upload images for processing"
+    echo "  init            Initialize Terraform and check prerequisites"
+    echo "  plan            Show planned infrastructure changes"
+    echo "  apply           Apply infrastructure changes"
+    echo "  destroy         Destroy all infrastructure"
+    echo "  secrets         Setup AWS Secrets Manager secrets"
+    echo "  status          Show current infrastructure status"
+    echo "  upload          Upload images for processing"
+    echo "  upload-artifact Package and upload SAM3 tools to S3 (recommended)"
     echo ""
     echo "Examples:"
     echo "  $0 init && $0 plan && $0 apply   # Full deployment"
-    echo "  $0 status                         # Check status"
-    echo "  $0 upload /path/to/images         # Upload images"
+    echo "  $0 upload-artifact               # Upload reviewed SAM3 tools"
+    echo "  $0 status                        # Check status"
+    echo "  $0 upload /path/to/images        # Upload images"
 }
 
 show_status() {
@@ -264,6 +323,10 @@ case "${1:-}" in
         ;;
     upload)
         upload_images "$2" "$3"
+        ;;
+    upload-artifact)
+        check_prerequisites
+        upload_artifact
         ;;
     *)
         show_usage

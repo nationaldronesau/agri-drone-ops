@@ -25,6 +25,11 @@ output "sqs_queue_url" {
   value       = aws_sqs_queue.processing_queue.url
 }
 
+output "sqs_dlq_url" {
+  description = "SQS dead letter queue URL (failed jobs)"
+  value       = aws_sqs_queue.processing_dlq.url
+}
+
 output "lambda_function_name" {
   description = "Lambda trigger function name"
   value       = aws_lambda_function.sam3_trigger.function_name
