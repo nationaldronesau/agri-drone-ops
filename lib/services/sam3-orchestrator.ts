@@ -8,6 +8,7 @@
  * - Handles image preprocessing and coordinate scaling
  */
 import { awsSam3Service, FUN_LOADING_MESSAGES } from './aws-sam3';
+import sharp from 'sharp';
 
 const ROBOFLOW_API_KEY = process.env.ROBOFLOW_API_KEY;
 const ROBOFLOW_SAM3_URL = 'https://serverless.roboflow.com/sam3/concept_segment';
@@ -35,7 +36,11 @@ export interface PredictionResult {
   processingTimeMs: number;
   startupMessage?: string;
   error?: string;
+  errorCode?: string;
 }
+
+// Max image size for Roboflow (parity with AWS)
+const MAX_IMAGE_SIZE = 2048;
 
 export interface SAM3OrchestratorStatus {
   awsAvailable: boolean;
@@ -137,7 +142,7 @@ class SAM3Orchestrator {
 
       // AWS is ready, try to predict
       const awsResult = await this.predictWithAWS(request);
-      if (awsResult) {
+      if (awsResult && awsResult.success) {
         return {
           ...awsResult,
           backend: 'aws',
@@ -145,8 +150,9 @@ class SAM3Orchestrator {
         };
       }
 
-      // AWS failed, fall back to Roboflow
-      console.log('[Orchestrator] AWS prediction failed, falling back to Roboflow');
+      // AWS failed, fall back to Roboflow with error context
+      const awsError = awsResult?.error || 'Unknown AWS error';
+      console.log(`[Orchestrator] AWS prediction failed (${awsError}), falling back to Roboflow`);
     }
 
     return this.fallbackToRoboflow(request, startTime);
@@ -171,16 +177,26 @@ class SAM3Orchestrator {
       }));
 
       // Call AWS SAM3 API
-      const response = await awsSam3Service.segment({
+      const segmentResult = await awsSam3Service.segment({
         image: buffer.toString('base64'),
         boxes: boxesForAPI,
         className: request.className || request.textPrompt || 'weed',
       });
 
-      if (!response) return null;
+      // Handle structured error response
+      if (!segmentResult.success || !segmentResult.response) {
+        console.error(`[Orchestrator] AWS segment failed: ${segmentResult.error} (${segmentResult.errorCode})`);
+        return {
+          success: false,
+          detections: [],
+          count: 0,
+          error: segmentResult.error,
+          errorCode: segmentResult.errorCode,
+        };
+      }
 
       // Convert detections and scale back to original coordinates
-      const detections: Detection[] = (response.detections || []).map((det) => {
+      const detections: Detection[] = (segmentResult.response.detections || []).map((det) => {
         // Scale bbox back to original coordinates
         const scaledBbox = awsSam3Service.scaleCoordinatesToOriginal(
           {
@@ -225,6 +241,43 @@ class SAM3Orchestrator {
   }
 
   /**
+   * Resize image for Roboflow API (parity with AWS path)
+   * Reduces cost and improves performance for large images
+   */
+  private async resizeImageForRoboflow(
+    imageBuffer: Buffer
+  ): Promise<{ buffer: Buffer; scaleFactor: number }> {
+    const image = sharp(imageBuffer);
+    const metadata = await image.metadata();
+
+    const originalWidth = metadata.width || 0;
+    const originalHeight = metadata.height || 0;
+    const maxDimension = Math.max(originalWidth, originalHeight);
+
+    // If already small enough, just convert to JPEG
+    if (maxDimension <= MAX_IMAGE_SIZE) {
+      return {
+        buffer: await image.jpeg({ quality: 90 }).toBuffer(),
+        scaleFactor: 1.0,
+      };
+    }
+
+    // Calculate scale factor
+    const scaleFactor = MAX_IMAGE_SIZE / maxDimension;
+    const scaledWidth = Math.round(originalWidth * scaleFactor);
+    const scaledHeight = Math.round(originalHeight * scaleFactor);
+
+    console.log(
+      `[Orchestrator] Resizing image for Roboflow from ${originalWidth}x${originalHeight} to ${scaledWidth}x${scaledHeight}`
+    );
+
+    return {
+      buffer: await image.resize(scaledWidth, scaledHeight).jpeg({ quality: 90 }).toBuffer(),
+      scaleFactor,
+    };
+  }
+
+  /**
    * Fallback to Roboflow API
    */
   private async fallbackToRoboflow(
@@ -247,7 +300,12 @@ class SAM3Orchestrator {
     try {
       console.log('[Orchestrator] Using Roboflow fallback');
 
-      // Build prompts for Roboflow API
+      // Resize image for parity with AWS path (reduces cost/improves performance)
+      const { buffer: resizedBuffer, scaleFactor } = await this.resizeImageForRoboflow(
+        request.imageBuffer
+      );
+
+      // Build prompts for Roboflow API, scaling coordinates if needed
       const prompts: Array<{ type: string; data: unknown }> = [];
 
       if (request.textPrompt) {
@@ -258,10 +316,10 @@ class SAM3Orchestrator {
         prompts.push({
           type: 'box',
           data: {
-            x: box.x1,
-            y: box.y1,
-            width: box.x2 - box.x1,
-            height: box.y2 - box.y1,
+            x: Math.round(box.x1 * scaleFactor),
+            y: Math.round(box.y1 * scaleFactor),
+            width: Math.round((box.x2 - box.x1) * scaleFactor),
+            height: Math.round((box.y2 - box.y1) * scaleFactor),
           },
         });
       }
@@ -270,8 +328,8 @@ class SAM3Orchestrator {
         prompts.push({
           type: 'point',
           data: {
-            x: point.x,
-            y: point.y,
+            x: Math.round(point.x * scaleFactor),
+            y: Math.round(point.y * scaleFactor),
             positive: point.label === 1,
           },
         });
@@ -284,7 +342,7 @@ class SAM3Orchestrator {
           Authorization: `Bearer ${ROBOFLOW_API_KEY}`,
         },
         body: JSON.stringify({
-          image: { type: 'base64', value: request.imageBuffer.toString('base64') },
+          image: { type: 'base64', value: resizedBuffer.toString('base64') },
           prompts,
         }),
         signal: AbortSignal.timeout(120000),
@@ -295,7 +353,8 @@ class SAM3Orchestrator {
       }
 
       const result = await response.json();
-      const detections = this.parseRoboflowResponse(result);
+      // Parse response and scale coordinates back to original size
+      const detections = this.parseRoboflowResponse(result, scaleFactor);
 
       return {
         success: true,
@@ -321,29 +380,37 @@ class SAM3Orchestrator {
 
   /**
    * Parse Roboflow's response format into our Detection format
+   * Scales coordinates back to original image size if scaleFactor != 1
    */
-  private parseRoboflowResponse(result: {
-    prompt_results?: Array<{
-      predictions?: Array<{
-        masks?: number[][][];
-        confidence?: number;
+  private parseRoboflowResponse(
+    result: {
+      prompt_results?: Array<{
+        predictions?: Array<{
+          masks?: number[][][];
+          confidence?: number;
+        }>;
       }>;
-    }>;
-  }): Detection[] {
+    },
+    scaleFactor: number = 1.0
+  ): Detection[] {
     const detections: Detection[] = [];
+    const inverseScale = 1 / scaleFactor;
 
     for (const promptResult of result.prompt_results || []) {
       for (const pred of promptResult.predictions || []) {
         const masks = pred.masks || [];
         if (masks.length > 0 && masks[0].length >= 3) {
           const maskPoints = masks[0];
+
+          // Scale polygon back to original image coordinates
           const polygon: [number, number][] = maskPoints.map(
-            (p: number[]) => [p[0], p[1]] as [number, number]
+            (p: number[]) =>
+              [Math.round(p[0] * inverseScale), Math.round(p[1] * inverseScale)] as [number, number]
           );
 
-          // Calculate bounding box from polygon
-          const xs = maskPoints.map((p: number[]) => p[0]);
-          const ys = maskPoints.map((p: number[]) => p[1]);
+          // Calculate bounding box from scaled polygon
+          const xs = polygon.map((p) => p[0]);
+          const ys = polygon.map((p) => p[1]);
 
           detections.push({
             polygon,

@@ -93,6 +93,13 @@ export interface SAM3SegmentResponse {
   image_size: [number, number];
 }
 
+export interface SAM3SegmentResult {
+  success: boolean;
+  response: SAM3SegmentResponse | null;
+  error?: string;
+  errorCode?: 'NOT_CONFIGURED' | 'NOT_READY' | 'API_ERROR' | 'TIMEOUT' | 'NETWORK_ERROR';
+}
+
 /**
  * Singleton service for AWS EC2 SAM3 instance management
  */
@@ -104,25 +111,61 @@ class AWSSAM3Service {
   private modelLoaded: boolean = false;
   private gpuAvailable: boolean = false;
   private startupPromise: Promise<boolean> | null = null;
+  private configError: string | null = null;
+  private configured: boolean = false;
 
   constructor() {
-    this.initializeEC2Client();
+    this.validateAndInitialize();
   }
 
-  private initializeEC2Client(): void {
-    // Only initialize if we have credentials
-    if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
-      this.ec2Client = new EC2Client({
-        region: AWS_REGION,
-        credentials: {
-          accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-        },
-      });
-    } else if (SAM3_INSTANCE_ID) {
-      // Try to use default credentials (IAM role, etc.)
-      this.ec2Client = new EC2Client({ region: AWS_REGION });
+  /**
+   * Validate configuration and initialize EC2 client
+   * Called once at startup to detect missing config early
+   */
+  private validateAndInitialize(): void {
+    // Check for instance ID first
+    if (!SAM3_INSTANCE_ID) {
+      this.configError = 'SAM3_INSTANCE_ID environment variable not set';
+      console.log('[AWS-SAM3] AWS SAM3 not configured: missing SAM3_INSTANCE_ID');
+      return;
     }
+
+    // Check for AWS credentials
+    const hasExplicitCreds = process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY;
+
+    if (hasExplicitCreds) {
+      try {
+        this.ec2Client = new EC2Client({
+          region: AWS_REGION,
+          credentials: {
+            accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+          },
+        });
+        this.configured = true;
+        console.log(`[AWS-SAM3] Initialized with explicit credentials, instance: ${SAM3_INSTANCE_ID}, region: ${AWS_REGION}`);
+      } catch (error) {
+        this.configError = `Failed to initialize EC2 client: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        console.error('[AWS-SAM3] Failed to initialize:', this.configError);
+      }
+    } else {
+      // Try default credentials (IAM role, instance profile, etc.)
+      try {
+        this.ec2Client = new EC2Client({ region: AWS_REGION });
+        this.configured = true;
+        console.log(`[AWS-SAM3] Initialized with default credentials, instance: ${SAM3_INSTANCE_ID}, region: ${AWS_REGION}`);
+      } catch (error) {
+        this.configError = `No AWS credentials available: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        console.error('[AWS-SAM3] Failed to initialize:', this.configError);
+      }
+    }
+  }
+
+  /**
+   * Get any configuration error message
+   */
+  getConfigError(): string | null {
+    return this.configError;
   }
 
   /**
@@ -426,11 +469,25 @@ class AWSSAM3Service {
 
   /**
    * Call the SAM3 /segment endpoint
+   * Returns structured result with error information for better observability
    */
-  async segment(request: SAM3SegmentRequest): Promise<SAM3SegmentResponse | null> {
+  async segment(request: SAM3SegmentRequest): Promise<SAM3SegmentResult> {
+    if (!this.configured) {
+      return {
+        success: false,
+        response: null,
+        error: this.configError || 'AWS SAM3 not configured',
+        errorCode: 'NOT_CONFIGURED',
+      };
+    }
+
     if (!this.instanceIp || this.instanceState !== 'ready') {
-      console.error('[AWS-SAM3] Cannot segment: instance not ready');
-      return null;
+      return {
+        success: false,
+        response: null,
+        error: `Instance not ready (state: ${this.instanceState})`,
+        errorCode: 'NOT_READY',
+      };
     }
 
     this.updateActivity();
@@ -454,16 +511,33 @@ class AWSSAM3Service {
       });
 
       if (!response.ok) {
-        console.error('[AWS-SAM3] Segment failed:', response.status);
-        return null;
+        const errorText = await response.text().catch(() => 'Unknown error');
+        console.error(`[AWS-SAM3] Segment failed: ${response.status} - ${errorText}`);
+        return {
+          success: false,
+          response: null,
+          error: `SAM3 API error: ${response.status} - ${errorText.substring(0, 200)}`,
+          errorCode: 'API_ERROR',
+        };
       }
 
       const result = await response.json();
       console.log(`[AWS-SAM3] Segment returned ${result.count} detections`);
-      return result;
+      return {
+        success: true,
+        response: result,
+      };
     } catch (error) {
-      console.error('[AWS-SAM3] Segment error:', error);
-      return null;
+      const isTimeout = error instanceof Error && error.name === 'TimeoutError';
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[AWS-SAM3] Segment error:', errorMessage);
+
+      return {
+        success: false,
+        response: null,
+        error: errorMessage,
+        errorCode: isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR',
+      };
     }
   }
 
@@ -471,7 +545,7 @@ class AWSSAM3Service {
    * Check if the service is configured
    */
   isConfigured(): boolean {
-    return Boolean(SAM3_INSTANCE_ID && this.ec2Client);
+    return this.configured && Boolean(this.ec2Client);
   }
 
   /**
