@@ -40,6 +40,8 @@ export async function GET(request: NextRequest) {
             id: true,
             weedType: true,
             confidence: true,
+            coordinates: true,
+            notes: true,
             verified: true,
             pushedToTraining: true,
             pushedAt: true,
@@ -96,11 +98,35 @@ export async function POST(request: NextRequest) {
       where: {
         assetId,
         status: 'IN_PROGRESS'
+      },
+      include: {
+        asset: {
+          select: {
+            id: true,
+            fileName: true,
+            storageUrl: true,
+            imageWidth: true,
+            imageHeight: true,
+            gpsLatitude: true,
+            gpsLongitude: true,
+            altitude: true,
+            gimbalPitch: true,
+            gimbalRoll: true,
+            gimbalYaw: true,
+            project: {
+              select: {
+                name: true,
+                location: true,
+              }
+            }
+          }
+        },
+        annotations: true,
       }
     });
-    
+
     if (existingSession) {
-      // Return existing session instead of creating new one
+      // Return existing session with full data
       return NextResponse.json(existingSession);
     }
     

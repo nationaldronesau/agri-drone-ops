@@ -132,36 +132,53 @@ export default function AnnotatePage() {
     const loadSession = async () => {
       try {
         setLoading(true);
-        
-        // Try to get existing session
-        let response = await fetch(`/api/annotations/sessions?assetId=${assetId}`);
-        const sessions = await response.json();
 
-        let currentSession = sessions.find((s: { status: string }) => s.status === 'IN_PROGRESS');
-        
+        // Try to get existing sessions for this asset
+        const getResponse = await fetch(`/api/annotations/sessions?assetId=${assetId}`);
+
+        if (!getResponse.ok) {
+          const errorData = await getResponse.json().catch(() => ({}));
+          throw new Error(errorData.error || 'Failed to fetch annotation sessions');
+        }
+
+        const sessions = await getResponse.json();
+
+        // Find an IN_PROGRESS session
+        let currentSession = Array.isArray(sessions)
+          ? sessions.find((s: { status: string }) => s.status === 'IN_PROGRESS')
+          : null;
+
         // Create new session if none exists
         if (!currentSession) {
-          response = await fetch('/api/annotations/sessions', {
+          const postResponse = await fetch('/api/annotations/sessions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ assetId }),
           });
-          currentSession = await response.json();
+
+          if (!postResponse.ok) {
+            const errorData = await postResponse.json().catch(() => ({}));
+            throw new Error(errorData.error || 'Failed to create annotation session');
+          }
+
+          currentSession = await postResponse.json();
         }
-        
-        if (!response.ok) {
-          throw new Error('Failed to load annotation session');
+
+        // Validate session has required data
+        if (!currentSession || !currentSession.asset) {
+          throw new Error('Invalid session data received');
         }
-        
+
         setSession(currentSession);
         setAnnotations(currentSession.annotations || []);
       } catch (err) {
+        console.error('Annotation session error:', err);
         setError(err instanceof Error ? err.message : 'Failed to load session');
       } finally {
         setLoading(false);
       }
     };
-    
+
     if (assetId) {
       loadSession();
     }
