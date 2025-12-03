@@ -173,60 +173,55 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     console.log('Roboflow response:', JSON.stringify(result, null, 2));
 
     // Extract polygon from Roboflow response
-    // The structure depends on your workflow output - adjust as needed
+    // Structure: { outputs: { sam: { predictions: [...] } } }
     let polygon: [number, number][] | null = null;
     let score = 0;
     let bbox: [number, number, number, number] | null = null;
 
-    // Handle different response structures from Roboflow workflows
-    if (result.outputs) {
-      // Standard workflow output format
-      const outputs = result.outputs;
+    // Handle Roboflow workflow response structure
+    const outputs = result.outputs || result;
 
-      // Look for polygon/mask data in various possible locations
+    // Look for SAM predictions (your workflow outputs "sam" containing predictions)
+    const samOutput = outputs.sam || outputs.predictions || outputs;
+    const predictions = samOutput?.predictions || (Array.isArray(samOutput) ? samOutput : null);
+
+    if (predictions && predictions.length > 0) {
+      const pred = predictions[0];  // Take first/best prediction
+
+      // Extract polygon points
+      if (pred.points) {
+        // Points array format: [{x, y}, {x, y}, ...]
+        polygon = pred.points.map((p: { x: number; y: number }) => [p.x, p.y]);
+      } else if (pred.polygon) {
+        polygon = pred.polygon;
+      } else if (pred.segmentation?.polygon) {
+        polygon = pred.segmentation.polygon;
+      }
+
+      // Extract confidence score
+      score = pred.confidence ?? pred.score ?? 0.9;
+
+      // Extract bounding box
+      if (pred.x !== undefined && pred.y !== undefined && pred.width && pred.height) {
+        // Center format (x, y, width, height)
+        bbox = [
+          pred.x - pred.width / 2,
+          pred.y - pred.height / 2,
+          pred.x + pred.width / 2,
+          pred.y + pred.height / 2,
+        ];
+      } else if (pred.bbox) {
+        bbox = pred.bbox;
+      }
+    }
+
+    // Fallback: check for direct polygon in outputs
+    if (!polygon) {
       if (outputs.polygon) {
         polygon = outputs.polygon;
       } else if (outputs.mask_polygon) {
         polygon = outputs.mask_polygon;
-      } else if (outputs.segmentation?.polygon) {
-        polygon = outputs.segmentation.polygon;
-      } else if (outputs.predictions?.[0]?.points) {
-        // Convert points array to polygon format
-        polygon = outputs.predictions[0].points.map((p: { x: number; y: number }) => [p.x, p.y]);
       }
-
-      // Extract confidence score
-      if (outputs.confidence !== undefined) {
-        score = outputs.confidence;
-      } else if (outputs.predictions?.[0]?.confidence) {
-        score = outputs.predictions[0].confidence;
-      } else {
-        score = 0.9;  // Default high confidence for SAM3
-      }
-
-      // Extract bounding box if available
-      if (outputs.bbox) {
-        bbox = outputs.bbox;
-      } else if (outputs.predictions?.[0]) {
-        const pred = outputs.predictions[0];
-        if (pred.x !== undefined && pred.y !== undefined && pred.width && pred.height) {
-          bbox = [
-            pred.x - pred.width / 2,
-            pred.y - pred.height / 2,
-            pred.x + pred.width / 2,
-            pred.y + pred.height / 2,
-          ];
-        }
-      }
-    } else if (Array.isArray(result) && result.length > 0) {
-      // Direct array response
-      const firstResult = result[0];
-      if (firstResult.polygon) {
-        polygon = firstResult.polygon;
-      } else if (firstResult.points) {
-        polygon = firstResult.points.map((p: { x: number; y: number }) => [p.x, p.y]);
-      }
-      score = firstResult.confidence || 0.9;
     }
 
     if (!polygon || polygon.length < 3) {
