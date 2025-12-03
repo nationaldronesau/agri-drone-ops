@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server';
 
 const ROBOFLOW_API_KEY = process.env.ROBOFLOW_API_KEY;
 const ROBOFLOW_WORKSPACE = process.env.ROBOFLOW_WORKSPACE;
-const ROBOFLOW_SAM3_WORKFLOW_ID = process.env.ROBOFLOW_SAM3_WORKFLOW_ID || 'sam3-segment';
+const ROBOFLOW_SAM3_WORKFLOW_ID = process.env.ROBOFLOW_SAM3_WORKFLOW_ID || 'sam3-forestry';
 
 export interface SAM3HealthResponse {
   available: boolean;

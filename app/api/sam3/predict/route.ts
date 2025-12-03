@@ -10,7 +10,7 @@ import { prisma } from '@/lib/db';
 // Roboflow Workflow configuration
 const ROBOFLOW_API_KEY = process.env.ROBOFLOW_API_KEY;
 const ROBOFLOW_WORKSPACE = process.env.ROBOFLOW_WORKSPACE;
-const ROBOFLOW_SAM3_WORKFLOW_ID = process.env.ROBOFLOW_SAM3_WORKFLOW_ID || 'sam3-segment';
+const ROBOFLOW_SAM3_WORKFLOW_ID = process.env.ROBOFLOW_SAM3_WORKFLOW_ID || 'sam3-forestry';
 
 interface ClickPoint {
   x: number;
