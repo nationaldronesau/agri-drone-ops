@@ -52,3 +52,32 @@ next-env.d.ts
 # uploads
 public/uploads/*
 !public/uploads/.gitkeep
+
+# Python (SAM3 annotation tools)
+tools/sam3-annotation/venv/
+tools/sam3-annotation/__pycache__/
+tools/sam3-annotation/*.pyc
+tools/sam3-annotation/sam3_output/
+tools/sam3-annotation/roboflow_export/
+tools/sam3-annotation/*_annotations.json
+tools/sam3-annotation/*_masks.tif
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+*.so
+.eggs/
+*.egg-info/
+*.egg
+
+# Terraform
+infrastructure/terraform/.terraform/
+infrastructure/terraform/*.tfstate
+infrastructure/terraform/*.tfstate.backup
+infrastructure/terraform/*.tfplan
+infrastructure/terraform/tfplan
+infrastructure/terraform/.terraform.lock.hcl
+infrastructure/terraform/lambda_trigger.zip
+*.tfvars
+!*.tfvars.example

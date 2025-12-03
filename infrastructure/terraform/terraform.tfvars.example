@@ -1,0 +1,36 @@
+# SAM3 GPU Processing Infrastructure - Example Configuration
+# Copy this file to terraform.tfvars and customize for your environment
+
+# AWS Region (Sydney recommended for Australia)
+aws_region = "ap-southeast-2"
+
+# Project naming
+project_name = "agridrone-sam3"
+environment  = "dev"  # or "prod"
+
+# S3 bucket name (must be globally unique)
+s3_bucket_name = "agridrone-sam3-processing"
+
+# GPU Instance Configuration
+gpu_instance_type = "g4dn.xlarge"  # ~$0.50/hr, good for most workloads
+# Alternative: "g5.xlarge" for larger images (~$1.00/hr)
+
+# Processing Configuration
+min_images_to_start  = 10  # Start instance when this many images queued
+max_processing_hours = 4   # Safety timeout to prevent runaway costs
+
+# SSH Access (optional - leave empty for no SSH access)
+key_pair_name     = ""
+allowed_ssh_cidrs = []  # Example: ["203.0.113.0/24"] for your office IP
+
+# Secrets Manager names (create these secrets before deploying)
+huggingface_token_secret_name = "agridrone/huggingface-token"
+roboflow_api_key_secret_name  = "agridrone/roboflow-api-key"
+
+# Resource tags
+tags = {
+  Project     = "AgriDrone-Ops"
+  Component   = "SAM3-Processing"
+  ManagedBy   = "Terraform"
+  Owner       = "your-name"
+}
