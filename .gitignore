@@ -70,3 +70,14 @@ __pycache__/
 .eggs/
 *.egg-info/
 *.egg
+
+# Terraform
+infrastructure/terraform/.terraform/
+infrastructure/terraform/*.tfstate
+infrastructure/terraform/*.tfstate.backup
+infrastructure/terraform/*.tfplan
+infrastructure/terraform/tfplan
+infrastructure/terraform/.terraform.lock.hcl
+infrastructure/terraform/lambda_trigger.zip
+*.tfvars
+!*.tfvars.example
