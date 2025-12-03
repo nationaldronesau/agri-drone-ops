@@ -1,52 +1,31 @@
 /**
  * SAM3 Batch Processing API Route
  *
- * Processes multiple images using box exemplars for few-shot detection.
- * Creates PendingAnnotation records for review before acceptance.
+ * Enqueues batch detection jobs for background processing.
+ * Jobs are processed by the BullMQ worker (workers/batch-worker.ts).
  *
  * Security:
  * - Authentication required (team membership verified)
- * - Rate limiting per IP (in-memory; use Redis for production multi-instance)
- * - SSRF protection with URL allowlist
- * - Image size limits (10MB max)
- * - Content-type validation
+ * - Rate limiting per IP
  * - Project ownership validation through team membership
  *
- * IMPORTANT - DEVELOPMENT ONLY:
- * This endpoint processes images synchronously for development convenience.
- * For production with large batches (>10 images), implement BullMQ background
- * jobs to avoid blocking the Next.js worker and hitting serverless timeouts.
- * See: https://docs.bullmq.io/ for queue implementation.
+ * The actual image processing happens in the background worker,
+ * allowing this endpoint to return immediately with the job ID.
+ * Clients can poll GET /api/sam3/batch/[id] for status updates.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { checkProjectAccess } from '@/lib/auth/api-auth';
+import { enqueueBatchJob, getQueueStats } from '@/lib/queue/batch-queue';
+import { checkRedisConnection } from '@/lib/queue/redis';
 
-const ROBOFLOW_API_KEY = process.env.ROBOFLOW_API_KEY;
-const SAM3_API_URL = 'https://serverless.roboflow.com/sam3/concept_segment';
-
-// Rate limiting (per-instance, see predict/route.ts for scaling notes)
+// Rate limiting (per-instance; use Redis for production multi-instance)
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 const RATE_LIMIT_WINDOW_MS = 60000; // 1 minute
-const RATE_LIMIT_MAX_REQUESTS = 5; // 5 batch jobs per minute (more restrictive)
+const RATE_LIMIT_MAX_REQUESTS = 10; // 10 batch jobs per minute
 
-// Processing limits to prevent timeout
-const MAX_IMAGES_SYNC = 10; // Max images to process synchronously
-const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB per image
-
-// SSRF protection - same patterns as predict endpoint
-const ALLOWED_URL_PATTERNS = [
-  /^https:\/\/[^/]+\.amazonaws\.com\//,
-  /^https:\/\/storage\.googleapis\.com\//,
-  /^https:\/\/[^/]+\.blob\.core\.windows\.net\//,
-  /^http:\/\/localhost(:\d+)?\//,
-  /^http:\/\/127\.0\.0\.1(:\d+)?\//,
-];
-
-function isUrlAllowed(url: string): boolean {
-  if (url.startsWith('/')) return true;
-  return ALLOWED_URL_PATTERNS.some(pattern => pattern.test(url));
-}
+// Maximum images per batch (reasonable limit for queue)
+const MAX_IMAGES_PER_BATCH = 500;
 
 function getClientIp(request: NextRequest): string {
   return request.headers.get('x-forwarded-for')?.split(',')[0].trim()
@@ -103,9 +82,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   try {
-    if (!ROBOFLOW_API_KEY) {
+    // Check if Redis is available
+    const redisAvailable = await checkRedisConnection();
+    if (!redisAvailable) {
       return NextResponse.json(
-        { error: 'SAM3 service not configured', success: false },
+        { error: 'Queue service unavailable. Please ensure Redis is running.', success: false },
         { status: 503 }
       );
     }
@@ -163,10 +144,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
     }
 
-    // Note: Project existence is already verified by checkProjectAccess above
-
-    // Get target assets (limited to MAX_IMAGES_SYNC for sync processing)
-    let assets;
+    // Get target asset IDs
+    let assetIds: string[];
     if (body.assetIds?.length) {
       // Validate asset IDs format
       for (const assetId of body.assetIds) {
@@ -178,264 +157,71 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         }
       }
 
-      assets = await prisma.asset.findMany({
+      // Verify assets exist and belong to project
+      const assets = await prisma.asset.findMany({
         where: {
-          id: { in: body.assetIds.slice(0, MAX_IMAGES_SYNC) },
+          id: { in: body.assetIds.slice(0, MAX_IMAGES_PER_BATCH) },
           projectId: body.projectId,
         },
-        select: {
-          id: true,
-          storageUrl: true,
-          filePath: true,
-          s3Key: true,
-          s3Bucket: true,
-          storageType: true,
-          imageWidth: true,
-          imageHeight: true,
-        },
+        select: { id: true },
       });
+      assetIds = assets.map(a => a.id);
     } else {
-      assets = await prisma.asset.findMany({
+      // Get all project assets (up to limit)
+      const assets = await prisma.asset.findMany({
         where: { projectId: body.projectId },
-        select: {
-          id: true,
-          storageUrl: true,
-          filePath: true,
-          s3Key: true,
-          s3Bucket: true,
-          storageType: true,
-          imageWidth: true,
-          imageHeight: true,
-        },
-        take: MAX_IMAGES_SYNC,
+        select: { id: true },
+        take: MAX_IMAGES_PER_BATCH,
       });
+      assetIds = assets.map(a => a.id);
     }
 
-    if (assets.length === 0) {
+    if (assetIds.length === 0) {
       return NextResponse.json(
         { error: 'No assets found', success: false },
         { status: 404 }
       );
     }
 
-    // Create batch job
+    // Create batch job record
     const batchJob = await prisma.batchJob.create({
       data: {
         projectId: body.projectId,
         weedType: body.weedType,
         exemplars: body.exemplars,
         textPrompt: body.textPrompt?.substring(0, 100) || body.weedType.replace('Suspected ', ''),
-        totalImages: assets.length,
-        status: 'PROCESSING',
-        startedAt: new Date(),
+        totalImages: assetIds.length,
+        status: 'QUEUED',
       },
     });
 
-    // Process images (synchronous with limits)
-    // TODO: For >10 images, use BullMQ background job queue
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-    let processedCount = 0;
-    let totalDetections = 0;
-    const errors: string[] = [];
-
-    for (const asset of assets) {
-      try {
-        // Build and validate image URL
-        let imageUrl: string;
-
-        if (asset.storageType === 'S3' && asset.s3Key && asset.s3Bucket) {
-          // Internal signed URL request (trusted)
-          const signedUrlResponse = await fetch(`${baseUrl}/api/assets/${asset.id}/signed-url`, {
-            headers: { 'X-Internal-Request': 'true' }
-          });
-          if (!signedUrlResponse.ok) {
-            errors.push(`Failed to get signed URL for asset`);
-            continue;
-          }
-          const signedUrlData = await signedUrlResponse.json();
-          imageUrl = signedUrlData.url;
-
-          // Validate signed URL domain
-          if (!isUrlAllowed(imageUrl)) {
-            errors.push(`Invalid signed URL domain`);
-            continue;
-          }
-        } else if (asset.storageUrl) {
-          // Validate external URL
-          if (!asset.storageUrl.startsWith('/') && !isUrlAllowed(asset.storageUrl)) {
-            errors.push(`Invalid storage URL`);
-            continue;
-          }
-          imageUrl = asset.storageUrl.startsWith('/') ? `${baseUrl}${asset.storageUrl}` : asset.storageUrl;
-        } else if (asset.filePath) {
-          // Local file path - construct safe URL
-          const urlPath = asset.filePath.replace(/^public\//, '/');
-          if (urlPath.includes('..') || !urlPath.startsWith('/')) {
-            errors.push(`Invalid file path`);
-            continue;
-          }
-          imageUrl = `${baseUrl}${urlPath}`;
-        } else {
-          errors.push(`No image URL available`);
-          continue;
-        }
-
-        // Fetch image with timeout
-        const imageResponse = await fetch(imageUrl, {
-          signal: AbortSignal.timeout(30000),
-        });
-
-        if (!imageResponse.ok) {
-          errors.push(`Failed to fetch image`);
-          continue;
-        }
-
-        // Validate content type
-        const contentType = imageResponse.headers.get('content-type') || '';
-        if (!contentType.startsWith('image/')) {
-          errors.push(`Invalid content type`);
-          continue;
-        }
-
-        // Check content length before downloading
-        const contentLength = imageResponse.headers.get('content-length');
-        if (contentLength && parseInt(contentLength) > MAX_IMAGE_SIZE) {
-          errors.push(`Image too large`);
-          continue;
-        }
-
-        const imageBuffer = await imageResponse.arrayBuffer();
-
-        // Validate actual size
-        if (imageBuffer.byteLength > MAX_IMAGE_SIZE) {
-          errors.push(`Image too large`);
-          continue;
-        }
-
-        const imageBase64 = Buffer.from(imageBuffer).toString('base64');
-
-        // Build prompts
-        const prompts = [];
-
-        if (body.textPrompt) {
-          const sanitizedPrompt = body.textPrompt.trim().substring(0, 100).replace(/[^\w\s-]/g, '');
-          prompts.push({ type: 'text', data: sanitizedPrompt });
-        }
-
-        for (const box of body.exemplars.slice(0, 10)) {
-          prompts.push({
-            type: 'box',
-            data: {
-              x: Math.max(0, Math.round(box.x1)),
-              y: Math.max(0, Math.round(box.y1)),
-              width: Math.max(1, Math.round(box.x2 - box.x1)),
-              height: Math.max(1, Math.round(box.y2 - box.y1)),
-            }
-          });
-        }
-
-        // Call SAM3 API
-        const sam3Response = await fetch(SAM3_API_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${ROBOFLOW_API_KEY}`,
-          },
-          body: JSON.stringify({
-            image: { type: 'base64', value: imageBase64 },
-            prompts,
-          }),
-          signal: AbortSignal.timeout(120000),
-        });
-
-        if (!sam3Response.ok) {
-          errors.push(`SAM3 API error: ${sam3Response.status}`);
-          continue;
-        }
-
-        const result = await sam3Response.json();
-
-        // Parse detections
-        if (result.prompt_results) {
-          for (const promptResult of result.prompt_results) {
-            const predictions = promptResult.predictions || [];
-            for (const pred of predictions) {
-              const masks = pred.masks || [];
-              if (masks.length > 0 && masks[0].length >= 3) {
-                const maskPoints = masks[0];
-                const polygon: [number, number][] = maskPoints.map((p: number[]) => [p[0], p[1]]);
-                const xs = maskPoints.map((p: number[]) => p[0]);
-                const ys = maskPoints.map((p: number[]) => p[1]);
-                const bbox = [
-                  Math.min(...xs),
-                  Math.min(...ys),
-                  Math.max(...xs),
-                  Math.max(...ys),
-                ];
-
-                await prisma.pendingAnnotation.create({
-                  data: {
-                    batchJobId: batchJob.id,
-                    assetId: asset.id,
-                    weedType: body.weedType,
-                    confidence: pred.confidence ?? 0.9,
-                    polygon: polygon,
-                    bbox: bbox,
-                    status: 'PENDING',
-                  },
-                });
-
-                totalDetections++;
-              }
-            }
-          }
-        }
-
-        processedCount++;
-
-        // Update progress
-        await prisma.batchJob.update({
-          where: { id: batchJob.id },
-          data: {
-            processedImages: processedCount,
-            detectionsFound: totalDetections,
-          },
-        });
-
-      } catch (err) {
-        errors.push(`Processing error: ${err instanceof Error ? err.message : 'Unknown'}`);
-      }
-    }
-
-    // Mark job complete
-    const finalStatus = errors.length > 0 && processedCount === 0 ? 'FAILED' : 'COMPLETED';
-    await prisma.batchJob.update({
-      where: { id: batchJob.id },
-      data: {
-        status: finalStatus,
-        processedImages: processedCount,
-        detectionsFound: totalDetections,
-        completedAt: new Date(),
-        errorMessage: errors.length > 0 ? errors.slice(0, 5).join('; ') : null,
-      },
+    // Enqueue job for background processing
+    await enqueueBatchJob({
+      batchJobId: batchJob.id,
+      projectId: body.projectId,
+      weedType: body.weedType,
+      exemplars: body.exemplars,
+      textPrompt: body.textPrompt,
+      assetIds,
     });
+
+    // Get queue stats for response
+    const queueStats = await getQueueStats();
 
     return NextResponse.json({
       success: true,
       batchJobId: batchJob.id,
-      totalImages: assets.length,
-      processedImages: processedCount,
-      detectionsFound: totalDetections,
-      limitNote: assets.length >= MAX_IMAGES_SYNC
-        ? `Processing limited to ${MAX_IMAGES_SYNC} images. For larger batches, use background job queue.`
-        : undefined,
-      errors: errors.length > 0 ? errors.slice(0, 5) : undefined,
+      totalImages: assetIds.length,
+      status: 'QUEUED',
+      message: `Batch job queued for processing. ${assetIds.length} images will be processed in the background.`,
+      queuePosition: queueStats.waiting + 1,
+      pollUrl: `/api/sam3/batch/${batchJob.id}`,
     });
 
   } catch (error) {
-    console.error('Batch processing error:', error instanceof Error ? error.message : 'Unknown');
+    console.error('Batch enqueue error:', error instanceof Error ? error.message : 'Unknown');
     return NextResponse.json(
-      { error: 'Batch processing failed', success: false },
+      { error: 'Failed to create batch job', success: false },
       { status: 500 }
     );
   }
@@ -461,6 +247,21 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     );
   }
 
+  // Check project access
+  const projectAccess = await checkProjectAccess(projectId);
+  if (!projectAccess.authenticated) {
+    return NextResponse.json(
+      { error: 'Authentication required', success: false },
+      { status: 401 }
+    );
+  }
+  if (!projectAccess.hasAccess) {
+    return NextResponse.json(
+      { error: projectAccess.error || 'Access denied', success: false },
+      { status: 403 }
+    );
+  }
+
   try {
     const batchJobs = await prisma.batchJob.findMany({
       where: { projectId },
@@ -470,12 +271,21 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           select: { pendingAnnotations: true }
         }
       },
-      take: 50, // Limit results
+      take: 50,
     });
+
+    // Get queue stats
+    let queueStats = null;
+    try {
+      queueStats = await getQueueStats();
+    } catch {
+      // Queue might not be available
+    }
 
     return NextResponse.json({
       success: true,
       batchJobs,
+      queueStats,
     });
   } catch (error) {
     console.error('Failed to list batch jobs:', error);
