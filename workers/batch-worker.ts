@@ -6,27 +6,30 @@
  *
  * This worker:
  * 1. Connects to Redis and listens for jobs
- * 2. Processes images through SAM3 API
+ * 2. Processes images through SAM3 API (AWS primary, Roboflow fallback)
  * 3. Creates PendingAnnotation records
  * 4. Updates BatchJob status and progress
+ * 5. Runs auto-shutdown scheduler for AWS instance cost control
  */
 import { Worker, Job } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
 import { createRedisConnection } from '../lib/queue/redis';
 import { BATCH_QUEUE_NAME, BatchJobData, BatchJobResult } from '../lib/queue/batch-queue';
+import { sam3Orchestrator } from '../lib/services/sam3-orchestrator';
+import {
+  startShutdownScheduler,
+  stopShutdownScheduler,
+} from '../lib/services/sam3-shutdown-scheduler';
 
 // Initialize Prisma client
 const prisma = new PrismaClient();
 
 // Environment variables
-const ROBOFLOW_API_KEY = process.env.ROBOFLOW_API_KEY;
-const SAM3_API_URL = 'https://serverless.roboflow.com/sam3/concept_segment';
 const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
 // Processing limits
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB per image
 const IMAGE_TIMEOUT = 30000; // 30 seconds per image fetch
-const SAM3_TIMEOUT = 120000; // 2 minutes per SAM3 call
 
 // SSRF protection patterns
 const ALLOWED_URL_PATTERNS = [
@@ -152,83 +155,55 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
         continue;
       }
 
-      const imageBase64 = Buffer.from(imageBuffer).toString('base64');
+      // Build boxes for orchestrator (limit to 10)
+      const boxes = exemplars.slice(0, 10).map((box) => ({
+        x1: Math.max(0, Math.round(box.x1)),
+        y1: Math.max(0, Math.round(box.y1)),
+        x2: Math.max(0, Math.round(box.x2)),
+        y2: Math.max(0, Math.round(box.y2)),
+      }));
 
-      // Build prompts
-      const prompts = [];
+      // Sanitize text prompt if provided
+      const sanitizedPrompt = textPrompt
+        ? textPrompt.trim().substring(0, 100).replace(/[^\w\s-]/g, '')
+        : undefined;
 
-      if (textPrompt) {
-        const sanitizedPrompt = textPrompt.trim().substring(0, 100).replace(/[^\w\s-]/g, '');
-        prompts.push({ type: 'text', data: sanitizedPrompt });
-      }
-
-      for (const box of exemplars.slice(0, 10)) {
-        prompts.push({
-          type: 'box',
-          data: {
-            x: Math.max(0, Math.round(box.x1)),
-            y: Math.max(0, Math.round(box.y1)),
-            width: Math.max(1, Math.round(box.x2 - box.x1)),
-            height: Math.max(1, Math.round(box.y2 - box.y1)),
-          },
-        });
-      }
-
-      // Call SAM3 API
-      const sam3Response = await fetch(SAM3_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${ROBOFLOW_API_KEY}`,
-        },
-        body: JSON.stringify({
-          image: { type: 'base64', value: imageBase64 },
-          prompts,
-        }),
-        signal: AbortSignal.timeout(SAM3_TIMEOUT),
+      // Call SAM3 via orchestrator (AWS primary, Roboflow fallback)
+      const result = await sam3Orchestrator.predict({
+        imageBuffer: Buffer.from(imageBuffer),
+        boxes: boxes.length > 0 ? boxes : undefined,
+        textPrompt: sanitizedPrompt,
+        className: weedType,
       });
 
-      if (!sam3Response.ok) {
-        errors.push(`Asset ${asset.id}: SAM3 API error (${sam3Response.status})`);
+      if (!result.success) {
+        errors.push(`Asset ${asset.id}: SAM3 error - ${result.error || 'Unknown error'}`);
         continue;
       }
 
-      const result = await sam3Response.json();
-
-      // Parse detections
-      if (result.prompt_results) {
-        for (const promptResult of result.prompt_results) {
-          const predictions = promptResult.predictions || [];
-          for (const pred of predictions) {
-            const masks = pred.masks || [];
-            if (masks.length > 0 && masks[0].length >= 3) {
-              const maskPoints = masks[0];
-              const polygon: [number, number][] = maskPoints.map((p: number[]) => [p[0], p[1]]);
-              const xs = maskPoints.map((p: number[]) => p[0]);
-              const ys = maskPoints.map((p: number[]) => p[1]);
-              const bbox = [
-                Math.min(...xs),
-                Math.min(...ys),
-                Math.max(...xs),
-                Math.max(...ys),
-              ];
-
-              await prisma.pendingAnnotation.create({
-                data: {
-                  batchJobId,
-                  assetId: asset.id,
-                  weedType,
-                  confidence: pred.confidence ?? 0.9,
-                  polygon,
-                  bbox,
-                  status: 'PENDING',
-                },
-              });
-
-              totalDetections++;
-            }
-          }
+      // Log which backend was used (first image only to avoid spam)
+      if (processedCount === 0) {
+        console.log(`[Worker] Job ${batchJobId}: Using ${result.backend.toUpperCase()} backend`);
+        if (result.startupMessage) {
+          console.log(`[Worker] ${result.startupMessage}`);
         }
+      }
+
+      // Create pending annotations from detections
+      for (const detection of result.detections) {
+        await prisma.pendingAnnotation.create({
+          data: {
+            batchJobId,
+            assetId: asset.id,
+            weedType,
+            confidence: detection.score,
+            polygon: detection.polygon,
+            bbox: detection.bbox,
+            status: 'PENDING',
+          },
+        });
+
+        totalDetections++;
       }
 
       processedCount++;
@@ -278,12 +253,24 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
 
 // Create and start the worker
 async function startWorker() {
-  if (!ROBOFLOW_API_KEY) {
-    console.error('[Worker] ROBOFLOW_API_KEY not set. Exiting.');
+  console.log('[Worker] Starting SAM3 batch processing worker...');
+
+  // Check SAM3 backend availability
+  const status = await sam3Orchestrator.getStatus();
+  if (status.preferredBackend === 'none') {
+    console.error('[Worker] No SAM3 backend configured (AWS or Roboflow). Exiting.');
     process.exit(1);
   }
+  console.log(`[Worker] SAM3 preferred backend: ${status.preferredBackend.toUpperCase()}`);
+  if (status.awsConfigured) {
+    console.log(`[Worker] AWS SAM3 state: ${status.awsState}`);
+  }
+  if (status.roboflowConfigured) {
+    console.log('[Worker] Roboflow fallback: configured');
+  }
 
-  console.log('[Worker] Starting SAM3 batch processing worker...');
+  // Start auto-shutdown scheduler for AWS cost control
+  startShutdownScheduler();
 
   // Create Redis connection with error handling
   const redisConnection = createRedisConnection();
@@ -346,6 +333,7 @@ async function startWorker() {
   // Handle graceful shutdown
   const shutdown = async () => {
     console.log('[Worker] Shutting down...');
+    stopShutdownScheduler();
     await worker.close();
     await redisConnection.quit();
     await prisma.$disconnect();
