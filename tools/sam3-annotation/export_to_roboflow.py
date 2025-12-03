@@ -64,6 +64,23 @@ class RoboflowExporter:
         self.image_id = 0
         self.annotation_id = 0
 
+    def _get_or_add_class(self, class_name: str) -> int:
+        """Get class ID, auto-adding unknown classes with warning."""
+        if class_name in self.class_to_id:
+            return self.class_to_id[class_name]
+
+        # Auto-add unknown class
+        new_id = len(self.classes)
+        self.classes.append(class_name)
+        self.class_to_id[class_name] = new_id
+        self.coco_data["categories"].append({
+            "id": new_id,
+            "name": class_name,
+            "supercategory": "object"
+        })
+        print(f"WARNING: Class '{class_name}' not in initial class list. Added as class {new_id}.")
+        return new_id
+
     def add_image_with_boxes(
         self,
         image_path: str,
@@ -107,7 +124,7 @@ class RoboflowExporter:
             "height": height
         })
 
-        class_id = self.class_to_id.get(class_name, 0)
+        class_id = self._get_or_add_class(class_name)
 
         # Process each box
         for i, box in enumerate(boxes):
@@ -328,22 +345,77 @@ names:
 
 
 def process_annotations_file(annotations_file: str, output_dir: str, classes: List[str]):
-    """Process a JSON file containing multiple image annotations."""
+    """Process a JSON file containing multiple image annotations.
+
+    Supports multiple formats:
+    1. batch_segment.py output: {"annotations": [{image, bbox, class}, ...]}
+    2. click_segment.py output: {"image": "...", "boxes": [...]}
+    3. Legacy format: {"images": [{image, boxes}, ...]}
+    """
     with open(annotations_file) as f:
         data = json.load(f)
 
     exporter = RoboflowExporter(output_dir, classes)
 
-    for item in data.get("images", [data]):
-        image_path = item.get("image") or item.get("image_path")
-        boxes = item.get("boxes", [])
-        class_name = item.get("class", "sapling")
-        mask_path = item.get("mask")
+    # Format 1: batch_segment.py output (flat annotations array)
+    if "annotations" in data and isinstance(data["annotations"], list):
+        # Group annotations by image
+        from collections import defaultdict
+        images_dict = defaultdict(lambda: {"boxes": [], "classes": []})
 
-        if mask_path and Path(mask_path).exists():
-            exporter.add_from_sam3_output(image_path, mask_path, class_name)
-        elif boxes:
+        for ann in data["annotations"]:
+            image_path = ann.get("image") or ann.get("image_path")
+            if not image_path:
+                continue
+
+            bbox = ann.get("bbox")
+            class_name = ann.get("class", data.get("class", "sapling"))
+
+            if bbox:
+                images_dict[image_path]["boxes"].append(bbox)
+                images_dict[image_path]["classes"].append(class_name)
+
+        # Process each image
+        for image_path, img_data in images_dict.items():
+            if not Path(image_path).exists():
+                print(f"WARNING: Image not found, skipping: {image_path}")
+                continue
+
+            # Group boxes by class for proper labeling
+            for box, class_name in zip(img_data["boxes"], img_data["classes"]):
+                exporter.add_image_with_boxes(image_path, [box], class_name)
+
+        print(f"Processed {len(images_dict)} images from batch annotations")
+
+    # Format 2: Single image (click_segment.py output)
+    elif "image" in data and "boxes" in data:
+        image_path = data["image"]
+        boxes = data["boxes"]
+        class_name = data.get("class", "sapling")
+
+        if Path(image_path).exists() and boxes:
             exporter.add_image_with_boxes(image_path, boxes, class_name)
+
+    # Format 3: Legacy format with images array
+    elif "images" in data:
+        for item in data["images"]:
+            image_path = item.get("image") or item.get("image_path")
+            boxes = item.get("boxes", [])
+            class_name = item.get("class", "sapling")
+            mask_path = item.get("mask")
+
+            if not image_path or not Path(image_path).exists():
+                continue
+
+            if mask_path and Path(mask_path).exists():
+                exporter.add_from_sam3_output(image_path, mask_path, class_name)
+            elif boxes:
+                exporter.add_image_with_boxes(image_path, boxes, class_name)
+
+    else:
+        print(f"WARNING: Unrecognized annotation format in {annotations_file}")
+        print("Expected 'annotations' array, 'images' array, or single image with 'boxes'")
+        return {"error": "Unrecognized format"}
 
     return exporter.finalize()
 

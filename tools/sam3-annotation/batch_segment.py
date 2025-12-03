@@ -1,26 +1,35 @@
 #!/usr/bin/env python3
 """
-Batch Segmentation Tool using SAM3
+Batch Segmentation Tool using SAM3 - MASK GENERATION FOR REVIEW
 
-Process multiple images with SAM3 automatic segmentation.
-Designed for bulk annotation of drone imagery with hundreds of images.
+Generates segmentation masks for all objects in drone imagery using SAM3.
+These masks are meant for MANUAL REVIEW, not direct training data.
 
-Supports two modes:
-1. Automatic mode: SAM3 generates all possible segments automatically
-2. Reference mode: Use a reference annotation to segment similar objects
+IMPORTANT: SAM3's "everything" mode segments ALL objects (roads, trees, grass,
+buildings, etc.), not just your target class. The masks generated here should
+be reviewed and filtered before use as training data.
+
+RECOMMENDED WORKFLOW:
+1. Use click_segment.py to manually annotate a subset of images (clean training data)
+2. Train an initial model in Roboflow
+3. Use that trained model for inference on new images
+4. Use this tool only for generating candidate regions for human review
 
 Usage:
-    # Process all images in a directory (automatic mode)
-    python batch_segment.py /path/to/images --class sapling --output ./dataset
+    # Generate masks for review (no class assignment)
+    python batch_segment.py /path/to/images --output ./review_masks
 
-    # Process with S3 integration (download, process, upload)
-    python batch_segment.py s3://bucket/project/images --class pine_sapling --output s3://bucket/annotations
+    # Generate masks with tentative class (REQUIRES MANUAL REVIEW)
+    python batch_segment.py /path/to/images --output ./review --class sapling --review-mode
 
     # Use GPU for faster processing
-    python batch_segment.py /path/to/images --device cuda --class weed
+    python batch_segment.py /path/to/images --device cuda --output ./masks
 
     # Limit number of images (useful for testing)
-    python batch_segment.py /path/to/images --limit 10 --class sapling
+    python batch_segment.py /path/to/images --limit 10 --output ./test_masks
+
+For creating clean labeled training data, use click_segment.py instead:
+    python click_segment.py image.tif --class pine_sapling
 """
 
 import argparse
@@ -51,16 +60,20 @@ def get_best_device():
 
 
 class BatchSegmenter:
-    """Process multiple images with SAM3 for bulk annotation."""
+    """Process multiple images with SAM3 for mask generation (review mode).
+
+    WARNING: SAM3's "everything" mode segments ALL objects, not just your
+    target class. Output should be reviewed before use as training data.
+    """
 
     def __init__(
         self,
         output_dir: str,
-        class_name: str = "sapling",
+        class_name: str = "unknown",
         device: str = None,
         min_area: int = 100,
         max_objects: int = 500,
-        confidence_threshold: float = 0.5
+        review_mode: bool = True
     ):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -68,7 +81,7 @@ class BatchSegmenter:
         self.device = device or get_best_device()
         self.min_area = min_area
         self.max_objects = max_objects
-        self.confidence_threshold = confidence_threshold
+        self.review_mode = review_mode
 
         self.sam3 = None
         self.results = []
@@ -201,7 +214,9 @@ class BatchSegmenter:
                             "bbox": bbox,
                             "class": self.class_name,
                             "area": int(area),
-                            "mask_id": int(val)
+                            "mask_id": int(val),
+                            "status": "needs_review",  # Flag for human review
+                            "auto_generated": True
                         })
 
                 result["annotations"] = annotations
@@ -311,17 +326,21 @@ class BatchSegmenter:
         duration = (self.stats["end_time"] - self.stats["start_time"]).total_seconds() if self.stats["end_time"] and self.stats["start_time"] else 0
 
         print("\n" + "=" * 50)
-        print("BATCH PROCESSING COMPLETE")
+        print("BATCH PROCESSING COMPLETE - REVIEW REQUIRED")
         print("=" * 50)
         print(f"Processed: {self.stats['processed']} images")
         print(f"Failed: {self.stats['failed']} images")
-        print(f"Total objects found: {self.stats['total_objects']}")
+        print(f"Total candidate objects: {self.stats['total_objects']}")
         print(f"Duration: {duration:.1f} seconds")
         print(f"\nOutput files:")
         print(f"  Results: {results_file}")
         print(f"  Annotations: {annotations_file}")
-        print(f"\nNext step - export to Roboflow:")
-        print(f"  python export_to_roboflow.py --annotations {annotations_file} --output ./dataset")
+        print(f"  Masks: {self.output_dir}/masks/")
+        print(f"\n⚠️  IMPORTANT: These annotations need human review!")
+        print(f"   SAM3 segments ALL objects (roads, trees, etc.), not just {self.class_name}.")
+        print(f"   Review masks before using as training data.")
+        print(f"\nFor clean labeled data, use click_segment.py instead:")
+        print(f"  python click_segment.py image.tif --class {self.class_name}")
         print("=" * 50)
 
         return {
@@ -333,27 +352,34 @@ class BatchSegmenter:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Batch process images with SAM3 for bulk annotation",
+        description="Generate SAM3 segmentation masks for review (NOT direct training data)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+⚠️  IMPORTANT: This tool generates CANDIDATE masks that need human review.
+    SAM3's "everything" mode segments ALL objects (roads, trees, buildings),
+    not just your target class. DO NOT use output directly as training data.
+
+For clean labeled training data, use click_segment.py instead:
+    python click_segment.py image.tif --class pine_sapling
+
 Examples:
-  # Process all images in a directory
-  python batch_segment.py /path/to/images --class sapling --output ./dataset
+  # Generate masks for review (recommended)
+  python batch_segment.py /path/to/images --output ./review_masks
+
+  # Generate with tentative class label (still needs review!)
+  python batch_segment.py /path/to/images --class sapling --output ./review
 
   # Use GPU for faster processing
-  python batch_segment.py /path/to/images --device cuda --class pine_sapling
+  python batch_segment.py /path/to/images --device cuda --output ./masks
 
   # Limit to first 10 images (for testing)
   python batch_segment.py /path/to/images --limit 10
 
-  # Set minimum object size to filter noise
-  python batch_segment.py /path/to/images --min-area 500 --class weed
-
 Workflow:
-  1. Run batch_segment.py on your image directory
-  2. Review generated masks in output/masks/
-  3. Export to Roboflow: python export_to_roboflow.py --annotations all_annotations.json
-  4. Upload to Roboflow: python upload_to_roboflow.py --dataset ./dataset
+  1. Run batch_segment.py to generate candidate masks
+  2. REVIEW generated masks in output/masks/ - remove false positives
+  3. After review, export to Roboflow
+  4. Or better: use click_segment.py for accurate labeled data
 
 Notes:
   - First run downloads SAM3 model (~1.5GB)
@@ -363,10 +389,10 @@ Notes:
     )
 
     parser.add_argument("input", help="Directory containing images to process")
-    parser.add_argument("--output", "-o", default="./sam3_output",
-                        help="Output directory for results (default: ./sam3_output)")
-    parser.add_argument("--class", dest="class_name", default="sapling",
-                        help="Class label for detected objects (default: sapling)")
+    parser.add_argument("--output", "-o", default="./sam3_review",
+                        help="Output directory for results (default: ./sam3_review)")
+    parser.add_argument("--class", dest="class_name", default="unknown",
+                        help="Tentative class label (default: unknown - needs review)")
     parser.add_argument("--device", "-d", choices=["cuda", "mps", "cpu"],
                         help="Device for inference (default: auto-detect)")
     parser.add_argument("--limit", "-l", type=int,

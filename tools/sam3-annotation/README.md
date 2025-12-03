@@ -1,14 +1,25 @@
 # SAM3 Annotation Pipeline
 
-Bulk annotation tool using Meta's Segment Anything Model 3 (SAM3) for rapid labeling of drone imagery. This pipeline enables one-click segmentation of pine saplings, weeds, and other vegetation for training object detection models.
+Annotation tools using Meta's Segment Anything Model 3 (SAM3) for labeling drone imagery. This pipeline enables click-based segmentation of pine saplings, weeds, and other vegetation for training object detection models.
 
 ## Overview
 
 This toolkit provides:
-- **Interactive Annotation** (`click_segment.py`): Click-to-segment tool for manual annotation
-- **Batch Processing** (`batch_segment.py`): Automatic segmentation of hundreds of images
+- **Interactive Annotation** (`click_segment.py`): Click-to-segment tool for creating clean labeled training data (RECOMMENDED)
+- **Batch Mask Generation** (`batch_segment.py`): Generate candidate masks for review (requires human verification)
 - **Roboflow Export** (`export_to_roboflow.py`): Convert annotations to COCO/YOLO format
 - **Roboflow Upload** (`upload_to_roboflow.py`): Push datasets to Roboflow for training
+
+## Recommended Workflow
+
+For creating quality training data:
+
+1. **Use `click_segment.py`** to manually annotate images (this creates accurate labels)
+2. **Export to Roboflow** and train an initial model
+3. **Use the trained model** for inference on new images
+4. **Optionally use `batch_segment.py`** to generate candidate regions for human review
+
+⚠️ **Important**: `batch_segment.py` uses SAM3's "everything" mode which segments ALL objects (roads, trees, buildings), not just your target class. Its output requires manual review before use as training data.
 
 ## Requirements
 
@@ -84,19 +95,22 @@ python click_segment.py /path/to/image.tif --device cuda --class weed
 - Z: Undo last point
 - Q: Quit and export JSON
 
-### Batch Processing (Hundreds of Images)
+### Batch Mask Generation (For Review Only)
 
-Best for bulk annotation on AWS GPU instances:
+⚠️ **Warning**: This generates candidate masks that need human review. SAM3's "everything" mode segments ALL objects, not just your target class.
 
 ```bash
-# Process all images in a directory
-python batch_segment.py /path/to/images --class pine_sapling --output ./dataset
+# Generate masks for review (recommended - no class assumption)
+python batch_segment.py /path/to/images --output ./review_masks
 
-# Use GPU (required for production)
-python batch_segment.py /path/to/images --device cuda --class sapling
+# Generate with tentative class (STILL NEEDS REVIEW)
+python batch_segment.py /path/to/images --class sapling --output ./review
+
+# Use GPU for faster processing
+python batch_segment.py /path/to/images --device cuda --output ./masks
 
 # Limit for testing
-python batch_segment.py /path/to/images --limit 10 --class weed
+python batch_segment.py /path/to/images --limit 10
 
 # Filter small objects
 python batch_segment.py /path/to/images --min-area 500 --class vegetation
