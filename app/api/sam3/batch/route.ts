@@ -3,12 +3,70 @@
  *
  * Processes multiple images using box exemplars for few-shot detection.
  * Creates PendingAnnotation records for review before acceptance.
+ *
+ * Security:
+ * - Rate limiting per IP
+ * - SSRF protection with URL allowlist
+ * - Image size limits
+ * - Content-type validation
+ * - Project existence validation
+ *
+ * NOTE: For production with large batches (>10 images), this should use
+ * BullMQ background jobs. Current implementation processes synchronously
+ * with limits to prevent timeout.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 
 const ROBOFLOW_API_KEY = process.env.ROBOFLOW_API_KEY;
 const SAM3_API_URL = 'https://serverless.roboflow.com/sam3/concept_segment';
+
+// Rate limiting (per-instance, see predict/route.ts for scaling notes)
+const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+const RATE_LIMIT_WINDOW_MS = 60000; // 1 minute
+const RATE_LIMIT_MAX_REQUESTS = 5; // 5 batch jobs per minute (more restrictive)
+
+// Processing limits to prevent timeout
+const MAX_IMAGES_SYNC = 10; // Max images to process synchronously
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB per image
+
+// SSRF protection - same patterns as predict endpoint
+const ALLOWED_URL_PATTERNS = [
+  /^https:\/\/[^/]+\.amazonaws\.com\//,
+  /^https:\/\/storage\.googleapis\.com\//,
+  /^https:\/\/[^/]+\.blob\.core\.windows\.net\//,
+  /^http:\/\/localhost(:\d+)?\//,
+  /^http:\/\/127\.0\.0\.1(:\d+)?\//,
+];
+
+function isUrlAllowed(url: string): boolean {
+  if (url.startsWith('/')) return true;
+  return ALLOWED_URL_PATTERNS.some(pattern => pattern.test(url));
+}
+
+function getClientIp(request: NextRequest): string {
+  return request.headers.get('x-forwarded-for')?.split(',')[0].trim()
+    || request.headers.get('x-real-ip')
+    || 'unknown';
+}
+
+function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
+  const now = Date.now();
+  const record = rateLimitMap.get(ip);
+
+  if (!record || now > record.resetTime) {
+    rateLimitMap.set(ip, { count: 1, resetTime: now + RATE_LIMIT_WINDOW_MS });
+    return { allowed: true };
+  }
+
+  if (record.count >= RATE_LIMIT_MAX_REQUESTS) {
+    const retryAfter = Math.ceil((record.resetTime - now) / 1000);
+    return { allowed: false, retryAfter };
+  }
+
+  record.count++;
+  return { allowed: true };
+}
 
 interface BoxExemplar {
   x1: number;
@@ -21,11 +79,25 @@ interface BatchRequest {
   projectId: string;
   weedType: string;
   exemplars: BoxExemplar[];
-  assetIds?: string[]; // Optional: specific assets, or all in project
+  assetIds?: string[];
   textPrompt?: string;
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  // Rate limiting
+  const clientIp = getClientIp(request);
+  const rateLimit = checkRateLimit(clientIp);
+
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { error: 'Too many batch requests', success: false },
+      {
+        status: 429,
+        headers: { 'Retry-After': String(rateLimit.retryAfter) }
+      }
+    );
+  }
+
   try {
     if (!ROBOFLOW_API_KEY) {
       return NextResponse.json(
@@ -36,31 +108,71 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     const body: BatchRequest = await request.json();
 
-    // Validate request
+    // Validate required fields
     if (!body.projectId || !body.weedType || !body.exemplars?.length) {
       return NextResponse.json(
-        { error: 'Missing required fields: projectId, weedType, exemplars', success: false },
+        { error: 'Missing required fields', success: false },
         { status: 400 }
       );
     }
 
-    // Validate exemplars
+    // Validate projectId format (CUID)
+    if (!/^c[a-z0-9]{24,}$/i.test(body.projectId)) {
+      return NextResponse.json(
+        { error: 'Invalid project ID format', success: false },
+        { status: 400 }
+      );
+    }
+
+    // Validate exemplars (max 10, valid coordinates)
+    if (body.exemplars.length > 10) {
+      return NextResponse.json(
+        { error: 'Maximum 10 exemplars allowed', success: false },
+        { status: 400 }
+      );
+    }
+
     for (const exemplar of body.exemplars) {
       if (typeof exemplar.x1 !== 'number' || typeof exemplar.y1 !== 'number' ||
-          typeof exemplar.x2 !== 'number' || typeof exemplar.y2 !== 'number') {
+          typeof exemplar.x2 !== 'number' || typeof exemplar.y2 !== 'number' ||
+          exemplar.x1 < 0 || exemplar.y1 < 0 || exemplar.x2 < 0 || exemplar.y2 < 0 ||
+          exemplar.x1 > 10000 || exemplar.y1 > 10000 || exemplar.x2 > 10000 || exemplar.y2 > 10000) {
         return NextResponse.json(
-          { error: 'Invalid exemplar format', success: false },
+          { error: 'Invalid exemplar coordinates', success: false },
           { status: 400 }
         );
       }
     }
 
-    // Get target assets
+    // Verify project exists
+    const project = await prisma.project.findUnique({
+      where: { id: body.projectId },
+      select: { id: true },
+    });
+
+    if (!project) {
+      return NextResponse.json(
+        { error: 'Project not found', success: false },
+        { status: 404 }
+      );
+    }
+
+    // Get target assets (limited to MAX_IMAGES_SYNC for sync processing)
     let assets;
     if (body.assetIds?.length) {
+      // Validate asset IDs format
+      for (const assetId of body.assetIds) {
+        if (!/^c[a-z0-9]{24,}$/i.test(assetId)) {
+          return NextResponse.json(
+            { error: 'Invalid asset ID format', success: false },
+            { status: 400 }
+          );
+        }
+      }
+
       assets = await prisma.asset.findMany({
         where: {
-          id: { in: body.assetIds },
+          id: { in: body.assetIds.slice(0, MAX_IMAGES_SYNC) },
           projectId: body.projectId,
         },
         select: {
@@ -75,7 +187,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         },
       });
     } else {
-      // Get all assets in project
       assets = await prisma.asset.findMany({
         where: { projectId: body.projectId },
         select: {
@@ -88,7 +199,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           imageWidth: true,
           imageHeight: true,
         },
-        take: 100, // Limit to 100 images per batch
+        take: MAX_IMAGES_SYNC,
       });
     }
 
@@ -105,15 +216,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         projectId: body.projectId,
         weedType: body.weedType,
         exemplars: body.exemplars,
-        textPrompt: body.textPrompt || body.weedType.replace('Suspected ', ''),
+        textPrompt: body.textPrompt?.substring(0, 100) || body.weedType.replace('Suspected ', ''),
         totalImages: assets.length,
         status: 'PROCESSING',
         startedAt: new Date(),
       },
     });
 
-    // Process in background (simplified synchronous for now)
-    // In production, this should be a background job with BullMQ
+    // Process images (synchronous with limits)
+    // TODO: For >10 images, use BullMQ background job queue
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
     let processedCount = 0;
     let totalDetections = 0;
@@ -121,50 +232,88 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     for (const asset of assets) {
       try {
-        // Build image URL
+        // Build and validate image URL
         let imageUrl: string;
+
         if (asset.storageType === 'S3' && asset.s3Key && asset.s3Bucket) {
+          // Internal signed URL request (trusted)
           const signedUrlResponse = await fetch(`${baseUrl}/api/assets/${asset.id}/signed-url`, {
             headers: { 'X-Internal-Request': 'true' }
           });
           if (!signedUrlResponse.ok) {
-            errors.push(`Failed to get signed URL for ${asset.id}`);
+            errors.push(`Failed to get signed URL for asset`);
             continue;
           }
           const signedUrlData = await signedUrlResponse.json();
           imageUrl = signedUrlData.url;
+
+          // Validate signed URL domain
+          if (!isUrlAllowed(imageUrl)) {
+            errors.push(`Invalid signed URL domain`);
+            continue;
+          }
         } else if (asset.storageUrl) {
+          // Validate external URL
+          if (!asset.storageUrl.startsWith('/') && !isUrlAllowed(asset.storageUrl)) {
+            errors.push(`Invalid storage URL`);
+            continue;
+          }
           imageUrl = asset.storageUrl.startsWith('/') ? `${baseUrl}${asset.storageUrl}` : asset.storageUrl;
         } else if (asset.filePath) {
+          // Local file path - construct safe URL
           const urlPath = asset.filePath.replace(/^public\//, '/');
+          if (urlPath.includes('..') || !urlPath.startsWith('/')) {
+            errors.push(`Invalid file path`);
+            continue;
+          }
           imageUrl = `${baseUrl}${urlPath}`;
         } else {
-          errors.push(`No image URL for ${asset.id}`);
+          errors.push(`No image URL available`);
           continue;
         }
 
-        // Fetch and encode image
+        // Fetch image with timeout
         const imageResponse = await fetch(imageUrl, {
           signal: AbortSignal.timeout(30000),
         });
 
         if (!imageResponse.ok) {
-          errors.push(`Failed to fetch image ${asset.id}`);
+          errors.push(`Failed to fetch image`);
+          continue;
+        }
+
+        // Validate content type
+        const contentType = imageResponse.headers.get('content-type') || '';
+        if (!contentType.startsWith('image/')) {
+          errors.push(`Invalid content type`);
+          continue;
+        }
+
+        // Check content length before downloading
+        const contentLength = imageResponse.headers.get('content-length');
+        if (contentLength && parseInt(contentLength) > MAX_IMAGE_SIZE) {
+          errors.push(`Image too large`);
           continue;
         }
 
         const imageBuffer = await imageResponse.arrayBuffer();
+
+        // Validate actual size
+        if (imageBuffer.byteLength > MAX_IMAGE_SIZE) {
+          errors.push(`Image too large`);
+          continue;
+        }
+
         const imageBase64 = Buffer.from(imageBuffer).toString('base64');
 
         // Build prompts
         const prompts = [];
 
-        // Add text prompt
         if (body.textPrompt) {
-          prompts.push({ type: 'text', data: body.textPrompt.substring(0, 100) });
+          const sanitizedPrompt = body.textPrompt.trim().substring(0, 100).replace(/[^\w\s-]/g, '');
+          prompts.push({ type: 'text', data: sanitizedPrompt });
         }
 
-        // Add box exemplars
         for (const box of body.exemplars.slice(0, 10)) {
           prompts.push({
             type: 'box',
@@ -192,7 +341,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         });
 
         if (!sam3Response.ok) {
-          errors.push(`SAM3 failed for ${asset.id}: ${sam3Response.status}`);
+          errors.push(`SAM3 API error: ${sam3Response.status}`);
           continue;
         }
 
@@ -216,7 +365,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
                   Math.max(...ys),
                 ];
 
-                // Create pending annotation
                 await prisma.pendingAnnotation.create({
                   data: {
                     batchJobId: batchJob.id,
@@ -247,7 +395,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         });
 
       } catch (err) {
-        errors.push(`Error processing ${asset.id}: ${err instanceof Error ? err.message : 'Unknown'}`);
+        errors.push(`Processing error: ${err instanceof Error ? err.message : 'Unknown'}`);
       }
     }
 
@@ -270,6 +418,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       totalImages: assets.length,
       processedImages: processedCount,
       detectionsFound: totalDetections,
+      limitNote: assets.length >= MAX_IMAGES_SYNC
+        ? `Processing limited to ${MAX_IMAGES_SYNC} images. For larger batches, use background job queue.`
+        : undefined,
       errors: errors.length > 0 ? errors.slice(0, 5) : undefined,
     });
 
@@ -294,6 +445,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     );
   }
 
+  // Validate projectId format
+  if (!/^c[a-z0-9]{24,}$/i.test(projectId)) {
+    return NextResponse.json(
+      { error: 'Invalid project ID format', success: false },
+      { status: 400 }
+    );
+  }
+
   try {
     const batchJobs = await prisma.batchJob.findMany({
       where: { projectId },
@@ -302,7 +461,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         _count: {
           select: { pendingAnnotations: true }
         }
-      }
+      },
+      take: 50, // Limit results
     });
 
     return NextResponse.json({
