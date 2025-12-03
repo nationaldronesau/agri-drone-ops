@@ -63,6 +63,8 @@ class RoboflowExporter:
         }
         self.image_id = 0
         self.annotation_id = 0
+        self._image_name_to_id = {}  # Track which images have been added
+        self._written_label_files = set()  # Track YOLO files written this session
 
     def _get_or_add_class(self, class_name: str) -> int:
         """Get class ID, auto-adding unknown classes with warning."""
@@ -115,14 +117,20 @@ class RoboflowExporter:
         if not dest_image.exists():
             shutil.copy(image_path, dest_image)
 
-        # Add to COCO format
-        self.image_id += 1
-        self.coco_data["images"].append({
-            "id": self.image_id,
-            "file_name": image_path.name,
-            "width": width,
-            "height": height
-        })
+        # Check if image already added (for multi-class annotations)
+        if image_path.name in self._image_name_to_id:
+            current_image_id = self._image_name_to_id[image_path.name]
+        else:
+            # Add to COCO format (only once per image)
+            self.image_id += 1
+            current_image_id = self.image_id
+            self._image_name_to_id[image_path.name] = current_image_id
+            self.coco_data["images"].append({
+                "id": current_image_id,
+                "file_name": image_path.name,
+                "width": width,
+                "height": height
+            })
 
         class_id = self._get_or_add_class(class_name)
 
@@ -137,7 +145,7 @@ class RoboflowExporter:
             self.annotation_id += 1
             annotation = {
                 "id": self.annotation_id,
-                "image_id": self.image_id,
+                "image_id": current_image_id,
                 "category_id": class_id,
                 "bbox": bbox_coco,
                 "area": area,
@@ -200,11 +208,12 @@ class RoboflowExporter:
         img_width: int,
         img_height: int
     ):
-        """Write YOLO format annotation file."""
+        """Write YOLO format annotation file (appends for multi-class images)."""
         labels_dir = self.output_dir / "labels"
         labels_dir.mkdir(exist_ok=True)
 
         label_file = labels_dir / (Path(image_name).stem + ".txt")
+        label_file_str = str(label_file)
 
         lines = []
         for box in boxes:
@@ -218,8 +227,14 @@ class RoboflowExporter:
 
             lines.append(f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}")
 
-        with open(label_file, "w") as f:
+        # Use write mode for first write, append for subsequent (multi-class images)
+        mode = "a" if label_file_str in self._written_label_files else "w"
+        with open(label_file, mode) as f:
+            if mode == "a":
+                f.write("\n")  # Add newline before appending
             f.write("\n".join(lines))
+
+        self._written_label_files.add(label_file_str)
 
     def add_from_sam3_output(
         self,

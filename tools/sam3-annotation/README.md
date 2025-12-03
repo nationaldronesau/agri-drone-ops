@@ -182,21 +182,20 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
 
 ## Workflow Examples
 
-### Complete Pipeline: Pine Sapling Detection
+### Complete Pipeline: Pine Sapling Detection (Recommended)
 
 ```bash
-# 1. Upload images to instance
+# 1. Upload images to GPU instance
 scp -r ./drone_images/ ubuntu@instance:/data/
 
-# 2. Run batch segmentation
-python batch_segment.py /data/drone_images \
-    --class pine_sapling \
-    --device cuda \
-    --output /data/annotations
+# 2. Manually annotate a subset of images (creates clean training data)
+python click_segment.py /data/drone_images/image001.tif --class pine_sapling --device cuda
+python click_segment.py /data/drone_images/image002.tif --class pine_sapling --device cuda
+# Repeat for 20-50 representative images
 
-# 3. Export to Roboflow format
+# 3. Export annotations to Roboflow format
 python export_to_roboflow.py \
-    --annotations /data/annotations/all_annotations.json \
+    --annotations image001_annotations.json \
     --output /data/roboflow_dataset \
     --classes "pine_sapling"
 
@@ -206,26 +205,26 @@ python upload_to_roboflow.py \
     --workspace national-drones \
     --project pine-sapling-detection
 
-# 5. Train model in Roboflow UI
-# Go to https://app.roboflow.com and start training
+# 5. Train model in Roboflow UI, then use trained model for inference
 ```
 
 ### Multiple Classes in One Session
 
 ```bash
-# Annotate saplings
+# Annotate saplings in first image
 python click_segment.py image.tif --class pine_sapling
-# ... annotate, export, clear ...
+# Click objects, press S to save each, press Q to export
 
-# Annotate weeds in same image
-python click_segment.py image.tif --class weed
-# ... annotate, export ...
+# Annotate weeds in second image
+python click_segment.py image2.tif --class weed
+# Click objects, press S to save each, press Q to export
 
-# Combine annotations
-python export_to_roboflow.py \
-    --annotations "sapling_annotations.json,weed_annotations.json" \
-    --output ./combined_dataset \
-    --classes "pine_sapling,weed,tree"
+# Export each annotation file separately, then combine in Roboflow
+python export_to_roboflow.py --annotations image_annotations.json --output ./dataset1
+python export_to_roboflow.py --annotations image2_annotations.json --output ./dataset2
+
+# Or annotate multiple classes in same session by re-running click_segment.py
+# with different --class values on the same image
 ```
 
 ## Output Format
