@@ -18,6 +18,8 @@ const SAM3_API_URL = 'https://serverless.roboflow.com/sam3/concept_segment';
 const ROBOFLOW_API_KEY = process.env.ROBOFLOW_API_KEY;
 
 // Rate limiting (simple in-memory, resets on server restart)
+// NOTE: This is per-instance only. For horizontal scaling, use Redis-based
+// rate limiting or an upstream limiter (nginx, AWS WAF, Cloudflare).
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 const RATE_LIMIT_WINDOW_MS = 60000; // 1 minute
 const RATE_LIMIT_MAX_REQUESTS = 30; // 30 requests per minute
