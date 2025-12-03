@@ -196,14 +196,32 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     });
 
     // Enqueue job for background processing
-    await enqueueBatchJob({
-      batchJobId: batchJob.id,
-      projectId: body.projectId,
-      weedType: body.weedType,
-      exemplars: body.exemplars,
-      textPrompt: body.textPrompt,
-      assetIds,
-    });
+    // If enqueue fails, mark the job as FAILED to avoid stuck jobs
+    try {
+      await enqueueBatchJob({
+        batchJobId: batchJob.id,
+        projectId: body.projectId,
+        weedType: body.weedType,
+        exemplars: body.exemplars,
+        textPrompt: body.textPrompt,
+        assetIds,
+      });
+    } catch (enqueueError) {
+      console.error('Failed to enqueue batch job:', enqueueError);
+      // Mark job as failed so it doesn't stay stuck in QUEUED
+      await prisma.batchJob.update({
+        where: { id: batchJob.id },
+        data: {
+          status: 'FAILED',
+          errorMessage: 'Failed to enqueue job - Redis may be unavailable',
+          completedAt: new Date(),
+        },
+      });
+      return NextResponse.json(
+        { error: 'Failed to enqueue batch job. Please try again later.', success: false },
+        { status: 503 }
+      );
+    }
 
     // Get queue stats for response
     const queueStats = await getQueueStats();

@@ -285,13 +285,39 @@ async function startWorker() {
 
   console.log('[Worker] Starting SAM3 batch processing worker...');
 
+  // Create Redis connection with error handling
+  const redisConnection = createRedisConnection();
+
+  // Handle Redis connection errors
+  redisConnection.on('error', (err) => {
+    console.error('[Worker] Redis connection error:', err.message);
+  });
+
+  redisConnection.on('close', () => {
+    console.warn('[Worker] Redis connection closed');
+  });
+
+  redisConnection.on('reconnecting', () => {
+    console.log('[Worker] Reconnecting to Redis...');
+  });
+
+  // Test Redis connection before starting
+  try {
+    await redisConnection.ping();
+    console.log('[Worker] Redis connection established');
+  } catch (err) {
+    console.error('[Worker] Failed to connect to Redis:', err);
+    console.error('[Worker] Please ensure Redis is running. Exiting.');
+    process.exit(1);
+  }
+
   const worker = new Worker<BatchJobData, BatchJobResult>(
     BATCH_QUEUE_NAME,
     async (job) => {
       return processBatchJob(job);
     },
     {
-      connection: createRedisConnection(),
+      connection: redisConnection,
       concurrency: 2, // Process up to 2 jobs in parallel
     }
   );
@@ -306,12 +332,22 @@ async function startWorker() {
 
   worker.on('error', (err) => {
     console.error('[Worker] Worker error:', err.message);
+    // If it's a connection error, log additional info
+    if (err.message.includes('ECONNREFUSED') || err.message.includes('ENOTFOUND')) {
+      console.error('[Worker] Redis connection lost. Worker will attempt to reconnect.');
+    }
+  });
+
+  // Handle stalled jobs (jobs that stopped responding)
+  worker.on('stalled', (jobId) => {
+    console.warn(`[Worker] Job ${jobId} stalled - will be retried`);
   });
 
   // Handle graceful shutdown
   const shutdown = async () => {
     console.log('[Worker] Shutting down...');
     await worker.close();
+    await redisConnection.quit();
     await prisma.$disconnect();
     process.exit(0);
   };
