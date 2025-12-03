@@ -9,8 +9,8 @@ services:
     ports:
       - "3001:8080"
     environment:
-      # Database (PostgreSQL)
-      DATABASE_URL: "postgresql://agridrone:agridrone@db:5432/agridrone"
+      # Database (MySQL)
+      DATABASE_URL: "mysql://agridrone:agridrone@db:3306/agridrone"
       
       # NextAuth
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
@@ -45,22 +45,23 @@ services:
       - agrodrone-network
     restart: unless-stopped
 
-  # PostgreSQL database
+  # MySQL database
   db:
-    image: postgres:15-alpine
+    image: mysql:8.0
     environment:
-      POSTGRES_USER: agridrone
-      POSTGRES_PASSWORD: agridrone
-      POSTGRES_DB: agridrone
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: agridrone
+      MYSQL_USER: agridrone
+      MYSQL_PASSWORD: agridrone
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mysql_data:/var/lib/mysql
     ports:
-      - "5433:5432"
+      - "3307:3306"
     networks:
       - agrodrone-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U agridrone -d agridrone"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "agridrone", "-pagridrone"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -98,7 +99,7 @@ services:
       - production
 
 volumes:
-  postgres_data:
+  mysql_data:
   redis_data:
 
 networks:
