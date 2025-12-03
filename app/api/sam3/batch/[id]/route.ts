@@ -2,9 +2,14 @@
  * SAM3 Batch Job Status API
  *
  * Get details of a specific batch job and its pending annotations.
+ *
+ * Security:
+ * - Authentication required
+ * - Project membership validated through batch job's project
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { checkProjectAccess } from '@/lib/auth/api-auth';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -16,7 +21,44 @@ export async function GET(
 ): Promise<NextResponse> {
   const { id } = await params;
 
+  // Validate ID format
+  if (!/^c[a-z0-9]{24,}$/i.test(id)) {
+    return NextResponse.json(
+      { error: 'Invalid batch job ID format', success: false },
+      { status: 400 }
+    );
+  }
+
   try {
+    // First get the batch job to find its project
+    const batchJobBasic = await prisma.batchJob.findUnique({
+      where: { id },
+      select: { projectId: true },
+    });
+
+    if (!batchJobBasic) {
+      return NextResponse.json(
+        { error: 'Batch job not found', success: false },
+        { status: 404 }
+      );
+    }
+
+    // Check authentication and project access
+    const projectAccess = await checkProjectAccess(batchJobBasic.projectId);
+    if (!projectAccess.authenticated) {
+      return NextResponse.json(
+        { error: 'Authentication required', success: false },
+        { status: 401 }
+      );
+    }
+    if (!projectAccess.hasAccess) {
+      return NextResponse.json(
+        { error: projectAccess.error || 'Access denied', success: false },
+        { status: 403 }
+      );
+    }
+
+    // Now get the full batch job with annotations
     const batchJob = await prisma.batchJob.findUnique({
       where: { id },
       include: {
@@ -94,15 +136,40 @@ export async function DELETE(
 ): Promise<NextResponse> {
   const { id } = await params;
 
+  // Validate ID format
+  if (!/^c[a-z0-9]{24,}$/i.test(id)) {
+    return NextResponse.json(
+      { error: 'Invalid batch job ID format', success: false },
+      { status: 400 }
+    );
+  }
+
   try {
+    // Get the batch job to find its project
     const batchJob = await prisma.batchJob.findUnique({
       where: { id },
+      select: { id: true, projectId: true },
     });
 
     if (!batchJob) {
       return NextResponse.json(
         { error: 'Batch job not found', success: false },
         { status: 404 }
+      );
+    }
+
+    // Check authentication and project access
+    const projectAccess = await checkProjectAccess(batchJob.projectId);
+    if (!projectAccess.authenticated) {
+      return NextResponse.json(
+        { error: 'Authentication required', success: false },
+        { status: 401 }
+      );
+    }
+    if (!projectAccess.hasAccess) {
+      return NextResponse.json(
+        { error: projectAccess.error || 'Access denied', success: false },
+        { status: 403 }
       );
     }
 

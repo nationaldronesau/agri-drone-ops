@@ -5,18 +5,22 @@
  * Creates PendingAnnotation records for review before acceptance.
  *
  * Security:
- * - Rate limiting per IP
+ * - Authentication required (team membership verified)
+ * - Rate limiting per IP (in-memory; use Redis for production multi-instance)
  * - SSRF protection with URL allowlist
- * - Image size limits
+ * - Image size limits (10MB max)
  * - Content-type validation
- * - Project existence validation
+ * - Project ownership validation through team membership
  *
- * NOTE: For production with large batches (>10 images), this should use
- * BullMQ background jobs. Current implementation processes synchronously
- * with limits to prevent timeout.
+ * IMPORTANT - DEVELOPMENT ONLY:
+ * This endpoint processes images synchronously for development convenience.
+ * For production with large batches (>10 images), implement BullMQ background
+ * jobs to avoid blocking the Next.js worker and hitting serverless timeouts.
+ * See: https://docs.bullmq.io/ for queue implementation.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { checkProjectAccess } from '@/lib/auth/api-auth';
 
 const ROBOFLOW_API_KEY = process.env.ROBOFLOW_API_KEY;
 const SAM3_API_URL = 'https://serverless.roboflow.com/sam3/concept_segment';
@@ -124,6 +128,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
+    // Authentication and project access check
+    const projectAccess = await checkProjectAccess(body.projectId);
+    if (!projectAccess.authenticated) {
+      return NextResponse.json(
+        { error: 'Authentication required', success: false },
+        { status: 401 }
+      );
+    }
+    if (!projectAccess.hasAccess) {
+      return NextResponse.json(
+        { error: projectAccess.error || 'Access denied', success: false },
+        { status: 403 }
+      );
+    }
+
     // Validate exemplars (max 10, valid coordinates)
     if (body.exemplars.length > 10) {
       return NextResponse.json(
@@ -144,18 +163,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
     }
 
-    // Verify project exists
-    const project = await prisma.project.findUnique({
-      where: { id: body.projectId },
-      select: { id: true },
-    });
-
-    if (!project) {
-      return NextResponse.json(
-        { error: 'Project not found', success: false },
-        { status: 404 }
-      );
-    }
+    // Note: Project existence is already verified by checkProjectAccess above
 
     // Get target assets (limited to MAX_IMAGES_SYNC for sync processing)
     let assets;
