@@ -15,9 +15,8 @@ import { Textarea } from "@/components/ui/textarea";
 interface SAM3HealthResponse {
   available: boolean;
   mode: 'realtime' | 'degraded' | 'loading' | 'unavailable';
-  device: 'cuda' | 'mps' | 'cpu' | 'roboflow-cloud' | null;
+  device: 'cuda' | 'mps' | 'cpu' | 'roboflow-cloud' | 'roboflow-serverless' | null;
   latencyMs: number | null;
-  workflowId?: string | null;
 }
 
 interface SAM3Point {
@@ -1073,7 +1072,7 @@ export default function AnnotatePage() {
                         }`} />
                         <span className="text-sm font-medium">
                           {sam3Health.available
-                            ? `SAM3 Ready (${sam3Health.device === 'roboflow-cloud' ? 'Roboflow Cloud' : sam3Health.device?.toUpperCase() || 'CPU'})`
+                            ? `SAM3 Ready (${sam3Health.device?.startsWith('roboflow') ? 'Roboflow' : sam3Health.device?.toUpperCase() || 'CPU'})`
                             : 'SAM3 Unavailable'}
                         </span>
                       </div>

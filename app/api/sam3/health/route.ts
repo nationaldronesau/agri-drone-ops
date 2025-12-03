@@ -1,40 +1,36 @@
 /**
- * SAM3 Health Check API Route - Roboflow Integration
+ * SAM3 Health Check API Route
  *
- * Checks if Roboflow SAM3 workflow is configured and accessible.
+ * Checks if Roboflow SAM3 serverless API is configured and accessible.
  */
 import { NextResponse } from 'next/server';
 
 const ROBOFLOW_API_KEY = process.env.ROBOFLOW_API_KEY;
-const ROBOFLOW_WORKSPACE = process.env.ROBOFLOW_WORKSPACE;
-const ROBOFLOW_SAM3_WORKFLOW_ID = process.env.ROBOFLOW_SAM3_WORKFLOW_ID || 'sam3-forestry';
 
 export interface SAM3HealthResponse {
   available: boolean;
   mode: 'realtime' | 'degraded' | 'loading' | 'unavailable';
-  device: 'roboflow-cloud' | null;
+  device: 'roboflow-serverless' | null;
   latencyMs: number | null;
-  workflowId: string | null;
 }
 
 export async function GET(): Promise<NextResponse<SAM3HealthResponse>> {
-  // Check if Roboflow is configured
-  if (!ROBOFLOW_API_KEY || !ROBOFLOW_WORKSPACE) {
+  // Check if Roboflow API key is configured
+  if (!ROBOFLOW_API_KEY) {
     return NextResponse.json({
       available: false,
       mode: 'unavailable',
       device: null,
       latencyMs: null,
-      workflowId: null,
     });
   }
 
   try {
-    // Test Roboflow API connectivity with a lightweight call
-    // We'll just check if the workspace is accessible
+    // Test Roboflow API connectivity
     const startTime = Date.now();
 
-    const testUrl = `https://api.roboflow.com/${ROBOFLOW_WORKSPACE}?api_key=${ROBOFLOW_API_KEY}`;
+    // Use the Roboflow workspace API to verify key is valid
+    const testUrl = `https://api.roboflow.com/?api_key=${ROBOFLOW_API_KEY}`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
@@ -51,10 +47,9 @@ export async function GET(): Promise<NextResponse<SAM3HealthResponse>> {
     if (response.ok) {
       return NextResponse.json({
         available: true,
-        mode: 'realtime',  // Roboflow cloud is always "realtime"
-        device: 'roboflow-cloud',
+        mode: 'realtime',
+        device: 'roboflow-serverless',
         latencyMs,
-        workflowId: ROBOFLOW_SAM3_WORKFLOW_ID,
       });
     } else {
       console.warn('Roboflow API returned non-OK status:', response.status);
@@ -63,7 +58,6 @@ export async function GET(): Promise<NextResponse<SAM3HealthResponse>> {
         mode: 'unavailable',
         device: null,
         latencyMs,
-        workflowId: null,
       });
     }
   } catch (error) {
@@ -74,7 +68,6 @@ export async function GET(): Promise<NextResponse<SAM3HealthResponse>> {
       mode: 'unavailable',
       device: null,
       latencyMs: null,
-      workflowId: null,
     });
   }
 }
