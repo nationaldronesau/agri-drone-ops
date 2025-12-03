@@ -5,11 +5,26 @@ import { useParams, useRouter } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Save, Trash2, Check, X, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
+import { ArrowLeft, Save, Trash2, Check, X, ZoomIn, ZoomOut, RotateCcw, Wand2, Pencil, Undo2, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+
+// SAM3 types
+interface SAM3HealthResponse {
+  available: boolean;
+  mode: 'realtime' | 'degraded' | 'loading' | 'unavailable';
+  device: 'cuda' | 'mps' | 'cpu' | 'roboflow-cloud' | null;
+  latencyMs: number | null;
+  workflowId?: string | null;
+}
+
+interface SAM3Point {
+  x: number;
+  y: number;
+  label: 0 | 1;  // 0 = background, 1 = foreground
+}
 
 function hexToRgba(hex: string, alpha: number): string {
   const normalized = hex.replace("#", "");
@@ -113,7 +128,15 @@ export default function AnnotatePage() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [bulkAction, setBulkAction] = useState<"accept" | "reject" | null>(null);
-  
+
+  // SAM3 state
+  const [annotationMode, setAnnotationMode] = useState<'sam3' | 'manual'>('sam3');
+  const [sam3Health, setSam3Health] = useState<SAM3HealthResponse | null>(null);
+  const [sam3Points, setSam3Points] = useState<SAM3Point[]>([]);
+  const [sam3PreviewPolygon, setSam3PreviewPolygon] = useState<[number, number][] | null>(null);
+  const [sam3Loading, setSam3Loading] = useState(false);
+  const [sam3Score, setSam3Score] = useState<number | null>(null);
+
   // Annotation form state
   const [weedType, setWeedType] = useState(WEED_TYPES[0]);
   const [confidence, setConfidence] = useState("LIKELY");
@@ -183,6 +206,134 @@ export default function AnnotatePage() {
       loadSession();
     }
   }, [assetId]);
+
+  // Check SAM3 service health on mount
+  useEffect(() => {
+    const checkSam3Health = async () => {
+      try {
+        const response = await fetch('/api/sam3/health');
+        const data: SAM3HealthResponse = await response.json();
+        setSam3Health(data);
+
+        // If SAM3 is unavailable, default to manual mode
+        if (!data.available) {
+          setAnnotationMode('manual');
+        }
+      } catch (error) {
+        console.log('SAM3 service not available:', error);
+        setSam3Health({
+          available: false,
+          mode: 'unavailable',
+          device: null,
+          latencyMs: null,
+        });
+        setAnnotationMode('manual');
+      }
+    };
+
+    checkSam3Health();
+  }, []);
+
+  // SAM3 prediction function
+  const runSam3Prediction = useCallback(async (points: SAM3Point[]) => {
+    if (!session?.asset?.id || points.length === 0) return;
+
+    try {
+      setSam3Loading(true);
+
+      const response = await fetch('/api/sam3/predict', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assetId: session.asset.id,
+          points: points,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'SAM3 prediction failed');
+      }
+
+      const result = await response.json();
+
+      if (result.success && result.polygon) {
+        setSam3PreviewPolygon(result.polygon);
+        setSam3Score(result.score);
+      } else {
+        console.warn('SAM3 returned no polygon');
+        setSam3PreviewPolygon(null);
+        setSam3Score(null);
+      }
+    } catch (error) {
+      console.error('SAM3 prediction error:', error);
+      // Don't show error - just clear preview
+      setSam3PreviewPolygon(null);
+      setSam3Score(null);
+    } finally {
+      setSam3Loading(false);
+    }
+  }, [session?.asset?.id]);
+
+  // Accept SAM3 prediction as annotation
+  const acceptSam3Prediction = async () => {
+    if (!session || !sam3PreviewPolygon || sam3PreviewPolygon.length < 3) {
+      alert('No valid SAM3 prediction to accept');
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/annotations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: session.id,
+          weedType,
+          confidence,
+          coordinates: sam3PreviewPolygon,
+          notes: notes.trim() || undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save annotation');
+      }
+
+      const newAnnotation = await response.json();
+      setAnnotations(prev => [...prev, newAnnotation]);
+
+      // Reset SAM3 state
+      setSam3Points([]);
+      setSam3PreviewPolygon(null);
+      setSam3Score(null);
+      setNotes("");
+      setWeedType(WEED_TYPES[0]);
+      setConfidence("LIKELY");
+    } catch (err) {
+      alert('Failed to save annotation: ' + (err instanceof Error ? err.message : 'Unknown error'));
+    }
+  };
+
+  // Clear SAM3 points and preview
+  const clearSam3 = () => {
+    setSam3Points([]);
+    setSam3PreviewPolygon(null);
+    setSam3Score(null);
+  };
+
+  // Undo last SAM3 point
+  const undoSam3Point = () => {
+    if (sam3Points.length === 0) return;
+    const newPoints = sam3Points.slice(0, -1);
+    setSam3Points(newPoints);
+
+    if (newPoints.length > 0) {
+      runSam3Prediction(newPoints);
+    } else {
+      setSam3PreviewPolygon(null);
+      setSam3Score(null);
+    }
+  };
 
   const fetchAiDetections = useCallback(async () => {
     if (!assetId) return;
@@ -328,28 +479,28 @@ export default function AnnotatePage() {
       }
     });
     
-    // Draw current polygon being drawn
-    if (currentPolygon.points.length > 0) {
+    // Draw current polygon being drawn (manual mode)
+    if (annotationMode === 'manual' && currentPolygon.points.length > 0) {
       ctx.strokeStyle = '#0080FF';
       ctx.fillStyle = 'rgba(0, 128, 255, 0.1)';
       ctx.lineWidth = 2 / zoomLevel; // Adjust line width for zoom
-      
+
       if (currentPolygon.points.length > 2) {
         ctx.beginPath();
         const [startX, startY] = currentPolygon.points[0];
         ctx.moveTo(startX * scale, startY * scale);
-        
+
         currentPolygon.points.forEach(([x, y]) => {
           ctx.lineTo(x * scale, y * scale);
         });
-        
+
         if (currentPolygon.isComplete) {
           ctx.closePath();
           ctx.fill();
         }
         ctx.stroke();
       }
-      
+
       // Draw points - adjust size for zoom
       currentPolygon.points.forEach(([x, y]) => {
         ctx.fillStyle = '#0080FF';
@@ -358,10 +509,59 @@ export default function AnnotatePage() {
         ctx.fill();
       });
     }
-    
+
+    // Draw SAM3 preview polygon (SAM3 mode)
+    if (annotationMode === 'sam3' && sam3PreviewPolygon && sam3PreviewPolygon.length > 2) {
+      ctx.save();
+      ctx.setLineDash([8, 4]);
+      ctx.strokeStyle = '#3B82F6'; // Blue
+      ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
+      ctx.lineWidth = 3 / zoomLevel;
+
+      ctx.beginPath();
+      const [firstX, firstY] = sam3PreviewPolygon[0];
+      ctx.moveTo(firstX * scale, firstY * scale);
+
+      sam3PreviewPolygon.forEach(([x, y]) => {
+        ctx.lineTo(x * scale, y * scale);
+      });
+
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Draw SAM3 click points
+    if (annotationMode === 'sam3' && sam3Points.length > 0) {
+      sam3Points.forEach((point) => {
+        // Foreground = green, Background = red
+        const color = point.label === 1 ? '#22C55E' : '#EF4444';
+        const innerColor = point.label === 1 ? '#16A34A' : '#DC2626';
+
+        // Outer circle
+        ctx.beginPath();
+        ctx.fillStyle = color;
+        ctx.arc(point.x * scale, point.y * scale, 8 / zoomLevel, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // Inner circle
+        ctx.beginPath();
+        ctx.fillStyle = innerColor;
+        ctx.arc(point.x * scale, point.y * scale, 4 / zoomLevel, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // White center dot
+        ctx.beginPath();
+        ctx.fillStyle = '#FFFFFF';
+        ctx.arc(point.x * scale, point.y * scale, 2 / zoomLevel, 0, 2 * Math.PI);
+        ctx.fill();
+      });
+    }
+
     // Restore context
     ctx.restore();
-  }, [annotations, currentPolygon, selectedAnnotation, scale, imageLoaded, zoomLevel, panOffset, aiSuggestions, showAiSuggestions]);
+  }, [annotations, currentPolygon, selectedAnnotation, scale, imageLoaded, zoomLevel, panOffset, aiSuggestions, showAiSuggestions, annotationMode, sam3Points, sam3PreviewPolygon]);
 
   // Redraw when dependencies change
   useEffect(() => {
@@ -425,44 +625,89 @@ export default function AnnotatePage() {
   // Handle canvas clicks
   const handleCanvasClick = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
-    if (!canvas || currentPolygon.isComplete || isPanning) return;
-    
+    if (!canvas || isPanning) return;
+
     // Don't add points if shift is held (panning mode)
     if (event.shiftKey) return;
-    
+
     const rect = canvas.getBoundingClientRect();
-    
+
     // Get click position relative to canvas
     const canvasX = event.clientX - rect.left;
     const canvasY = event.clientY - rect.top;
-    
+
     // Convert to image coordinates accounting for zoom and pan
-    // Apply the inverse transformation that we apply in drawing
     const x = (canvasX - panOffset.x) / (scale * zoomLevel);
     const y = (canvasY - panOffset.y) / (scale * zoomLevel);
-    
+
+    // SAM3 mode handling
+    if (annotationMode === 'sam3') {
+      // Left click = foreground (1), Right click handled by context menu
+      const newPoint: SAM3Point = {
+        x: Math.round(x),
+        y: Math.round(y),
+        label: 1, // Foreground
+      };
+
+      const newPoints = [...sam3Points, newPoint];
+      setSam3Points(newPoints);
+      runSam3Prediction(newPoints);
+      return;
+    }
+
+    // Manual mode handling
+    if (currentPolygon.isComplete) return;
+
     // Check if clicking close to first point to close polygon
     if (currentPolygon.points.length > 2) {
       const [firstX, firstY] = currentPolygon.points[0];
       const distance = Math.sqrt((x - firstX) ** 2 + (y - firstY) ** 2);
-      
+
       if (distance < 10 / (scale * zoomLevel)) {
         // Close polygon
         setCurrentPolygon(prev => ({ ...prev, isComplete: true }));
         return;
       }
     }
-    
+
     // Add new point
     setCurrentPolygon(prev => ({
       ...prev,
       points: [...prev.points, [x, y]]
     }));
-    
+
     if (!isDrawing) {
       setIsDrawing(true);
     }
-  }, [currentPolygon.points, currentPolygon.isComplete, isDrawing, scale, zoomLevel, panOffset, isPanning]);
+  }, [currentPolygon.points, currentPolygon.isComplete, isDrawing, scale, zoomLevel, panOffset, isPanning, annotationMode, sam3Points, runSam3Prediction]);
+
+  // Handle right-click for SAM3 background points
+  const handleCanvasContextMenu = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
+    event.preventDefault();
+
+    if (annotationMode !== 'sam3' || isPanning) return;
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const canvasX = event.clientX - rect.left;
+    const canvasY = event.clientY - rect.top;
+
+    const x = (canvasX - panOffset.x) / (scale * zoomLevel);
+    const y = (canvasY - panOffset.y) / (scale * zoomLevel);
+
+    // Right click = background point (label=0)
+    const newPoint: SAM3Point = {
+      x: Math.round(x),
+      y: Math.round(y),
+      label: 0, // Background
+    };
+
+    const newPoints = [...sam3Points, newPoint];
+    setSam3Points(newPoints);
+    runSam3Prediction(newPoints);
+  }, [annotationMode, isPanning, panOffset, scale, zoomLevel, sam3Points, runSam3Prediction]);
 
   // Save annotation
   const saveAnnotation = async () => {
@@ -772,16 +1017,79 @@ export default function AnnotatePage() {
           <div className="lg:col-span-2">
             <Card>
               <CardHeader>
-                <CardTitle>Manual Annotation - {session.asset.fileName}</CardTitle>
-                <CardDescription>
-                  Click to draw polygon points. Close the polygon by clicking near the first point.
-                </CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Annotation - {session.asset.fileName}</CardTitle>
+                    <CardDescription>
+                      {annotationMode === 'sam3'
+                        ? 'Left-click to mark object, Right-click to exclude. Click Accept when satisfied.'
+                        : 'Click to draw polygon points. Close the polygon by clicking near the first point.'}
+                    </CardDescription>
+                  </div>
+                  {/* Mode Toggle */}
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant={annotationMode === 'sam3' ? 'default' : 'outline'}
+                      onClick={() => {
+                        setAnnotationMode('sam3');
+                        cancelDrawing();
+                      }}
+                      disabled={!sam3Health?.available}
+                      className={annotationMode === 'sam3' ? 'bg-blue-500 hover:bg-blue-600' : ''}
+                    >
+                      <Wand2 className="w-4 h-4 mr-1" />
+                      AI Segment
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={annotationMode === 'manual' ? 'default' : 'outline'}
+                      onClick={() => {
+                        setAnnotationMode('manual');
+                        clearSam3();
+                      }}
+                      className={annotationMode === 'manual' ? 'bg-orange-500 hover:bg-orange-600' : ''}
+                    >
+                      <Pencil className="w-4 h-4 mr-1" />
+                      Manual
+                    </Button>
+                  </div>
+                </div>
               </CardHeader>
               <CardContent>
+                {/* SAM3 Status Indicator */}
+                {sam3Health && (
+                  <div className={`mb-4 p-3 rounded-lg border ${
+                    sam3Health.available
+                      ? sam3Health.mode === 'realtime' ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'
+                      : 'bg-red-50 border-red-200'
+                  }`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className={`w-2 h-2 rounded-full ${
+                          sam3Health.available
+                            ? sam3Health.mode === 'realtime' ? 'bg-green-500' : 'bg-yellow-500'
+                            : 'bg-red-500'
+                        }`} />
+                        <span className="text-sm font-medium">
+                          {sam3Health.available
+                            ? `SAM3 Ready (${sam3Health.device === 'roboflow-cloud' ? 'Roboflow Cloud' : sam3Health.device?.toUpperCase() || 'CPU'})`
+                            : 'SAM3 Unavailable'}
+                        </span>
+                      </div>
+                      <span className="text-xs text-gray-500">
+                        {sam3Health.mode === 'realtime' && 'Real-time inference'}
+                        {sam3Health.mode === 'degraded' && 'Slow inference (CPU)'}
+                        {sam3Health.mode === 'unavailable' && 'Using manual mode'}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
                 {/* Zoom and Pan Controls */}
                 <div className="flex items-center justify-between mb-4 p-3 bg-gray-50 rounded-lg border">
                   <div className="flex items-center space-x-2">
-                    <span className="text-sm font-medium text-gray-700">View Controls:</span>
+                    <span className="text-sm font-medium text-gray-700">View:</span>
                     <Button size="sm" variant="outline" onClick={handleZoomIn} title="Zoom In">
                       <ZoomIn className="w-4 h-4" />
                     </Button>
@@ -793,7 +1101,7 @@ export default function AnnotatePage() {
                     </Button>
                   </div>
                   <div className="text-xs text-gray-500">
-                    Zoom: {Math.round(zoomLevel * 100)}% | Shift+Click to Pan
+                    {Math.round(zoomLevel * 100)}% | Shift+Click to Pan
                   </div>
                 </div>
                 
@@ -812,6 +1120,7 @@ export default function AnnotatePage() {
                   <canvas
                     ref={canvasRef}
                     onClick={handleCanvasClick}
+                    onContextMenu={handleCanvasContextMenu}
                     onMouseDown={handleMouseDown}
                     onMouseMove={handleMouseMove}
                     onMouseUp={handleMouseUp}
@@ -831,11 +1140,76 @@ export default function AnnotatePage() {
                   )}
                 </div>
                 
-                {/* Drawing Controls */}
-                {isDrawing && (
+                {/* SAM3 Controls */}
+                {annotationMode === 'sam3' && (sam3Points.length > 0 || sam3Loading) && (
                   <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
                     <div className="flex items-center justify-between">
-                      <p className="text-blue-800">
+                      <div className="flex items-center gap-3">
+                        {sam3Loading ? (
+                          <div className="flex items-center gap-2">
+                            <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                            <span className="text-blue-800">Processing...</span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <span className="text-blue-800">
+                              {sam3Points.length} point{sam3Points.length !== 1 ? 's' : ''} placed
+                            </span>
+                            {sam3Score !== null && (
+                              <Badge variant="outline" className="bg-white">
+                                {Math.round(sam3Score * 100)}% confidence
+                              </Badge>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={undoSam3Point}
+                          disabled={sam3Points.length === 0 || sam3Loading}
+                        >
+                          <Undo2 className="w-4 h-4 mr-1" />
+                          Undo
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={clearSam3}
+                          disabled={sam3Loading}
+                        >
+                          <X className="w-4 h-4 mr-1" />
+                          Clear
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={acceptSam3Prediction}
+                          disabled={!sam3PreviewPolygon || sam3Loading}
+                          className="bg-green-500 hover:bg-green-600"
+                        >
+                          <Check className="w-4 h-4 mr-1" />
+                          Accept
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="mt-2 text-xs text-blue-600">
+                      <span className="inline-flex items-center gap-1">
+                        <span className="w-3 h-3 rounded-full bg-green-500"></span> Left-click = include
+                      </span>
+                      <span className="mx-3">|</span>
+                      <span className="inline-flex items-center gap-1">
+                        <span className="w-3 h-3 rounded-full bg-red-500"></span> Right-click = exclude
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Manual Drawing Controls */}
+                {annotationMode === 'manual' && isDrawing && (
+                  <div className="mt-4 p-4 bg-orange-50 rounded-lg border border-orange-200">
+                    <div className="flex items-center justify-between">
+                      <p className="text-orange-800">
                         Drawing polygon... {currentPolygon.points.length} points
                         {currentPolygon.points.length > 2 && " (click first point to close)"}
                       </p>
@@ -996,7 +1370,14 @@ export default function AnnotatePage() {
             {/* Current Annotation Form */}
             <Card>
               <CardHeader>
-                <CardTitle>New Annotation</CardTitle>
+                <CardTitle>
+                  {annotationMode === 'sam3' ? 'SAM3 Annotation' : 'New Annotation'}
+                </CardTitle>
+                <CardDescription>
+                  {annotationMode === 'sam3'
+                    ? 'Click on the image to segment, then fill details below'
+                    : 'Draw a polygon on the image, then fill details below'}
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div>
@@ -1012,7 +1393,7 @@ export default function AnnotatePage() {
                     </SelectContent>
                   </Select>
                 </div>
-                
+
                 <div>
                   <Label htmlFor="confidence">Confidence Level</Label>
                   <Select value={confidence} onValueChange={setConfidence}>
@@ -1028,7 +1409,7 @@ export default function AnnotatePage() {
                     </SelectContent>
                   </Select>
                 </div>
-                
+
                 <div>
                   <Label htmlFor="notes">Notes (Optional)</Label>
                   <Textarea
@@ -1039,15 +1420,39 @@ export default function AnnotatePage() {
                     rows={2}
                   />
                 </div>
-                
-                <Button
-                  onClick={saveAnnotation}
-                  disabled={!currentPolygon.isComplete || currentPolygon.points.length < 3}
-                  className="w-full"
-                >
-                  <Save className="w-4 h-4 mr-2" />
-                  Save Annotation
-                </Button>
+
+                {/* SAM3 mode button */}
+                {annotationMode === 'sam3' && (
+                  <Button
+                    onClick={acceptSam3Prediction}
+                    disabled={!sam3PreviewPolygon || sam3Loading}
+                    className="w-full bg-blue-500 hover:bg-blue-600"
+                  >
+                    {sam3Loading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <Wand2 className="w-4 h-4 mr-2" />
+                        Accept AI Segmentation
+                      </>
+                    )}
+                  </Button>
+                )}
+
+                {/* Manual mode button */}
+                {annotationMode === 'manual' && (
+                  <Button
+                    onClick={saveAnnotation}
+                    disabled={!currentPolygon.isComplete || currentPolygon.points.length < 3}
+                    className="w-full"
+                  >
+                    <Save className="w-4 h-4 mr-2" />
+                    Save Annotation
+                  </Button>
+                )}
               </CardContent>
             </Card>
 

@@ -1,0 +1,37 @@
+# Docker Compose for SAM3 Service
+# Supports both GPU (NVIDIA) and CPU-only modes
+
+services:
+  sam3-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sam3-service
+    ports:
+      - "8000:8000"
+    environment:
+      - PRELOAD_MODEL=true
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:3001
+      - HF_TOKEN=${HF_TOKEN:-}
+    volumes:
+      # Persist HuggingFace model cache to avoid re-downloading
+      - sam3-model-cache:/app/.cache/huggingface
+    # GPU support - comment out if running CPU-only
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/ready"]
+      interval: 30s
+      timeout: 30s
+      start_period: 120s  # Model loading can take 1-2 minutes
+      retries: 3
+
+volumes:
+  sam3-model-cache:
+    driver: local

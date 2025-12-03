@@ -21,6 +21,38 @@ services:
       - /app/.next
     command: npm run dev
 
+  # SAM3 Segmentation Service (OPTIONAL - use Roboflow Cloud instead)
+  # Uncomment this section if you want to self-host SAM3 instead of using Roboflow
+  # sam3-service:
+  #   build:
+  #     context: ./services/sam3-service
+  #     dockerfile: Dockerfile
+  #   container_name: sam3-service
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     - PRELOAD_MODEL=true
+  #     - CORS_ORIGINS=http://localhost:3000,http://localhost:3001
+  #     - HF_TOKEN=${HF_TOKEN:-}
+  #   volumes:
+  #     - sam3-model-cache:/app/.cache/huggingface
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/ready"]
+  #     interval: 30s
+  #     timeout: 30s
+  #     start_period: 120s
+  #     retries: 3
+  #   networks:
+  #     - agridrone-network
+
   # Prisma Studio for database management
   prisma-studio:
     image: node:20-alpine
@@ -38,3 +70,7 @@ services:
       - agridrone-network
     profiles:
       - tools
+
+# Uncomment if using self-hosted SAM3 service
+# volumes:
+#   sam3-model-cache:
