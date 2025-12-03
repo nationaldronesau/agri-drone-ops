@@ -135,6 +135,7 @@ export default function AnnotatePage() {
   const [sam3PreviewPolygon, setSam3PreviewPolygon] = useState<[number, number][] | null>(null);
   const [sam3Loading, setSam3Loading] = useState(false);
   const [sam3Score, setSam3Score] = useState<number | null>(null);
+  const [sam3Error, setSam3Error] = useState<string | null>(null);
 
   // Annotation form state
   const [weedType, setWeedType] = useState(WEED_TYPES[0]);
@@ -211,12 +212,17 @@ export default function AnnotatePage() {
     const checkSam3Health = async () => {
       try {
         const response = await fetch('/api/sam3/health');
-        const data: SAM3HealthResponse = await response.json();
+        const data: SAM3HealthResponse & { error?: string } = await response.json();
         setSam3Health(data);
 
-        // If SAM3 is unavailable, default to manual mode
+        // If SAM3 is unavailable, default to manual mode and show error
         if (!data.available) {
           setAnnotationMode('manual');
+          if (data.error) {
+            setSam3Error(data.error);
+          }
+        } else {
+          setSam3Error(null);
         }
       } catch (error) {
         console.log('SAM3 service not available:', error);
@@ -227,6 +233,7 @@ export default function AnnotatePage() {
           latencyMs: null,
         });
         setAnnotationMode('manual');
+        setSam3Error('Unable to connect to SAM3 service');
       }
     };
 
@@ -239,6 +246,7 @@ export default function AnnotatePage() {
 
     try {
       setSam3Loading(true);
+      setSam3Error(null);
 
       const response = await fetch('/api/sam3/predict', {
         method: 'POST',
@@ -249,9 +257,21 @@ export default function AnnotatePage() {
         }),
       });
 
+      // Handle rate limiting with user-friendly message
+      if (response.status === 429) {
+        const retryAfter = response.headers.get('Retry-After');
+        const waitTime = retryAfter ? `${retryAfter} seconds` : 'a moment';
+        setSam3Error(`Rate limit reached. Please wait ${waitTime} and try again.`);
+        return;
+      }
+
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || 'SAM3 prediction failed');
+        const errorMsg = errorData.error || 'SAM3 prediction failed';
+        setSam3Error(errorMsg);
+        setSam3PreviewPolygon(null);
+        setSam3Score(null);
+        return;
       }
 
       const result = await response.json();
@@ -259,14 +279,16 @@ export default function AnnotatePage() {
       if (result.success && result.polygon) {
         setSam3PreviewPolygon(result.polygon);
         setSam3Score(result.score);
+        setSam3Error(null);
       } else {
         console.warn('SAM3 returned no polygon');
         setSam3PreviewPolygon(null);
         setSam3Score(null);
+        // Not an error - just no detection at that point
       }
     } catch (error) {
       console.error('SAM3 prediction error:', error);
-      // Don't show error - just clear preview
+      setSam3Error('Connection error. Please check your network.');
       setSam3PreviewPolygon(null);
       setSam3Score(null);
     } finally {
@@ -318,6 +340,7 @@ export default function AnnotatePage() {
     setSam3Points([]);
     setSam3PreviewPolygon(null);
     setSam3Score(null);
+    setSam3Error(null);
   };
 
   // Undo last SAM3 point
@@ -1082,6 +1105,26 @@ export default function AnnotatePage() {
                         {sam3Health.mode === 'unavailable' && 'Using manual mode'}
                       </span>
                     </div>
+                    {/* Show error details when SAM3 unavailable */}
+                    {!sam3Health.available && sam3Error && (
+                      <p className="mt-2 text-xs text-red-600">{sam3Error}</p>
+                    )}
+                  </div>
+                )}
+
+                {/* SAM3 Prediction Error */}
+                {sam3Health?.available && sam3Error && (
+                  <div className="mb-4 p-3 rounded-lg border bg-amber-50 border-amber-200">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full bg-amber-500" />
+                      <span className="text-sm text-amber-800">{sam3Error}</span>
+                    </div>
+                    <button
+                      onClick={() => setSam3Error(null)}
+                      className="mt-1 text-xs text-amber-600 hover:text-amber-800 underline"
+                    >
+                      Dismiss
+                    </button>
                   </div>
                 )}
 

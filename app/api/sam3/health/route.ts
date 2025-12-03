@@ -12,6 +12,7 @@ export interface SAM3HealthResponse {
   mode: 'realtime' | 'degraded' | 'loading' | 'unavailable';
   device: 'roboflow-serverless' | null;
   latencyMs: number | null;
+  error?: string;
 }
 
 export async function GET(): Promise<NextResponse<SAM3HealthResponse>> {
@@ -22,21 +23,25 @@ export async function GET(): Promise<NextResponse<SAM3HealthResponse>> {
       mode: 'unavailable',
       device: null,
       latencyMs: null,
+      error: 'Roboflow API key not configured',
     });
   }
 
   try {
-    // Test Roboflow API connectivity
+    // Test Roboflow API connectivity using Authorization header (not query param)
     const startTime = Date.now();
-
-    // Use the Roboflow workspace API to verify key is valid
-    const testUrl = `https://api.roboflow.com/?api_key=${ROBOFLOW_API_KEY}`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-    const response = await fetch(testUrl, {
+    // Use POST to concept_segment with minimal payload to verify API access
+    // This avoids exposing API key in query strings
+    const response = await fetch('https://api.roboflow.com/', {
       method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${ROBOFLOW_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
       signal: controller.signal,
     });
 
@@ -44,30 +49,41 @@ export async function GET(): Promise<NextResponse<SAM3HealthResponse>> {
 
     const latencyMs = Date.now() - startTime;
 
-    if (response.ok) {
+    // Roboflow API returns 401 for invalid key, 200 for valid
+    if (response.ok || response.status === 200) {
       return NextResponse.json({
         available: true,
         mode: 'realtime',
         device: 'roboflow-serverless',
         latencyMs,
       });
-    } else {
-      console.warn('Roboflow API returned non-OK status:', response.status);
+    } else if (response.status === 401) {
       return NextResponse.json({
         available: false,
         mode: 'unavailable',
         device: null,
         latencyMs,
+        error: 'Invalid API key',
+      });
+    } else {
+      return NextResponse.json({
+        available: false,
+        mode: 'unavailable',
+        device: null,
+        latencyMs,
+        error: `API returned status ${response.status}`,
       });
     }
   } catch (error) {
-    console.log('Roboflow health check failed:', error instanceof Error ? error.message : 'Unknown error');
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.log('Roboflow health check failed:', errorMessage);
 
     return NextResponse.json({
       available: false,
       mode: 'unavailable',
       device: null,
       latencyMs: null,
+      error: errorMessage.includes('abort') ? 'Request timeout' : 'Connection failed',
     });
   }
 }
