@@ -12,11 +12,29 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 
 // SAM3 types
+interface SAM3StatusResponse {
+  aws: {
+    configured: boolean;
+    state: string;
+    ready: boolean;
+    gpuAvailable?: boolean;
+    modelLoaded?: boolean;
+  };
+  roboflow: {
+    configured: boolean;
+    ready: boolean;
+  };
+  preferredBackend: 'aws' | 'roboflow' | 'none';
+  funMessage?: string;
+}
+
 interface SAM3HealthResponse {
   available: boolean;
   mode: 'realtime' | 'degraded' | 'loading' | 'unavailable';
-  device: 'cuda' | 'mps' | 'cpu' | 'roboflow-cloud' | 'roboflow-serverless' | null;
+  device: 'cuda' | 'mps' | 'cpu' | 'roboflow-cloud' | 'roboflow-serverless' | 'aws-gpu' | null;
   latencyMs: number | null;
+  backend?: 'aws' | 'roboflow';
+  funMessage?: string;
 }
 
 interface SAM3Point {
@@ -146,11 +164,14 @@ export default function AnnotatePage() {
   // SAM3 state
   const [annotationMode, setAnnotationMode] = useState<'sam3' | 'manual' | 'box-exemplar'>('sam3');
   const [sam3Health, setSam3Health] = useState<SAM3HealthResponse | null>(null);
+  const [sam3Status, setSam3Status] = useState<SAM3StatusResponse | null>(null);
   const [sam3Points, setSam3Points] = useState<SAM3Point[]>([]);
   const [sam3PreviewPolygon, setSam3PreviewPolygon] = useState<[number, number][] | null>(null);
   const [sam3Loading, setSam3Loading] = useState(false);
   const [sam3Score, setSam3Score] = useState<number | null>(null);
   const [sam3Error, setSam3Error] = useState<string | null>(null);
+  const [sam3Backend, setSam3Backend] = useState<'aws' | 'roboflow' | null>(null);
+  const [sam3StartupMessage, setSam3StartupMessage] = useState<string | null>(null);
 
   // Box exemplar state for few-shot detection
   const [boxExemplars, setBoxExemplars] = useState<BoxExemplar[]>([]);
@@ -230,22 +251,41 @@ export default function AnnotatePage() {
     }
   }, [assetId]);
 
-  // Check SAM3 service health on mount
+  // Check SAM3 service status on mount
   useEffect(() => {
-    const checkSam3Health = async () => {
+    const checkSam3Status = async () => {
       try {
-        const response = await fetch('/api/sam3/health');
-        const data: SAM3HealthResponse & { error?: string } = await response.json();
-        setSam3Health(data);
+        const response = await fetch('/api/sam3/status');
+        const status: SAM3StatusResponse = await response.json();
+        setSam3Status(status);
 
-        // If SAM3 is unavailable, default to manual mode and show error
-        if (!data.available) {
+        // Determine availability and device from status
+        const isAvailable = status.preferredBackend !== 'none';
+        const device = status.aws.ready
+          ? 'aws-gpu'
+          : status.roboflow.ready
+            ? 'roboflow-serverless'
+            : null;
+
+        setSam3Health({
+          available: isAvailable,
+          mode: status.aws.ready ? 'realtime' : (isAvailable ? 'degraded' : 'unavailable'),
+          device,
+          latencyMs: null,
+          backend: status.preferredBackend === 'none' ? undefined : status.preferredBackend,
+          funMessage: status.funMessage,
+        });
+
+        // If SAM3 is unavailable, default to manual mode
+        if (!isAvailable) {
           setAnnotationMode('manual');
-          if (data.error) {
-            setSam3Error(data.error);
-          }
+          setSam3Error('No SAM3 backend configured');
         } else {
           setSam3Error(null);
+          // Show fun message if AWS is starting
+          if (status.aws.configured && !status.aws.ready && status.funMessage) {
+            setSam3StartupMessage(status.funMessage);
+          }
         }
       } catch (error) {
         console.log('SAM3 service not available:', error);
@@ -260,7 +300,10 @@ export default function AnnotatePage() {
       }
     };
 
-    checkSam3Health();
+    checkSam3Status();
+    // Poll status every 10 seconds to check if AWS becomes ready
+    const interval = setInterval(checkSam3Status, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   // SAM3 prediction function
@@ -298,6 +341,18 @@ export default function AnnotatePage() {
       }
 
       const result = await response.json();
+
+      // Track which backend was used
+      if (result.backend) {
+        setSam3Backend(result.backend);
+      }
+
+      // Show startup message if AWS is starting
+      if (result.startupMessage) {
+        setSam3StartupMessage(result.startupMessage);
+      } else {
+        setSam3StartupMessage(null);
+      }
 
       if (result.success && result.polygon) {
         setSam3PreviewPolygon(result.polygon);
@@ -461,6 +516,16 @@ export default function AnnotatePage() {
       }
 
       const result = await response.json();
+
+      // Track which backend was used
+      if (result.backend) {
+        setSam3Backend(result.backend);
+      }
+
+      // Show startup message if AWS is starting
+      if (result.startupMessage) {
+        setSam3StartupMessage(result.startupMessage);
+      }
 
       if (result.success && result.detections && result.detections.length > 0) {
         // Create annotations from detections
@@ -1326,28 +1391,42 @@ export default function AnnotatePage() {
                 {sam3Health && (
                   <div className={`mb-4 p-3 rounded-lg border ${
                     sam3Health.available
-                      ? sam3Health.mode === 'realtime' ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'
+                      ? sam3Health.device === 'aws-gpu' ? 'bg-green-50 border-green-200' : 'bg-blue-50 border-blue-200'
                       : 'bg-red-50 border-red-200'
                   }`}>
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <div className={`w-2 h-2 rounded-full ${
                           sam3Health.available
-                            ? sam3Health.mode === 'realtime' ? 'bg-green-500' : 'bg-yellow-500'
+                            ? sam3Health.device === 'aws-gpu' ? 'bg-green-500 animate-pulse' : 'bg-blue-500'
                             : 'bg-red-500'
                         }`} />
                         <span className="text-sm font-medium">
                           {sam3Health.available
-                            ? `SAM3 Ready (${sam3Health.device?.startsWith('roboflow') ? 'Roboflow' : sam3Health.device?.toUpperCase() || 'CPU'})`
+                            ? sam3Health.device === 'aws-gpu'
+                              ? 'SAM3 Ready (AWS GPU)'
+                              : 'SAM3 Ready (Roboflow)'
                             : 'SAM3 Unavailable'}
                         </span>
+                        {sam3Backend && (
+                          <Badge variant="outline" className="ml-2 text-xs">
+                            {sam3Backend === 'aws' ? 'AWS' : 'Roboflow'}
+                          </Badge>
+                        )}
                       </div>
                       <span className="text-xs text-gray-500">
-                        {sam3Health.mode === 'realtime' && 'Real-time inference'}
-                        {sam3Health.mode === 'degraded' && 'Slow inference (CPU)'}
+                        {sam3Health.device === 'aws-gpu' && 'GPU inference (~2s)'}
+                        {sam3Health.device === 'roboflow-serverless' && 'Serverless inference'}
                         {sam3Health.mode === 'unavailable' && 'Using manual mode'}
                       </span>
                     </div>
+                    {/* Show AWS status details */}
+                    {sam3Status?.aws.configured && !sam3Status?.aws.ready && (
+                      <div className="mt-2 flex items-center gap-2 text-sm text-amber-700">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>{sam3StartupMessage || 'Starting AWS instance...'}</span>
+                      </div>
+                    )}
                     {/* Show error details when SAM3 unavailable */}
                     {!sam3Health.available && sam3Error && (
                       <p className="mt-2 text-xs text-red-600">{sam3Error}</p>
