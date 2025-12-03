@@ -59,6 +59,12 @@ agri-drone-ops/
 │   ├── schema.prisma             # Enhanced database schema with hierarchical structure
 │   └── migrations/               # Database migrations
 ├── .github/workflows/claude.yml  # GitHub Actions for @claude mentions
+├── tools/
+│   └── sam3-annotation/          # SAM3 bulk annotation pipeline (Python)
+│       ├── click_segment.py      # Interactive click-to-segment tool
+│       ├── batch_segment.py      # Bulk processing for hundreds of images
+│       ├── export_to_roboflow.py # COCO/YOLO format export
+│       └── upload_to_roboflow.py # Roboflow upload utility
 └── CLAUDE.md                     # This file - project context
 ```
 
@@ -618,6 +624,53 @@ A desktop version of AgriDrone Ops with offline capabilities and local orthomosa
 - Week 5-6: OpenDroneMap integration
 - Week 7-8: Advanced features and optimization
 
+## 🤖 **SAM3 Bulk Annotation Pipeline (NEW)**
+
+### **Overview**
+Meta's Segment Anything Model 3 (SAM3) integrated for rapid bulk annotation of drone imagery. Enables one-click segmentation of pine saplings, weeds, and vegetation for training custom Roboflow models.
+
+### **Key Features**
+- **Interactive Annotation**: Click-to-segment tool for manual annotation
+- **Batch Processing**: Automatic segmentation of hundreds of images
+- **GPU Acceleration**: Auto-detects CUDA/MPS for 10-50x faster processing
+- **Roboflow Export**: Direct COCO/YOLO format export for training
+
+### **Tools Available**
+```
+tools/sam3-annotation/
+├── click_segment.py      # Interactive click-to-segment
+├── batch_segment.py      # Process hundreds of images
+├── export_to_roboflow.py # COCO/YOLO format export
+├── upload_to_roboflow.py # Direct Roboflow upload
+├── requirements.txt      # Python dependencies
+└── README.md             # Full documentation
+```
+
+### **Quick Start**
+```bash
+# Setup (one-time)
+cd tools/sam3-annotation
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+huggingface-cli login
+
+# Interactive annotation
+python click_segment.py /path/to/image.tif --class pine_sapling --device cuda
+
+# Batch processing (hundreds of images)
+python batch_segment.py /path/to/images --class sapling --device cuda --output ./dataset
+
+# Export to Roboflow
+python export_to_roboflow.py --annotations ./dataset/all_annotations.json --output ./roboflow_dataset
+python upload_to_roboflow.py --dataset ./roboflow_dataset --workspace national-drones --project sapling-detection
+```
+
+### **AWS GPU Instance Recommended**
+For production batch processing, use AWS GPU instances (g4dn.xlarge or g5.xlarge) for 10-50x faster processing.
+
+---
+
 ## 👥 **User Management & Organization Accounts (PLANNED)**
 
 ### **Current State**
@@ -664,7 +717,7 @@ A desktop version of AgriDrone Ops with offline capabilities and local orthomosa
 
 ---
 
-**Last Updated**: 2025-07-28 Afternoon
-**Updated By**: Claude Code Assistant - Added Docker & User Management Priorities
+**Last Updated**: 2025-12-03
+**Updated By**: Claude Code Assistant - Added SAM3 Bulk Annotation Pipeline
 
 Remember: This is an agricultural platform where accuracy matters - coordinates generated here will be used by actual spray drones in the field!
