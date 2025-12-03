@@ -1,0 +1,527 @@
+/**
+ * AWS SAM3 Service Module
+ *
+ * Manages EC2 instance lifecycle and SAM3 API interactions.
+ * Key responsibilities:
+ * - EC2 instance start/stop via AWS SDK
+ * - IP address discovery from running instances
+ * - Health check and warmup handling
+ * - Image resizing for T4 GPU memory limits (max 2048px)
+ * - Coordinate scaling for resized images
+ * - Activity tracking for auto-shutdown
+ */
+import {
+  EC2Client,
+  DescribeInstancesCommand,
+  StartInstancesCommand,
+  StopInstancesCommand,
+} from '@aws-sdk/client-ec2';
+import sharp from 'sharp';
+
+// Configuration
+const AWS_REGION = process.env.AWS_REGION || 'ap-southeast-2';
+const SAM3_INSTANCE_ID = process.env.SAM3_INSTANCE_ID;
+const SAM3_PORT = process.env.SAM3_PORT || '8000';
+const IDLE_TIMEOUT_MS = parseInt(process.env.SAM3_IDLE_TIMEOUT_MS || '3600000'); // 1 hour default
+const MAX_IMAGE_SIZE = 2048;
+const STARTUP_TIMEOUT_MS = 180000; // 3 minutes to start and warm up
+const HEALTH_CHECK_INTERVAL_MS = 5000; // Check every 5 seconds during startup
+
+// Fun loading messages for the UI
+export const FUN_LOADING_MESSAGES = [
+  'Waking up the squirrels...',
+  'Teaching hamsters to run faster...',
+  'Warming up the GPU neurons...',
+  'Convincing the AI to help...',
+  'Dusting off the neural networks...',
+  'Brewing digital coffee...',
+  'Stretching the tensors...',
+  'Polishing the pixels...',
+  'Summoning the machine spirits...',
+  'Loading weed detection spells...',
+  'Calibrating the pixel wizards...',
+  'Herding digital cats...',
+  'Spinning up the flux capacitor...',
+  'Consulting the oracle of vegetation...',
+];
+
+export type SAM3InstanceState =
+  | 'stopped'
+  | 'starting'
+  | 'running'
+  | 'warming'
+  | 'ready'
+  | 'stopping'
+  | 'error';
+
+export interface SAM3Status {
+  instanceState: SAM3InstanceState;
+  ipAddress: string | null;
+  modelLoaded: boolean;
+  gpuAvailable: boolean;
+  lastActivity: number;
+  backend: 'aws' | 'roboflow' | null;
+  funMessage: string;
+}
+
+export interface ScalingInfo {
+  originalWidth: number;
+  originalHeight: number;
+  scaledWidth: number;
+  scaledHeight: number;
+  scaleFactor: number;
+}
+
+export interface SAM3SegmentRequest {
+  image: string; // base64 encoded JPEG
+  boxes: Array<{ x1: number; y1: number; x2: number; y2: number }>;
+  className: string;
+  minSize?: number;
+  maxSize?: number | null;
+}
+
+export interface SAM3Detection {
+  bbox: [number, number, number, number];
+  area: number;
+  class_name: string;
+  confidence: number;
+}
+
+export interface SAM3SegmentResponse {
+  detections: SAM3Detection[];
+  count: number;
+  image_size: [number, number];
+}
+
+/**
+ * Singleton service for AWS EC2 SAM3 instance management
+ */
+class AWSSAM3Service {
+  private ec2Client: EC2Client | null = null;
+  private instanceIp: string | null = null;
+  private instanceState: SAM3InstanceState = 'stopped';
+  private lastActivityTime: number = 0;
+  private modelLoaded: boolean = false;
+  private gpuAvailable: boolean = false;
+  private startupPromise: Promise<boolean> | null = null;
+
+  constructor() {
+    this.initializeEC2Client();
+  }
+
+  private initializeEC2Client(): void {
+    // Only initialize if we have credentials
+    if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+      this.ec2Client = new EC2Client({
+        region: AWS_REGION,
+        credentials: {
+          accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+        },
+      });
+    } else if (SAM3_INSTANCE_ID) {
+      // Try to use default credentials (IAM role, etc.)
+      this.ec2Client = new EC2Client({ region: AWS_REGION });
+    }
+  }
+
+  /**
+   * Get a random fun loading message for the UI
+   */
+  getRandomFunMessage(): string {
+    return FUN_LOADING_MESSAGES[Math.floor(Math.random() * FUN_LOADING_MESSAGES.length)];
+  }
+
+  /**
+   * Update the last activity timestamp
+   */
+  updateActivity(): void {
+    this.lastActivityTime = Date.now();
+  }
+
+  /**
+   * Check if the instance has been idle past the timeout
+   */
+  isIdle(): boolean {
+    if (this.lastActivityTime === 0) return false;
+    if (this.instanceState !== 'ready') return false;
+    return Date.now() - this.lastActivityTime > IDLE_TIMEOUT_MS;
+  }
+
+  /**
+   * Query EC2 API to discover the current public IP of the instance
+   */
+  async discoverInstanceIp(): Promise<string | null> {
+    if (!SAM3_INSTANCE_ID || !this.ec2Client) return null;
+
+    try {
+      const command = new DescribeInstancesCommand({
+        InstanceIds: [SAM3_INSTANCE_ID],
+      });
+      const response = await this.ec2Client.send(command);
+      const instance = response.Reservations?.[0]?.Instances?.[0];
+
+      if (instance) {
+        this.instanceIp = instance.PublicIpAddress || null;
+        this.updateEC2State(instance.State?.Name);
+        console.log(`[AWS-SAM3] Instance IP: ${this.instanceIp}, State: ${instance.State?.Name}`);
+      }
+
+      return this.instanceIp;
+    } catch (error) {
+      console.error('[AWS-SAM3] Failed to discover instance IP:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Start the EC2 instance
+   */
+  async startInstance(): Promise<boolean> {
+    if (!SAM3_INSTANCE_ID || !this.ec2Client) {
+      console.error('[AWS-SAM3] Cannot start instance: not configured');
+      return false;
+    }
+
+    // If already starting, return the existing promise
+    if (this.startupPromise) {
+      console.log('[AWS-SAM3] Instance already starting, waiting...');
+      return this.startupPromise;
+    }
+
+    // If already ready, just return
+    if (this.instanceState === 'ready') {
+      console.log('[AWS-SAM3] Instance already ready');
+      return true;
+    }
+
+    this.startupPromise = this._doStartInstance();
+    try {
+      return await this.startupPromise;
+    } finally {
+      this.startupPromise = null;
+    }
+  }
+
+  private async _doStartInstance(): Promise<boolean> {
+    try {
+      console.log('[AWS-SAM3] Starting EC2 instance...');
+      this.instanceState = 'starting';
+
+      const command = new StartInstancesCommand({
+        InstanceIds: [SAM3_INSTANCE_ID!],
+      });
+      await this.ec2Client!.send(command);
+
+      // Wait for instance to be ready
+      return await this.waitForReady();
+    } catch (error) {
+      console.error('[AWS-SAM3] Failed to start instance:', error);
+      this.instanceState = 'error';
+      return false;
+    }
+  }
+
+  /**
+   * Wait for the instance to be running and the model to be ready
+   */
+  private async waitForReady(): Promise<boolean> {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < STARTUP_TIMEOUT_MS) {
+      await new Promise((resolve) => setTimeout(resolve, HEALTH_CHECK_INTERVAL_MS));
+
+      // Discover IP
+      const ip = await this.discoverInstanceIp();
+      if (!ip) {
+        console.log('[AWS-SAM3] Waiting for IP address...');
+        continue;
+      }
+
+      // Check health
+      const health = await this.checkHealth();
+      if (!health) {
+        console.log('[AWS-SAM3] Waiting for health check...');
+        continue;
+      }
+
+      // If model not loaded, warm it up
+      if (!health.modelLoaded) {
+        console.log('[AWS-SAM3] Model not loaded, warming up...');
+        this.instanceState = 'warming';
+        const warmed = await this.warmup();
+        if (warmed) {
+          console.log('[AWS-SAM3] Instance ready!');
+          this.instanceState = 'ready';
+          this.updateActivity();
+          return true;
+        }
+      } else {
+        console.log('[AWS-SAM3] Instance ready!');
+        this.instanceState = 'ready';
+        this.updateActivity();
+        return true;
+      }
+    }
+
+    console.error('[AWS-SAM3] Timeout waiting for instance to be ready');
+    this.instanceState = 'error';
+    return false;
+  }
+
+  /**
+   * Stop the EC2 instance
+   */
+  async stopInstance(): Promise<void> {
+    if (!SAM3_INSTANCE_ID || !this.ec2Client) return;
+
+    try {
+      console.log('[AWS-SAM3] Stopping EC2 instance...');
+      this.instanceState = 'stopping';
+
+      const command = new StopInstancesCommand({
+        InstanceIds: [SAM3_INSTANCE_ID],
+      });
+      await this.ec2Client.send(command);
+
+      this.instanceState = 'stopped';
+      this.instanceIp = null;
+      this.modelLoaded = false;
+      console.log('[AWS-SAM3] Instance stopped');
+    } catch (error) {
+      console.error('[AWS-SAM3] Failed to stop instance:', error);
+    }
+  }
+
+  /**
+   * Check the health of the SAM3 API
+   */
+  async checkHealth(): Promise<{ modelLoaded: boolean; gpuAvailable: boolean } | null> {
+    if (!this.instanceIp) return null;
+
+    try {
+      const response = await fetch(`http://${this.instanceIp}:${SAM3_PORT}/health`, {
+        signal: AbortSignal.timeout(5000),
+      });
+
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      this.modelLoaded = data.model_loaded === true;
+      this.gpuAvailable = data.gpu_available === true;
+
+      return {
+        modelLoaded: this.modelLoaded,
+        gpuAvailable: this.gpuAvailable,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Warm up the SAM3 model (required after instance start)
+   */
+  async warmup(): Promise<boolean> {
+    if (!this.instanceIp) return false;
+
+    try {
+      console.log('[AWS-SAM3] Warming up model...');
+      const response = await fetch(`http://${this.instanceIp}:${SAM3_PORT}/warmup`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(120000), // 2 minutes for warmup
+      });
+
+      if (!response.ok) {
+        console.error('[AWS-SAM3] Warmup failed:', response.status);
+        return false;
+      }
+
+      const data = await response.json();
+      console.log('[AWS-SAM3] Warmup complete:', data);
+      this.modelLoaded = true;
+      return true;
+    } catch (error) {
+      console.error('[AWS-SAM3] Warmup error:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Resize an image to fit within the T4 GPU memory limits
+   */
+  async resizeImage(imageBuffer: Buffer): Promise<{ buffer: Buffer; scaling: ScalingInfo }> {
+    const image = sharp(imageBuffer);
+    const metadata = await image.metadata();
+
+    const originalWidth = metadata.width || 0;
+    const originalHeight = metadata.height || 0;
+    const maxDimension = Math.max(originalWidth, originalHeight);
+
+    // If already small enough, just convert to JPEG
+    if (maxDimension <= MAX_IMAGE_SIZE) {
+      return {
+        buffer: await image.jpeg({ quality: 90 }).toBuffer(),
+        scaling: {
+          originalWidth,
+          originalHeight,
+          scaledWidth: originalWidth,
+          scaledHeight: originalHeight,
+          scaleFactor: 1.0,
+        },
+      };
+    }
+
+    // Calculate scale factor
+    const scaleFactor = MAX_IMAGE_SIZE / maxDimension;
+    const scaledWidth = Math.round(originalWidth * scaleFactor);
+    const scaledHeight = Math.round(originalHeight * scaleFactor);
+
+    console.log(
+      `[AWS-SAM3] Resizing image from ${originalWidth}x${originalHeight} to ${scaledWidth}x${scaledHeight}`
+    );
+
+    return {
+      buffer: await image.resize(scaledWidth, scaledHeight).jpeg({ quality: 90 }).toBuffer(),
+      scaling: {
+        originalWidth,
+        originalHeight,
+        scaledWidth,
+        scaledHeight,
+        scaleFactor,
+      },
+    };
+  }
+
+  /**
+   * Scale coordinates from scaled image back to original coordinates
+   */
+  scaleCoordinatesToOriginal(
+    coords: { x1: number; y1: number; x2: number; y2: number },
+    scaling: ScalingInfo
+  ): { x1: number; y1: number; x2: number; y2: number } {
+    const inverseScale = 1 / scaling.scaleFactor;
+    return {
+      x1: Math.round(coords.x1 * inverseScale),
+      y1: Math.round(coords.y1 * inverseScale),
+      x2: Math.round(coords.x2 * inverseScale),
+      y2: Math.round(coords.y2 * inverseScale),
+    };
+  }
+
+  /**
+   * Scale coordinates from original to scaled image
+   */
+  scaleCoordinatesToScaled(
+    coords: { x1: number; y1: number; x2: number; y2: number },
+    scaling: ScalingInfo
+  ): { x1: number; y1: number; x2: number; y2: number } {
+    return {
+      x1: Math.round(coords.x1 * scaling.scaleFactor),
+      y1: Math.round(coords.y1 * scaling.scaleFactor),
+      x2: Math.round(coords.x2 * scaling.scaleFactor),
+      y2: Math.round(coords.y2 * scaling.scaleFactor),
+    };
+  }
+
+  /**
+   * Call the SAM3 /segment endpoint
+   */
+  async segment(request: SAM3SegmentRequest): Promise<SAM3SegmentResponse | null> {
+    if (!this.instanceIp || this.instanceState !== 'ready') {
+      console.error('[AWS-SAM3] Cannot segment: instance not ready');
+      return null;
+    }
+
+    this.updateActivity();
+
+    try {
+      console.log(
+        `[AWS-SAM3] Calling /segment with ${request.boxes.length} boxes, class: ${request.className}`
+      );
+
+      const response = await fetch(`http://${this.instanceIp}:${SAM3_PORT}/segment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image: request.image,
+          boxes: request.boxes,
+          class_name: request.className,
+          min_size: request.minSize ?? 100,
+          max_size: request.maxSize ?? null,
+        }),
+        signal: AbortSignal.timeout(120000), // 2 minutes timeout
+      });
+
+      if (!response.ok) {
+        console.error('[AWS-SAM3] Segment failed:', response.status);
+        return null;
+      }
+
+      const result = await response.json();
+      console.log(`[AWS-SAM3] Segment returned ${result.count} detections`);
+      return result;
+    } catch (error) {
+      console.error('[AWS-SAM3] Segment error:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Check if the service is configured
+   */
+  isConfigured(): boolean {
+    return Boolean(SAM3_INSTANCE_ID && this.ec2Client);
+  }
+
+  /**
+   * Check if the instance is ready for requests
+   */
+  isReady(): boolean {
+    return this.instanceState === 'ready' && Boolean(this.instanceIp);
+  }
+
+  /**
+   * Get the current status of the service
+   */
+  getStatus(): SAM3Status {
+    return {
+      instanceState: this.instanceState,
+      ipAddress: this.instanceIp,
+      modelLoaded: this.modelLoaded,
+      gpuAvailable: this.gpuAvailable,
+      lastActivity: this.lastActivityTime,
+      backend: this.instanceState === 'ready' ? 'aws' : null,
+      funMessage: this.getRandomFunMessage(),
+    };
+  }
+
+  /**
+   * Get the instance ID for logging
+   */
+  getInstanceId(): string | undefined {
+    return SAM3_INSTANCE_ID;
+  }
+
+  /**
+   * Update internal state based on EC2 state
+   */
+  private updateEC2State(ec2State?: string): void {
+    if (ec2State === 'running') {
+      if (this.instanceState !== 'warming' && this.instanceState !== 'ready') {
+        this.instanceState = 'running';
+      }
+    } else if (ec2State === 'stopped') {
+      this.instanceState = 'stopped';
+      this.instanceIp = null;
+      this.modelLoaded = false;
+    } else if (ec2State === 'pending') {
+      this.instanceState = 'starting';
+    } else if (ec2State === 'stopping') {
+      this.instanceState = 'stopping';
+    }
+  }
+}
+
+// Export singleton instance
+export const awsSam3Service = new AWSSAM3Service();
