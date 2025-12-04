@@ -216,6 +216,102 @@ class RoboflowService {
       return file.toString('base64');
     }
   }
+
+  /**
+   * Run detection using a dynamic model endpoint (from workspace)
+   * This supports models fetched from /api/roboflow/models
+   */
+  async detectWithDynamicModel(
+    imageBase64: string,
+    model: {
+      id: string;
+      projectId: string;
+      projectName: string;
+      version: number;
+      endpoint: string;
+      classes: string[];
+    },
+    color: string = '#22c55e'
+  ): Promise<Detection[]> {
+    if (!this.apiKey) {
+      throw new Error('Roboflow API key not configured');
+    }
+
+    try {
+      // Use the direct model endpoint
+      const url = `https://detect.roboflow.com/${model.projectId}/${model.version}`;
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          api_key: this.apiKey,
+          image: imageBase64,
+          confidence: 0.4,
+          overlap: 0.3,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Roboflow API error: ${response.statusText} - ${errorText}`);
+      }
+
+      const data = await response.json();
+
+      return (data.predictions || []).map((pred: any) => ({
+        id: crypto.randomUUID(),
+        class: pred.class,
+        confidence: pred.confidence,
+        x: pred.x,
+        y: pred.y,
+        width: pred.width,
+        height: pred.height,
+        modelType: model.id,
+        modelName: model.projectName,
+        color,
+      }));
+    } catch (error) {
+      console.error(`Detection error for ${model.projectName}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Run detection on multiple dynamic models
+   */
+  async detectWithDynamicModels(
+    imageBase64: string,
+    models: Array<{
+      id: string;
+      projectId: string;
+      projectName: string;
+      version: number;
+      endpoint: string;
+      classes: string[];
+    }>,
+    colors: string[] = ['#22c55e', '#3b82f6', '#f97316', '#ec4899', '#8b5cf6']
+  ): Promise<Detection[]> {
+    if (models.length === 0) {
+      console.warn('No models provided for detection');
+      return [];
+    }
+
+    console.log(`Running detection on ${models.length} dynamic models`);
+
+    const detectionPromises = models.map((model, index) =>
+      this.detectWithDynamicModel(imageBase64, model, colors[index % colors.length])
+        .catch((error) => {
+          console.error(`Failed to run ${model.projectName} detection:`, error);
+          return [] as Detection[];
+        })
+    );
+
+    const results = await Promise.all(detectionPromises);
+    return results.flat();
+  }
 }
 
 // Export singleton instance

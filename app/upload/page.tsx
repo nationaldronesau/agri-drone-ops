@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   Card,
@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/select";
 import { AlertCircle, ArrowLeft, Brain, Upload } from "lucide-react";
 import { UppyUploader, type UploadApiResponse } from "@/components/UppyUploader";
-import { ROBOFLOW_MODELS } from "@/lib/services/roboflow";
+import { ModelSelector, type RoboflowModel } from "@/components/detection/ModelSelector";
 
 interface Project {
   id: string;
@@ -36,16 +36,27 @@ export default function UploadPage() {
   const [selectedProject, setSelectedProject] = useState<string>("");
   const [flightSession, setFlightSession] = useState<string>("");
   const [runDetection, setRunDetection] = useState<boolean>(true);
-  const [selectedModels, setSelectedModels] = useState<string[]>(() =>
-    Object.keys(ROBOFLOW_MODELS).filter(
-      (key) => !ROBOFLOW_MODELS[key as keyof typeof ROBOFLOW_MODELS].disabled,
-    ),
-  );
+  const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
+  const [availableModels, setAvailableModels] = useState<RoboflowModel[]>([]);
   const [processing, setProcessing] = useState<boolean>(false);
   const [processingError, setProcessingError] = useState<string | null>(null);
   const [uploadResponse, setUploadResponse] = useState<UploadApiResponse | null>(
     null,
   );
+
+  // Fetch available models
+  useEffect(() => {
+    fetch("/api/roboflow/models")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.models) {
+          setAvailableModels(data.models);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to load models:", error);
+      });
+  }, []);
 
   useEffect(() => {
     fetch("/api/projects")
@@ -62,23 +73,10 @@ export default function UploadPage() {
       });
   }, []);
 
-  const toggleModel = useCallback((model: string) => {
-    setSelectedModels((prev) =>
-      prev.includes(model) ? prev.filter((m) => m !== model) : [...prev, model],
-    );
-  }, []);
-
-  const detectionSummary = useMemo(() => {
-    if (!runDetection) {
-      return "AI detection disabled.";
-    }
-    return selectedModels
-      .map(
-        (model) =>
-          ROBOFLOW_MODELS[model as keyof typeof ROBOFLOW_MODELS]?.name ?? model,
-      )
-      .join(", ");
-  }, [runDetection, selectedModels]);
+  // Get selected models data for the UppyUploader
+  const selectedModelsData = availableModels.filter((m) =>
+    selectedModelIds.includes(m.id)
+  );
 
   const handleProcessingStart = useCallback(() => {
     setProcessing(true);
@@ -182,8 +180,8 @@ export default function UploadPage() {
                   </div>
                 </div>
 
-                <div className="space-y-4 rounded-lg border border-green-200 bg-green-50 p-4">
-                  <div className="flex items-center space-x-2">
+                <div className="space-y-4">
+                  <div className="flex items-center space-x-2 rounded-lg border border-green-200 bg-green-50 p-4">
                     <Checkbox
                       id="runDetection"
                       checked={runDetection}
@@ -201,44 +199,11 @@ export default function UploadPage() {
                   </div>
 
                   {runDetection && (
-                    <div className="space-y-3 pl-6">
-                      <Label className="text-sm text-gray-600">
-                        Select detection models
-                      </Label>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                        {Object.entries(ROBOFLOW_MODELS).map(([key, model]) => (
-                          <div
-                            key={key}
-                            className={`flex items-center space-x-2 ${model.disabled ? "opacity-60" : ""}`}
-                          >
-                            <Checkbox
-                              id={key}
-                              disabled={model.disabled}
-                              checked={selectedModels.includes(key)}
-                              onCheckedChange={() => toggleModel(key)}
-                            />
-                            <Label
-                              htmlFor={key}
-                              className="flex cursor-pointer items-center text-sm"
-                            >
-                              <span
-                                className="mr-2 h-3 w-3 rounded-full"
-                                style={{ backgroundColor: model.color }}
-                              />
-                              {model.name}
-                              {model.disabled && (
-                                <span className="ml-1 text-xs text-gray-500">
-                                  (coming soon)
-                                </span>
-                              )}
-                            </Label>
-                          </div>
-                        ))}
-                      </div>
-                      <p className="text-xs text-gray-500">
-                        {detectionSummary || "Select at least one model."}
-                      </p>
-                    </div>
+                    <ModelSelector
+                      selectedModels={selectedModelIds}
+                      onSelectionChange={setSelectedModelIds}
+                      disabled={!selectedProject}
+                    />
                   )}
                 </div>
               </section>
@@ -266,7 +231,7 @@ export default function UploadPage() {
                 <UppyUploader
                   projectId={selectedProject || null}
                   runDetection={runDetection}
-                  detectionModels={selectedModels}
+                  dynamicModels={selectedModelsData}
                   flightSession={flightSession}
                   disabled={!selectedProject}
                   onProcessingStart={handleProcessingStart}

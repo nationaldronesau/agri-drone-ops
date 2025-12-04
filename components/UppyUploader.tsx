@@ -38,10 +38,20 @@ type CreateMultipartResponse = {
   partSize?: number;
 };
 
+interface DynamicModel {
+  id: string;
+  projectId: string;
+  projectName: string;
+  version: number;
+  endpoint: string;
+  classes: string[];
+}
+
 interface UppyUploaderProps {
   projectId: string | null;
   runDetection: boolean;
-  detectionModels: string[];
+  detectionModels?: string[]; // Legacy: hardcoded model keys
+  dynamicModels?: DynamicModel[]; // New: dynamic models from workspace
   flightSession?: string;
   disabled?: boolean;
   onProcessingStart?: () => void;
@@ -55,7 +65,8 @@ interface UppyUploaderProps {
 export function UppyUploader({
   projectId,
   runDetection,
-  detectionModels,
+  detectionModels = [],
+  dynamicModels = [],
   flightSession,
   disabled = false,
   onProcessingStart,
@@ -68,6 +79,7 @@ export function UppyUploader({
     projectId,
     runDetection,
     detectionModels,
+    dynamicModels,
     flightSession,
     disabled,
   });
@@ -83,10 +95,11 @@ export function UppyUploader({
       projectId,
       runDetection,
       detectionModels,
+      dynamicModels,
       flightSession,
       disabled,
     };
-  }, [projectId, runDetection, detectionModels, flightSession, disabled]);
+  }, [projectId, runDetection, detectionModels, dynamicModels, flightSession, disabled]);
 
   useEffect(() => {
     callbacksRef.current = {
@@ -274,7 +287,8 @@ export function UppyUploader({
             files: filesPayload,
             projectId: settings.projectId,
             runDetection: settings.runDetection,
-            detectionModels: settings.detectionModels.join(","),
+            detectionModels: settings.detectionModels?.join(",") || "",
+            dynamicModels: settings.dynamicModels || [],
             flightSession: settings.flightSession || undefined,
           }),
         });
