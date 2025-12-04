@@ -11,7 +11,7 @@
  * - Input validation on annotation IDs and actions
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
+import prisma from '@/lib/db';
 import { getAuthenticatedUser, checkProjectAccess } from '@/lib/auth/api-auth';
 
 // GET: List pending annotations (requires auth + project access)
