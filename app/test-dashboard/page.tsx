@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Upload, Zap, Map, Plus, FolderOpen, Users, Settings, Folder, Download, Mountain } from "lucide-react";
+import { Upload, Zap, Map, Plus, FolderOpen, Users, Settings, Folder, Download, Mountain, Sparkles } from "lucide-react";
 import Link from "next/link";
 
 export default function TestDashboard() {
@@ -42,7 +42,7 @@ export default function TestDashboard() {
         </div>
 
         {/* Quick Actions */}
-        <div className="grid md:grid-cols-3 lg:grid-cols-5 gap-6 mb-8">
+        <div className="grid md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-6 mb-8">
           <Link href="/projects">
             <Card className="hover:shadow-lg transition-shadow cursor-pointer border-blue-200">
               <CardHeader className="pb-4">
@@ -129,6 +129,21 @@ export default function TestDashboard() {
               <CardContent>
                 <CardTitle className="text-lg mb-2">Orthomosaics</CardTitle>
                 <CardDescription>View stitched drone imagery</CardDescription>
+              </CardContent>
+            </Card>
+          </Link>
+
+          <Link href="/training-hub">
+            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-green-200 bg-gradient-to-br from-green-50 to-blue-50">
+              <CardHeader className="pb-4">
+                <div className="flex items-center justify-between">
+                  <Sparkles className="w-8 h-8 text-green-600" />
+                  <Plus className="w-5 h-5 text-gray-400" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <CardTitle className="text-lg mb-2">Training Hub</CardTitle>
+                <CardDescription>Train AI to detect new species</CardDescription>
               </CardContent>
             </Card>
           </Link>

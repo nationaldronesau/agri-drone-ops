@@ -272,34 +272,43 @@ model ManualAnnotation {
   sessionId       String
   weedType        String           // e.g., "Unknown Weed #1", "Suspected Lantana"
   confidence      ConfidenceLevel  @default(LIKELY)
-  
+
   // Pixel coordinates (polygon vertices)
   coordinates     Json             // [[x1,y1], [x2,y2], ...] in pixels
-  
+
   // Geographic coordinates (converted from pixels)
   geoCoordinates  Json?            // GeoJSON polygon format
   centerLat       Float?           // Center point for map display
   centerLon       Float?
-  
+
   // Additional metadata
   notes           String?
   verified        Boolean          @default(false)
   verifiedBy      String?          // User who verified
   verifiedAt      DateTime?
-  // Training integration
+
+  // Training integration - legacy (single project from env var)
   pushedToTraining Boolean         @default(false)
   pushedAt         DateTime?
   roboflowImageId  String?
 
+  // Training integration - new (project-aware)
+  roboflowProjectId   String?      // Which Roboflow project this targets
+  roboflowClassName   String?      // Class name as it appears in Roboflow
+  trainingSessionId   String?      // Link to training session workflow
+
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
-  
+
   session         AnnotationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  
+  trainingSession TrainingSession?  @relation(fields: [trainingSessionId], references: [id])
+
   @@index([sessionId])
   @@index([weedType])
   @@index([centerLat, centerLon])
   @@index([pushedToTraining])
+  @@index([roboflowProjectId])
+  @@index([trainingSessionId])
 }
 
 enum AnnotationStatus {
@@ -442,4 +451,84 @@ enum PendingAnnotationStatus {
   PENDING
   ACCEPTED
   REJECTED
+}
+
+// ============================================
+// Roboflow Training Integration Models
+// ============================================
+
+model RoboflowProject {
+  id            String   @id @default(cuid())
+  roboflowId    String   @unique  // Roboflow project ID e.g., "lantana-detection-v3"
+  workspaceId   String              // Roboflow workspace name
+  name          String              // Display name
+  type          String              // "object-detection" or "instance-segmentation"
+  annotation    String?             // Annotation group name
+
+  // Cached stats (refreshed on sync)
+  imageCount    Int      @default(0)
+  lastSyncedAt  DateTime @default(now())
+
+  // Relations
+  classes           RoboflowClass[]
+  trainingSessions  TrainingSession[]
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([roboflowId])
+  @@index([workspaceId])
+}
+
+model RoboflowClass {
+  id        String   @id @default(cuid())
+  projectId String
+  className String
+  color     String?  // For UI display consistency
+  count     Int      @default(0)  // Number of images with this class
+
+  project   RoboflowProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, className])
+  @@index([projectId])
+}
+
+model TrainingSession {
+  id                    String                 @id @default(cuid())
+  roboflowProjectId     String
+  workflowType          TrainingWorkflowType
+  status                TrainingSessionStatus  @default(IN_PROGRESS)
+
+  // Stats
+  imagesTotal           Int      @default(0)
+  imagesLabeled         Int      @default(0)
+  annotationsCreated    Int      @default(0)
+  annotationsPushed     Int      @default(0)
+
+  // Relations
+  roboflowProject       RoboflowProject @relation(fields: [roboflowProjectId], references: [id])
+  annotations           ManualAnnotation[]
+
+  createdAt             DateTime @default(now())
+  completedAt           DateTime?
+  pushedAt              DateTime?
+
+  @@index([roboflowProjectId])
+  @@index([status])
+}
+
+enum TrainingWorkflowType {
+  NEW_SPECIES
+  IMPROVE_EXISTING
+}
+
+enum TrainingSessionStatus {
+  IN_PROGRESS
+  READY_TO_PUSH
+  PUSHING
+  COMPLETED
+  FAILED
 }
