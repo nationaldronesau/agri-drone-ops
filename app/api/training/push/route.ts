@@ -4,16 +4,62 @@
  * POST - Push manual annotations to Roboflow for training
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth/config';
 import { prisma } from '@/lib/db';
 import { roboflowTrainingService } from '@/lib/services/roboflow-training';
+import { checkRateLimit } from '@/lib/utils/security';
 
 export async function POST(request: NextRequest) {
   try {
+    // Check authentication
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Rate limit training push (10 per minute per user)
+    const rateLimitKey = `training-push:${session.user.id}`;
+    const rateLimit = checkRateLimit(rateLimitKey, { maxRequests: 10, windowMs: 60000 });
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        { error: 'Rate limit exceeded. Please try again later.' },
+        {
+          status: 429,
+          headers: {
+            'X-RateLimit-Remaining': '0',
+            'X-RateLimit-Reset': rateLimit.resetTime.toString(),
+          },
+        }
+      );
+    }
+
     const body = await request.json();
     const { projectId, roboflowProjectId, trainValidSplit = 0.8 } = body;
 
     if (!projectId) {
       return NextResponse.json({ error: 'projectId is required' }, { status: 400 });
+    }
+
+    // Verify user has access to the project (through team membership)
+    const project = await prisma.project.findFirst({
+      where: {
+        id: projectId,
+        team: {
+          members: {
+            some: {
+              userId: session.user.id,
+            },
+          },
+        },
+      },
+    });
+
+    if (!project) {
+      return NextResponse.json(
+        { error: 'Project not found or access denied' },
+        { status: 403 }
+      );
     }
 
     // Get all unpushed, verified annotations for the project

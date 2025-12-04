@@ -5,13 +5,22 @@
  * POST - Add a new class to the project (local only)
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth/config';
 import { roboflowProjectsService } from '@/lib/services/roboflow-projects';
+import { checkRateLimit } from '@/lib/utils/security';
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    // Check authentication
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { id } = await params;
 
     // Check if service is configured
@@ -37,10 +46,7 @@ export async function GET(
 
     // Handle project not found specifically
     if (error instanceof Error && error.message === 'Project not found') {
-      return NextResponse.json(
-        { error: 'Project not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'Project not found' }, { status: 404 });
     }
 
     return NextResponse.json(
@@ -55,7 +61,29 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    // Check authentication
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { id } = await params;
+
+    // Rate limit class creation (10 per minute per user)
+    const rateLimitKey = `roboflow-class:${session.user.id}`;
+    const rateLimit = checkRateLimit(rateLimitKey, { maxRequests: 10, windowMs: 60000 });
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        { error: 'Rate limit exceeded. Please try again later.' },
+        {
+          status: 429,
+          headers: {
+            'X-RateLimit-Remaining': '0',
+            'X-RateLimit-Reset': rateLimit.resetTime.toString(),
+          },
+        }
+      );
+    }
 
     // Check if service is configured
     if (!roboflowProjectsService.isConfigured()) {
@@ -70,10 +98,7 @@ export async function POST(
 
     // Validate className
     if (!className || typeof className !== 'string' || className.trim().length === 0) {
-      return NextResponse.json(
-        { error: 'Class name is required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Class name is required' }, { status: 400 });
     }
 
     // Sanitize class name (lowercase, alphanumeric with hyphens/underscores)

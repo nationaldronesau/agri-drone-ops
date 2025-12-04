@@ -4,12 +4,42 @@
  * POST - Push verified/corrected AI detections to Roboflow for retraining
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth/config';
 import { prisma } from '@/lib/db';
 import { roboflowTrainingService } from '@/lib/services/roboflow-training';
 import { S3Service } from '@/lib/services/s3';
+import {
+  checkRateLimit,
+  fetchImageSafely,
+  isUrlAllowed,
+  MAX_IMAGE_SIZE,
+} from '@/lib/utils/security';
 
 export async function POST(request: NextRequest) {
   try {
+    // Check authentication
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Rate limit training push (10 per minute per user)
+    const rateLimitKey = `training-push-detections:${session.user.id}`;
+    const rateLimit = checkRateLimit(rateLimitKey, { maxRequests: 10, windowMs: 60000 });
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        { error: 'Rate limit exceeded. Please try again later.' },
+        {
+          status: 429,
+          headers: {
+            'X-RateLimit-Remaining': '0',
+            'X-RateLimit-Reset': rateLimit.resetTime.toString(),
+          },
+        }
+      );
+    }
+
     const body = await request.json();
     const {
       projectId,
@@ -25,6 +55,27 @@ export async function POST(request: NextRequest) {
 
     if (!roboflowProjectId) {
       return NextResponse.json({ error: 'roboflowProjectId is required' }, { status: 400 });
+    }
+
+    // Verify user has access to the project (through team membership)
+    const project = await prisma.project.findFirst({
+      where: {
+        id: projectId,
+        team: {
+          members: {
+            some: {
+              userId: session.user.id,
+            },
+          },
+        },
+      },
+    });
+
+    if (!project) {
+      return NextResponse.json(
+        { error: 'Project not found or access denied' },
+        { status: 403 }
+      );
     }
 
     // Build filter conditions
@@ -95,7 +146,6 @@ export async function POST(request: NextRequest) {
     const assetIds = Array.from(assetGroups.keys());
     const trainCount = Math.floor(assetIds.length * trainValidSplit);
     const trainAssetIds = assetIds.slice(0, trainCount);
-    const validAssetIds = assetIds.slice(trainCount);
 
     let successCount = 0;
     const errors: { assetId: string; error: string }[] = [];
@@ -105,27 +155,53 @@ export async function POST(request: NextRequest) {
       try {
         const split = trainAssetIds.includes(assetId) ? 'train' : 'valid';
 
-        // Get image buffer
+        // Get image buffer with security checks
         let imageBuffer: Buffer;
         if (group.asset.storageType === 's3' && group.asset.s3Key) {
+          // S3 storage is trusted
           imageBuffer = await S3Service.downloadFile(
             group.asset.s3Key,
             group.asset.s3Bucket || S3Service.bucketName
           );
-        } else {
-          const response = await fetch(group.asset.storageUrl);
-          if (!response.ok) {
-            throw new Error(`Failed to fetch image: ${response.statusText}`);
+        } else if (group.asset.storageUrl) {
+          // Validate URL for SSRF protection
+          if (!isUrlAllowed(group.asset.storageUrl)) {
+            errors.push({
+              assetId,
+              error: 'Storage URL is not from an allowed domain',
+            });
+            continue;
           }
-          const arrayBuffer = await response.arrayBuffer();
-          imageBuffer = Buffer.from(arrayBuffer);
+
+          // Fetch with size and content-type validation
+          imageBuffer = await fetchImageSafely(group.asset.storageUrl, `Asset ${assetId}`);
+        } else {
+          errors.push({
+            assetId,
+            error: 'No valid storage location for asset',
+          });
+          continue;
+        }
+
+        // Verify buffer size
+        if (imageBuffer.length > MAX_IMAGE_SIZE) {
+          errors.push({
+            assetId,
+            error: `Image exceeds maximum size of ${MAX_IMAGE_SIZE / 1024 / 1024}MB`,
+          });
+          continue;
         }
 
         const imageBase64 = imageBuffer.toString('base64');
 
         // Convert detections to annotation boxes
         const boxes = group.detections.map((detection) => {
-          const bbox = detection.boundingBox as { x: number; y: number; width: number; height: number };
+          const bbox = detection.boundingBox as {
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+          };
           return {
             x: bbox.x + bbox.width / 2,
             y: bbox.y + bbox.height / 2,
@@ -158,7 +234,7 @@ export async function POST(request: NextRequest) {
       pushed: successCount,
       failed: errors.length,
       trainCount: trainAssetIds.length,
-      validCount: validAssetIds.length,
+      validCount: assetIds.length - trainAssetIds.length,
       errors: errors.slice(0, 10),
     });
   } catch (error) {
