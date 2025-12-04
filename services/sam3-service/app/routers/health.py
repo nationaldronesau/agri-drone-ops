@@ -78,3 +78,45 @@ async def detailed_status():
             "hf_token_set": bool(predictor.settings.hf_token),
         }
     }
+
+
+@router.post("/warmup")
+async def warmup_model():
+    """
+    Warm up the SAM3 model by loading it into memory.
+
+    This is called after instance start to ensure the model is loaded
+    and ready for predictions before user requests arrive.
+    """
+    predictor = get_predictor()
+    start_time = time.time()
+
+    if predictor.model_loaded:
+        return {
+            "success": True,
+            "message": "Model already loaded",
+            "load_time_ms": predictor.load_time_ms,
+            "device": get_device(),
+        }
+
+    logger.info("Warming up SAM3 model...")
+    success = predictor.load_model()
+
+    if not success:
+        logger.error("Failed to warm up model")
+        return {
+            "success": False,
+            "message": "Failed to load model",
+            "device": get_device(),
+        }
+
+    warmup_time_ms = (time.time() - start_time) * 1000
+    logger.info(f"Model warmed up in {warmup_time_ms:.0f}ms")
+
+    return {
+        "success": True,
+        "message": "Model loaded successfully",
+        "load_time_ms": predictor.load_time_ms,
+        "warmup_time_ms": warmup_time_ms,
+        "device": get_device(),
+    }

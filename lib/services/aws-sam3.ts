@@ -368,15 +368,16 @@ class AWSSAM3Service {
     if (!this.instanceIp) return null;
 
     try {
-      const response = await fetch(`http://${this.instanceIp}:${SAM3_PORT}/health`, {
+      const response = await fetch(`http://${this.instanceIp}:${SAM3_PORT}/api/v1/health`, {
         signal: AbortSignal.timeout(5000),
       });
 
       if (!response.ok) return null;
 
       const data = await response.json();
-      this.modelLoaded = data.model_loaded === true;
-      this.gpuAvailable = data.gpu_available === true;
+      // Python service returns 'available' for model status
+      this.modelLoaded = data.available === true;
+      this.gpuAvailable = data.device === 'cuda' || data.device === 'mps';
 
       return {
         modelLoaded: this.modelLoaded,
@@ -395,7 +396,7 @@ class AWSSAM3Service {
 
     try {
       console.log('[AWS-SAM3] Warming up model...');
-      const response = await fetch(`http://${this.instanceIp}:${SAM3_PORT}/warmup`, {
+      const response = await fetch(`http://${this.instanceIp}:${SAM3_PORT}/api/v1/warmup`, {
         method: 'POST',
         signal: AbortSignal.timeout(120000), // 2 minutes for warmup
       });
@@ -407,8 +408,8 @@ class AWSSAM3Service {
 
       const data = await response.json();
       console.log('[AWS-SAM3] Warmup complete:', data);
-      this.modelLoaded = true;
-      return true;
+      this.modelLoaded = data.success === true;
+      return this.modelLoaded;
     } catch (error) {
       console.error('[AWS-SAM3] Warmup error:', error);
       return false;
