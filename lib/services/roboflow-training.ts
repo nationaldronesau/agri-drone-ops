@@ -48,29 +48,31 @@ function normalizeBase64(imageBase64: string): string {
 
 export class RoboflowTrainingService {
   private apiKey = process.env.ROBOFLOW_API_KEY;
-  private project =
+  private defaultProject =
     process.env.ROBOFLOW_TRAINING_PROJECT || process.env.ROBOFLOW_PROJECT;
   private workspace = process.env.ROBOFLOW_WORKSPACE;
   private baseUrl = "https://api.roboflow.com";
 
-  private ensureConfig() {
+  private ensureConfig(overrideProjectId?: string) {
     if (!this.apiKey) {
       throw new Error("Roboflow API key is not configured");
     }
-    if (!this.project) {
+    const project = overrideProjectId || this.defaultProject;
+    if (!project) {
       throw new Error("ROBOFLOW_TRAINING_PROJECT is not configured");
     }
+    return project;
   }
 
-  private buildDatasetPath(): string {
+  private buildDatasetPath(projectId: string): string {
     return this.workspace
-      ? `dataset/${this.workspace}/${this.project}`
-      : `dataset/${this.project}`;
+      ? `dataset/${this.workspace}/${projectId}`
+      : `dataset/${projectId}`;
   }
 
-  private buildUploadUrl(split: Split): string {
+  private buildUploadUrl(split: Split, projectId: string): string {
     const url = new URL(
-      `${this.baseUrl}/${this.buildDatasetPath()}/upload?api_key=${this.apiKey}`,
+      `${this.baseUrl}/${this.buildDatasetPath(projectId)}/upload?api_key=${this.apiKey}`,
     );
     url.searchParams.set("name", `${Date.now()}`);
     url.searchParams.set("split", split);
@@ -102,10 +104,11 @@ export class RoboflowTrainingService {
     fileName: string,
     annotations: AnnotationBox[],
     split: Split = "train",
+    overrideProjectId?: string,
   ): Promise<UploadResponse> {
-    this.ensureConfig();
+    const projectId = this.ensureConfig(overrideProjectId);
 
-    const url = this.buildUploadUrl(split);
+    const url = this.buildUploadUrl(split, projectId);
     const payload = {
       image: normalizeBase64(imageBase64),
       name: fileName,
@@ -139,8 +142,9 @@ export class RoboflowTrainingService {
   async uploadFromAnnotation(
     annotationId: string,
     split: Split = "train",
+    overrideProjectId?: string,
   ): Promise<UploadResponse> {
-    this.ensureConfig();
+    const projectId = this.ensureConfig(overrideProjectId);
 
     const annotation = await prisma.manualAnnotation.findUnique({
       where: { id: annotationId },
@@ -186,6 +190,7 @@ export class RoboflowTrainingService {
       asset.fileName,
       [box],
       split,
+      projectId,
     );
 
     await prisma.manualAnnotation.update({
@@ -203,13 +208,14 @@ export class RoboflowTrainingService {
   async uploadBatch(
     annotationIds: string[],
     split: Split = "train",
+    overrideProjectId?: string,
   ): Promise<BatchUploadResponse> {
     let success = 0;
     const errors: { id: string; error: string }[] = [];
 
     for (const id of annotationIds) {
       try {
-        await this.uploadFromAnnotation(id, split);
+        await this.uploadFromAnnotation(id, split, overrideProjectId);
         success += 1;
       } catch (error) {
         errors.push({
@@ -260,9 +266,9 @@ export class RoboflowTrainingService {
     return { id: jobId, status: "unknown" };
   }
 
-  async testConnection(): Promise<{ ok: boolean; message: string }> {
-    this.ensureConfig();
-    const url = `${this.baseUrl}/${this.buildDatasetPath()}?api_key=${this.apiKey}`;
+  async testConnection(overrideProjectId?: string): Promise<{ ok: boolean; message: string }> {
+    const projectId = this.ensureConfig(overrideProjectId);
+    const url = `${this.baseUrl}/${this.buildDatasetPath(projectId)}?api_key=${this.apiKey}`;
     const response = await fetch(url);
     if (!response.ok) {
       const text = await response.text();
