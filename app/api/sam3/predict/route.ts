@@ -26,6 +26,8 @@ const RATE_LIMIT_MAX_REQUESTS = 30; // 30 requests per minute
 // Allowed URL patterns for SSRF protection
 const ALLOWED_URL_PATTERNS = [
   /^https:\/\/[^/]+\.amazonaws\.com\//, // S3
+  /^https:\/\/[^/]+\.cloudfront\.net\//, // CloudFront
+  /^https:\/\/staticagridrone\.ndsmartdata\.com\//, // Custom CloudFront domain
   /^https:\/\/storage\.googleapis\.com\//, // GCS
   /^https:\/\/[^/]+\.blob\.core\.windows\.net\//, // Azure Blob
   /^http:\/\/localhost(:\d+)?\//, // Local development
