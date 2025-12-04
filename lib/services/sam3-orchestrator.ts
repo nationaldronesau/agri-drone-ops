@@ -15,6 +15,8 @@ const ROBOFLOW_SAM3_URL = 'https://serverless.roboflow.com/sam3/concept_segment'
 
 export interface PredictionRequest {
   imageBuffer: Buffer;
+  imageUrl?: string; // For AWS point-based predictions (more efficient - avoids double fetch)
+  assetId?: string; // For AWS image caching
   boxes?: Array<{ x1: number; y1: number; x2: number; y2: number }>;
   points?: Array<{ x: number; y: number; label: 0 | 1 }>;
   textPrompt?: string;
@@ -160,16 +162,80 @@ class SAM3Orchestrator {
 
   /**
    * Predict using AWS SAM3 instance
+   *
+   * Supports two modes:
+   * - Point-based prediction (click-to-segment): Uses /api/v1/predict endpoint
+   * - Box-based prediction (few-shot): Uses /segment endpoint
    */
   private async predictWithAWS(
     request: PredictionRequest
   ): Promise<Omit<PredictionResult, 'backend' | 'processingTimeMs'> | null> {
     try {
+      const hasPoints = request.points && request.points.length > 0;
+      const hasBoxes = request.boxes && request.boxes.length > 0;
+
+      // Point-based prediction (click-to-segment)
+      if (hasPoints && request.imageUrl && request.assetId) {
+        console.log('[Orchestrator] Using AWS point-based prediction');
+        const predictResult = await awsSam3Service.predictWithPoints({
+          imageUrl: request.imageUrl,
+          assetId: request.assetId,
+          points: request.points!,
+        });
+
+        if (!predictResult.success || !predictResult.response) {
+          console.error(`[Orchestrator] AWS predict failed: ${predictResult.error} (${predictResult.errorCode})`);
+          return {
+            success: false,
+            detections: [],
+            count: 0,
+            error: predictResult.error,
+            errorCode: predictResult.errorCode,
+          };
+        }
+
+        // Convert response to Detection format
+        const response = predictResult.response;
+        const detections: Detection[] = [];
+
+        if (response.polygon && response.polygon.length >= 3) {
+          detections.push({
+            polygon: response.polygon,
+            bbox: response.bbox || [0, 0, 0, 0],
+            score: response.score,
+            className: request.className,
+          });
+        }
+
+        return {
+          success: true,
+          detections,
+          count: detections.length,
+        };
+      }
+
+      // Box-based prediction (few-shot detection) - requires boxes
+      if (!hasBoxes) {
+        // If we have points but no imageUrl/assetId, we can't use AWS for points
+        // Return null to trigger Roboflow fallback
+        if (hasPoints) {
+          console.log('[Orchestrator] Points provided but missing imageUrl/assetId for AWS, will use fallback');
+          return null;
+        }
+        // No points, no boxes - nothing to do
+        return {
+          success: false,
+          detections: [],
+          count: 0,
+          error: 'No points or boxes provided',
+        };
+      }
+
       // Resize image for T4 GPU
       const { buffer, scaling } = await awsSam3Service.resizeImage(request.imageBuffer);
 
       // Scale boxes to the resized image coordinates
-      const boxesForAPI = (request.boxes || []).map((box) => ({
+      const boxesForAPI = request.boxes!.map((box) => ({
         x1: Math.round(box.x1 * scaling.scaleFactor),
         y1: Math.round(box.y1 * scaling.scaleFactor),
         x2: Math.round(box.x2 * scaling.scaleFactor),

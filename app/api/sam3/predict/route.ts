@@ -260,6 +260,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     // Call orchestrator for prediction (handles AWS/Roboflow fallback)
     const result = await sam3Orchestrator.predict({
       imageBuffer,
+      imageUrl, // For AWS point-based predictions (avoids double fetch)
+      assetId: body.assetId, // For AWS image caching
       boxes: hasBoxes ? body.boxes!.slice(0, 10) : undefined, // Max 10 boxes
       points: hasPoints ? body.points!.slice(0, 20) : undefined, // Max 20 points
       textPrompt: sanitizedPrompt,
