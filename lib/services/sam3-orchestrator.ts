@@ -177,6 +177,9 @@ class SAM3Orchestrator {
       // Point-based prediction (click-to-segment)
       if (hasPoints && request.imageUrl && request.assetId) {
         console.log('[Orchestrator] Using AWS point-based prediction');
+
+        // The SAM3 Python service handles image resizing internally (max 2048px)
+        // and scales coordinates automatically, so we pass original coordinates
         const predictResult = await awsSam3Service.predictWithPoints({
           imageUrl: request.imageUrl,
           assetId: request.assetId,
@@ -195,6 +198,7 @@ class SAM3Orchestrator {
         }
 
         // Convert response to Detection format
+        // Coordinates are already in original image space (Python service handles scaling)
         const response = predictResult.response;
         const detections: Detection[] = [];
 

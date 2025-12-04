@@ -46,6 +46,10 @@ async def predict(request: PredictRequest):
 
     Takes an image URL and click points, returns a simplified polygon
     representing the segmented object.
+
+    Note: Large images (>2048px) are automatically resized to prevent GPU OOM.
+    Point coordinates should be in original image space - they will be scaled
+    internally, and output coordinates are scaled back to original space.
     """
     predictor = get_predictor()
 
@@ -60,6 +64,7 @@ async def predict(request: PredictRequest):
 
     # Fetch image if not already cached
     image_id = request.assetId
+    scale_factor = 1.0
 
     # Check if we need to load a new image
     if predictor._current_image_id != image_id:
@@ -72,17 +77,24 @@ async def predict(request: PredictRequest):
                 detail="Failed to fetch image from URL"
             )
 
-        if not predictor.set_image_from_bytes(image_bytes, image_id):
+        success, scale_factor = predictor.set_image_from_bytes(image_bytes, image_id)
+        if not success:
             raise HTTPException(
                 status_code=500,
                 detail="Failed to set image for segmentation"
             )
+    else:
+        # Image already loaded, get cached scale factor
+        scale_factor = predictor.get_scale_factor()
 
-    # Convert points to format expected by predictor
-    points = [{"x": p.x, "y": p.y, "label": p.label} for p in request.points]
+    # Scale point coordinates to resized image space
+    scaled_points = [
+        {"x": int(p.x * scale_factor), "y": int(p.y * scale_factor), "label": p.label}
+        for p in request.points
+    ]
 
-    # Run prediction
-    mask, score, metadata = predictor.predict(points)
+    # Run prediction with scaled points
+    mask, score, metadata = predictor.predict(scaled_points)
 
     if mask is None:
         error_msg = metadata.get("error", "Unknown prediction error")
@@ -91,14 +103,22 @@ async def predict(request: PredictRequest):
             detail=f"Prediction failed: {error_msg}"
         )
 
-    # Convert mask to polygon
+    # Convert mask to polygon (in resized image coordinates)
     polygon = mask_to_polygon(
         mask,
         simplify_tolerance=request.simplifyTolerance
     )
 
-    # Get bounding box
+    # Get bounding box (in resized image coordinates)
     bbox = mask_to_bbox(mask)
+
+    # Scale polygon and bbox back to original image coordinates
+    if scale_factor != 1.0:
+        inverse_scale = 1.0 / scale_factor
+        if polygon:
+            polygon = [[int(x * inverse_scale), int(y * inverse_scale)] for x, y in polygon]
+        if bbox:
+            bbox = [int(coord * inverse_scale) for coord in bbox]
 
     return PredictResponse(
         success=True,
@@ -107,7 +127,7 @@ async def predict(request: PredictRequest):
         bbox=bbox,
         processingTimeMs=metadata.get("processing_time_ms", 0),
         device=metadata.get("device", "unknown"),
-        message=f"Segmentation complete with {metadata.get('points_used', 0)} points"
+        message=f"Segmentation complete with {metadata.get('points_used', 0)} points (scale: {scale_factor:.3f})"
     )
 
 

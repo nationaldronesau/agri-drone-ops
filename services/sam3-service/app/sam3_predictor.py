@@ -41,6 +41,7 @@ class SAM3Predictor:
         # Image cache
         self._current_image_id: Optional[str] = None
         self._current_image_path: Optional[str] = None
+        self._current_scale_factor: float = 1.0  # For coordinate transformation
 
         logger.info(f"SAM3Predictor initialized (device: {self.device})")
         SAM3Predictor._initialized = True
@@ -112,41 +113,73 @@ class SAM3Predictor:
             logger.error(f"Failed to set image: {e}")
             return False
 
-    def set_image_from_bytes(self, image_bytes: bytes, image_id: str) -> bool:
+    def set_image_from_bytes(
+        self,
+        image_bytes: bytes,
+        image_id: str,
+        max_dimension: int = 2048
+    ) -> Tuple[bool, float]:
         """
         Set current image from bytes (for images fetched from URLs).
+
+        Automatically resizes images larger than max_dimension to prevent
+        GPU OOM errors on T4 instances.
 
         Args:
             image_bytes: Raw image bytes
             image_id: Unique identifier for caching
+            max_dimension: Maximum dimension (width or height) before resizing
 
         Returns:
-            True if image set successfully.
+            Tuple of (success, scale_factor) where scale_factor is used to
+            transform coordinates back to original image space.
         """
         if not self.model_loaded:
             if not self.load_model():
-                return False
+                return False, 1.0
 
         # Skip if same image already loaded
         if self._current_image_id == image_id:
             logger.debug(f"Image {image_id} already loaded")
-            return True
+            return True, self._current_scale_factor
 
         try:
-            # Save to temp file (SamGeo3 expects file path)
+            from PIL import Image
+            import io
             import tempfile
+
+            # Load image to check dimensions
+            img = Image.open(io.BytesIO(image_bytes))
+            original_width, original_height = img.size
+            max_dim = max(original_width, original_height)
+
+            # Calculate scale factor
+            if max_dim > max_dimension:
+                scale_factor = max_dimension / max_dim
+                new_width = int(original_width * scale_factor)
+                new_height = int(original_height * scale_factor)
+                logger.info(
+                    f"Resizing image from {original_width}x{original_height} "
+                    f"to {new_width}x{new_height} (scale: {scale_factor:.3f})"
+                )
+                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            else:
+                scale_factor = 1.0
+
+            # Save to temp file (SamGeo3 expects file path)
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-                f.write(image_bytes)
+                img.save(f, format="PNG")
                 temp_path = f.name
 
             logger.info(f"Setting image from bytes: {image_id}")
             self.sam3.set_image(temp_path)
             self._current_image_id = image_id
             self._current_image_path = temp_path
-            return True
+            self._current_scale_factor = scale_factor
+            return True, scale_factor
         except Exception as e:
             logger.error(f"Failed to set image from bytes: {e}")
-            return False
+            return False, 1.0
 
     def predict(
         self,
@@ -212,6 +245,10 @@ class SAM3Predictor:
             logger.error(f"Prediction failed: {e}")
             return None, 0.0, {"error": str(e)}
 
+    def get_scale_factor(self) -> float:
+        """Get the current image scale factor for coordinate transformation."""
+        return self._current_scale_factor
+
     def get_status(self) -> Dict[str, Any]:
         """Get current predictor status."""
         return {
@@ -219,6 +256,7 @@ class SAM3Predictor:
             "device": self.device,
             "load_time_ms": self.load_time_ms,
             "current_image_id": self._current_image_id,
+            "scale_factor": self._current_scale_factor,
         }
 
 
