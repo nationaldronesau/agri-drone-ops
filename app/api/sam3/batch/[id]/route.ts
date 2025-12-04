@@ -8,7 +8,7 @@
  * - Project membership validated through batch job's project
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
+import prisma from '@/lib/db';
 import { checkProjectAccess } from '@/lib/auth/api-auth';
 
 interface RouteParams {

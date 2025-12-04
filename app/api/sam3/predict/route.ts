@@ -13,7 +13,7 @@
  * - Sanitized error responses
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
+import prisma from '@/lib/db';
 import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
 
 // Rate limiting (simple in-memory, resets on server restart)

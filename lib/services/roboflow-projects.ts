@@ -4,7 +4,7 @@
  * Manages Roboflow project listing, creation, and class synchronization.
  * Provides the foundation for multi-project training workflows.
  */
-import { prisma } from '@/lib/db';
+import prisma from '@/lib/db';
 
 const ROBOFLOW_API_KEY = process.env.ROBOFLOW_API_KEY;
 const ROBOFLOW_WORKSPACE = process.env.ROBOFLOW_WORKSPACE;

@@ -14,7 +14,7 @@
  * Clients can poll GET /api/sam3/batch/[id] for status updates.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
+import prisma from '@/lib/db';
 import { checkProjectAccess } from '@/lib/auth/api-auth';
 import { enqueueBatchJob, getQueueStats } from '@/lib/queue/batch-queue';
 import { checkRedisConnection } from '@/lib/queue/redis';
