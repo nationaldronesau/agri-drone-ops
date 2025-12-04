@@ -21,11 +21,21 @@ const fileSchema = z.object({
   bucket: z.string().optional(),
 });
 
+const dynamicModelSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  projectName: z.string(),
+  version: z.number(),
+  endpoint: z.string(),
+  classes: z.array(z.string()),
+});
+
 const requestSchema = z.object({
   files: z.array(fileSchema).min(1, "At least one file is required"),
   projectId: z.string().min(1, "Project ID is required"),
   runDetection: z.boolean().optional().default(false),
-  detectionModels: z.string().optional(),
+  detectionModels: z.string().optional(), // Legacy: comma-separated model keys
+  dynamicModels: z.array(dynamicModelSchema).optional(), // New: dynamic models from workspace
   flightSession: z.string().optional(),
 });
 
@@ -79,11 +89,16 @@ export async function POST(request: NextRequest) {
       projectId,
       runDetection,
       detectionModels,
+      dynamicModels,
       flightSession,
     } = parsed.data;
 
+    // Check if we're using dynamic models (new) or legacy hardcoded models
+    const useDynamicModels = dynamicModels && dynamicModels.length > 0;
+
+    // Legacy model handling (for backwards compatibility)
     const requestedModels: ModelType[] =
-      detectionModels && detectionModels.length > 0
+      !useDynamicModels && detectionModels && detectionModels.length > 0
         ? detectionModels
             .split(",")
             .map((model) => model.trim())
@@ -295,10 +310,11 @@ export async function POST(request: NextRequest) {
         if (runDetection && extractedData.gpsLatitude && extractedData.gpsLongitude) {
           try {
             const imageBase64 = buffer.toString("base64");
-            const detectionResults = await roboflowService.detectMultipleModels(
-              imageBase64,
-              modelsToRun,
-            );
+
+            // Use dynamic models if provided, otherwise fall back to legacy models
+            const detectionResults = useDynamicModels
+              ? await roboflowService.detectWithDynamicModels(imageBase64, dynamicModels!)
+              : await roboflowService.detectMultipleModels(imageBase64, modelsToRun);
 
             if (
               detectionResults.length > 0 &&
@@ -310,7 +326,9 @@ export async function POST(request: NextRequest) {
                   projectId,
                   type: "AI_DETECTION",
                   status: "COMPLETED",
-                  config: { models: modelsToRun },
+                  config: useDynamicModels
+                    ? { dynamicModels: dynamicModels!.map((m) => m.projectName) }
+                    : { models: modelsToRun },
                   completedAt: new Date(),
                 },
               });
