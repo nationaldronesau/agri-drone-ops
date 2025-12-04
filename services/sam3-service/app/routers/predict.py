@@ -165,7 +165,8 @@ async def preload_image(imageUrl: str, assetId: str):
             detail="Failed to fetch image from URL"
         )
 
-    if not predictor.set_image_from_bytes(image_bytes, assetId):
+    success, scale_factor = predictor.set_image_from_bytes(image_bytes, assetId)
+    if not success:
         raise HTTPException(
             status_code=500,
             detail="Failed to preload image"
@@ -174,5 +175,5 @@ async def preload_image(imageUrl: str, assetId: str):
     return {
         "success": True,
         "cached": False,
-        "message": f"Image {assetId} preloaded successfully"
+        "message": f"Image {assetId} preloaded successfully (scale: {scale_factor:.3f})"
     }
