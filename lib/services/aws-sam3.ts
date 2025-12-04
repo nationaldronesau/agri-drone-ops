@@ -18,10 +18,10 @@ import {
 } from '@aws-sdk/client-ec2';
 import sharp from 'sharp';
 
-// Configuration
-const AWS_REGION = process.env.AWS_REGION || 'ap-southeast-2';
-const SAM3_INSTANCE_ID = process.env.SAM3_INSTANCE_ID;
-const SAM3_PORT = process.env.SAM3_PORT || '8000';
+// Configuration - Support both naming conventions for backward compatibility
+const AWS_REGION = process.env.SAM3_EC2_REGION || process.env.AWS_REGION || 'ap-southeast-2';
+const SAM3_INSTANCE_ID = process.env.SAM3_EC2_INSTANCE_ID || process.env.SAM3_INSTANCE_ID;
+const SAM3_PORT = process.env.SAM3_EC2_PORT || process.env.SAM3_PORT || '8000';
 const IDLE_TIMEOUT_MS = parseInt(process.env.SAM3_IDLE_TIMEOUT_MS || '3600000'); // 1 hour default
 const MAX_IMAGE_SIZE = 2048;
 const STARTUP_TIMEOUT_MS = 180000; // 3 minutes to start and warm up

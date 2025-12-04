@@ -11,8 +11,10 @@ export async function GET(request: NextRequest) {
   try {
     // Check if service is configured
     if (!roboflowProjectsService.isConfigured()) {
+      const configError = roboflowProjectsService.getConfigError();
+      console.error('[API /roboflow/projects] Service not configured:', configError);
       return NextResponse.json(
-        { error: roboflowProjectsService.getConfigError() },
+        { error: configError, projects: [] },
         { status: 503 }
       );
     }
@@ -20,28 +22,38 @@ export async function GET(request: NextRequest) {
     // Check if sync is requested
     const { searchParams } = new URL(request.url);
     const sync = searchParams.get('sync') === 'true';
+    console.log(`[API /roboflow/projects] GET request, sync=${sync}`);
 
     let projects;
+    let didSync = false;
+
     if (sync) {
       // Force sync from Roboflow API
+      console.log('[API /roboflow/projects] Forcing sync from Roboflow');
       projects = await roboflowProjectsService.syncProjects();
+      didSync = true;
     } else {
       // Get from cache first, sync if empty
       projects = await roboflowProjectsService.getCachedProjects();
+      console.log(`[API /roboflow/projects] Got ${projects.length} cached projects`);
+
       if (projects.length === 0) {
         // No cached projects, sync from Roboflow
+        console.log('[API /roboflow/projects] Cache empty, syncing from Roboflow');
         projects = await roboflowProjectsService.syncProjects();
+        didSync = true;
       }
     }
 
+    console.log(`[API /roboflow/projects] Returning ${projects.length} projects, synced=${didSync}`);
     return NextResponse.json({
       projects,
-      synced: sync || projects.length === 0,
+      synced: didSync,
     });
   } catch (error) {
-    console.error('Error listing Roboflow projects:', error);
+    console.error('[API /roboflow/projects] Error:', error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to list projects' },
+      { error: error instanceof Error ? error.message : 'Failed to list projects', projects: [] },
       { status: 500 }
     );
   }

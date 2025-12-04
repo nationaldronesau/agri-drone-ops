@@ -79,24 +79,40 @@ class RoboflowProjectsService {
    */
   async listProjectsFromRoboflow(): Promise<RoboflowProjectResponse[]> {
     if (!this.isConfigured()) {
-      throw new Error(this.getConfigError() || 'Roboflow not configured');
+      const error = this.getConfigError() || 'Roboflow not configured';
+      console.error('[Roboflow Projects] Not configured:', error);
+      throw new Error(error);
     }
 
     const url = `${ROBOFLOW_BASE_URL}/${this.workspace}?api_key=${this.apiKey}`;
+    console.log(`[Roboflow Projects] Fetching projects from workspace: ${this.workspace}`);
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(30000),
-    });
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(30000),
+      });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Failed to list projects: ${response.status} - ${error}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[Roboflow Projects] API error: ${response.status} - ${errorText}`);
+        throw new Error(`Failed to list projects: ${response.status} - ${errorText}`);
+      }
+
+      const data: RoboflowProjectListResponse = await response.json();
+      console.log(`[Roboflow Projects] Found ${data.projects?.length || 0} projects`);
+
+      if (!data.projects) {
+        console.warn('[Roboflow Projects] No projects array in response:', JSON.stringify(data).substring(0, 200));
+        return [];
+      }
+
+      return data.projects;
+    } catch (error) {
+      console.error('[Roboflow Projects] Fetch error:', error instanceof Error ? error.message : error);
+      throw error;
     }
-
-    const data: RoboflowProjectListResponse = await response.json();
-    return data.projects || [];
   }
 
   /**
@@ -161,7 +177,9 @@ class RoboflowProjectsService {
    * Returns all projects (both from Roboflow and local cache)
    */
   async syncProjects(): Promise<ProjectWithClasses[]> {
+    console.log('[Roboflow Projects] Starting sync...');
     const roboflowProjects = await this.listProjectsFromRoboflow();
+    console.log(`[Roboflow Projects] Syncing ${roboflowProjects.length} projects to database`);
     const results: ProjectWithClasses[] = [];
 
     for (const rfProject of roboflowProjects) {
