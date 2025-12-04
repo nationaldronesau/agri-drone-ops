@@ -100,6 +100,31 @@ export interface SAM3SegmentResult {
   errorCode?: 'NOT_CONFIGURED' | 'NOT_READY' | 'API_ERROR' | 'TIMEOUT' | 'NETWORK_ERROR';
 }
 
+// Point-based prediction interfaces (for click-to-segment)
+export interface SAM3PointPredictRequest {
+  imageUrl: string;
+  assetId: string;
+  points: Array<{ x: number; y: number; label: 0 | 1 }>;
+  simplifyTolerance?: number;
+}
+
+export interface SAM3PointPredictResponse {
+  success: boolean;
+  score: number;
+  polygon: [number, number][] | null;
+  bbox: [number, number, number, number] | null;
+  processingTimeMs: number;
+  device: string;
+  message?: string;
+}
+
+export interface SAM3PointPredictResult {
+  success: boolean;
+  response: SAM3PointPredictResponse | null;
+  error?: string;
+  errorCode?: 'NOT_CONFIGURED' | 'NOT_READY' | 'API_ERROR' | 'TIMEOUT' | 'NETWORK_ERROR';
+}
+
 /**
  * Singleton service for AWS EC2 SAM3 instance management
  */
@@ -531,6 +556,79 @@ class AWSSAM3Service {
       const isTimeout = error instanceof Error && error.name === 'TimeoutError';
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error('[AWS-SAM3] Segment error:', errorMessage);
+
+      return {
+        success: false,
+        response: null,
+        error: errorMessage,
+        errorCode: isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR',
+      };
+    }
+  }
+
+  /**
+   * Call the SAM3 /api/v1/predict endpoint for point-based segmentation
+   * This endpoint accepts click points and returns a polygon mask
+   */
+  async predictWithPoints(request: SAM3PointPredictRequest): Promise<SAM3PointPredictResult> {
+    if (!this.configured) {
+      return {
+        success: false,
+        response: null,
+        error: this.configError || 'AWS SAM3 not configured',
+        errorCode: 'NOT_CONFIGURED',
+      };
+    }
+
+    if (!this.instanceIp || this.instanceState !== 'ready') {
+      return {
+        success: false,
+        response: null,
+        error: `Instance not ready (state: ${this.instanceState})`,
+        errorCode: 'NOT_READY',
+      };
+    }
+
+    this.updateActivity();
+
+    try {
+      console.log(
+        `[AWS-SAM3] Calling /api/v1/predict with ${request.points.length} points for asset: ${request.assetId}`
+      );
+
+      const response = await fetch(`http://${this.instanceIp}:${SAM3_PORT}/api/v1/predict`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageUrl: request.imageUrl,
+          assetId: request.assetId,
+          points: request.points,
+          simplifyTolerance: request.simplifyTolerance ?? 0.02,
+        }),
+        signal: AbortSignal.timeout(120000), // 2 minutes timeout
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error');
+        console.error(`[AWS-SAM3] Predict failed: ${response.status} - ${errorText}`);
+        return {
+          success: false,
+          response: null,
+          error: `SAM3 API error: ${response.status} - ${errorText.substring(0, 200)}`,
+          errorCode: 'API_ERROR',
+        };
+      }
+
+      const result = await response.json();
+      console.log(`[AWS-SAM3] Predict returned score: ${result.score}`);
+      return {
+        success: true,
+        response: result,
+      };
+    } catch (error) {
+      const isTimeout = error instanceof Error && error.name === 'TimeoutError';
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[AWS-SAM3] Predict error:', errorMessage);
 
       return {
         success: false,
