@@ -238,8 +238,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     const imageArrayBuffer = await imageResponse.arrayBuffer();
 
-    // Limit image size (10MB max)
-    if (imageArrayBuffer.byteLength > 10 * 1024 * 1024) {
+    // Limit image size (100MB max - drone images can be 20-50MB)
+    // SAM3 orchestrator resizes images before sending to API
+    if (imageArrayBuffer.byteLength > 100 * 1024 * 1024) {
       return NextResponse.json({ error: 'Image too large', success: false }, { status: 400 });
     }
 
