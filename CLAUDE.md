@@ -717,7 +717,80 @@ For production batch processing, use AWS GPU instances (g4dn.xlarge or g5.xlarge
 
 ---
 
-**Last Updated**: 2025-12-03
-**Updated By**: Claude Code Assistant - Added SAM3 Bulk Annotation Pipeline
+## 🎉 **Session Summary - 2025-12-05**
+
+### ✅ **Training Hub & SAM3 Integration Fixes**
+
+This session focused on fixing critical bugs in the Training Hub workflow and SAM3 integration:
+
+**1. Roboflow Projects Sync - Workspace Duplication Bug**
+- **Issue**: API returned 404 with doubled workspace in URL: `/smartdata-ggzkp/smartdata-ggzkp/project`
+- **Fix**: Updated `lib/services/roboflow-projects.ts` to strip workspace prefix from projectId before constructing API URL
+- **File**: `lib/services/roboflow-projects.ts:131-133`
+
+**2. SAM3 AWS EC2 Connectivity Issues**
+- **Issue**: SAM3 showed "state: stopped" even though EC2 was running
+- **Root Cause**: Missing IAM permissions for EC2:DescribeInstances
+- **Fix**: User created new IAM user with proper EC2 permissions (DescribeInstances, StartInstances, StopInstances)
+
+**3. SAM3 Health Check Endpoint Mismatch**
+- **Issue**: Code called `/api/v1/health`, but SAM3 service uses `/health`
+- **Issue**: Code expected `available` field, service returns `model_loaded`
+- **Fix**: Updated `lib/services/aws-sam3.ts` checkHealth() to use correct endpoint and parse correct response fields
+- **File**: `lib/services/aws-sam3.ts`
+
+**4. SAM3 Few-Shot Mode Prisma Error**
+- **Issue**: 500 error with "Unknown field `filePath` for select statement on model `Asset`"
+- **Root Cause**: Production database schema doesn't have `filePath` field
+- **Fix**: Removed `filePath` from Prisma select query, removed unused code branch
+- **File**: `app/api/sam3/predict/route.ts:171-180`
+
+**5. Image Size Limit Too Restrictive**
+- **Issue**: "Image too large" error for drone images (typically 20-50MB)
+- **Fix**: Increased MAX_IMAGE_SIZE from 10MB to 100MB across all services
+- **Files**:
+  - `app/api/sam3/predict/route.ts:241-244`
+  - `lib/utils/security.ts:43`
+  - `workers/batch-worker.ts:31`
+
+**6. Training Hub Source Images Dropdown Not Loading**
+- **Issue**: Project dropdown showed empty list
+- **Root Cause**: API returned raw array `[...]`, frontend expected `{ projects: [...] }`
+- **Fix**: Standardized `/api/projects` to return `{ projects: [...] }`, updated all consumers
+- **Files**:
+  - `app/api/projects/route.ts:18`
+  - `app/projects/page.tsx:46`
+  - `app/export/page.tsx:64`
+  - `app/orthomosaics/page.tsx:75-76`
+  - `app/upload/page.tsx:64-68`
+  - `components/features/image-upload.tsx:53-57`
+
+### 📝 **Pending Tasks**
+- **Verify training push to Roboflow works** - Test the full workflow: SAM3 labeling → push annotations to Roboflow
+- **Add project filter to Images gallery** - Currently shows images from all projects; needs filter dropdown
+
+### 🔧 **Key Configuration Notes**
+
+**AWS SAM3 EC2 Instance Requirements:**
+- IAM user needs these permissions:
+  - `ec2:DescribeInstances`
+  - `ec2:StartInstances`
+  - `ec2:StopInstances`
+  - S3 permissions for image storage
+- Security group must allow inbound traffic on port 8000 from Elastic Beanstalk
+- CORS must be configured on SAM3 service to allow requests from production domain
+
+**SAM3 Health Endpoint:**
+- URL: `http://{instance-ip}:8000/health`
+- Response: `{ status: "healthy", model_loaded: true, gpu_available: true, device: "cuda" }`
+
+**Image Size Limits:**
+- All services now accept images up to 100MB
+- SAM3 orchestrator resizes to max 2048px before processing
+
+---
+
+**Last Updated**: 2025-12-05
+**Updated By**: Claude Code Assistant - Training Hub & SAM3 Integration Fixes
 
 Remember: This is an agricultural platform where accuracy matters - coordinates generated here will be used by actual spray drones in the field!
