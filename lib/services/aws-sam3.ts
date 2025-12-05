@@ -368,16 +368,16 @@ class AWSSAM3Service {
     if (!this.instanceIp) return null;
 
     try {
-      const response = await fetch(`http://${this.instanceIp}:${SAM3_PORT}/api/v1/health`, {
+      const response = await fetch(`http://${this.instanceIp}:${SAM3_PORT}/health`, {
         signal: AbortSignal.timeout(5000),
       });
 
       if (!response.ok) return null;
 
       const data = await response.json();
-      // Python service returns 'available' for model status
-      this.modelLoaded = data.available === true;
-      this.gpuAvailable = data.device === 'cuda' || data.device === 'mps';
+      // SAM3 service returns: { status, model_loaded, gpu_available, device }
+      this.modelLoaded = data.model_loaded === true;
+      this.gpuAvailable = data.gpu_available === true;
 
       return {
         modelLoaded: this.modelLoaded,
