@@ -172,11 +172,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         id: true,
         s3Key: true,
         s3Bucket: true,
-        filePath: true,
         storageType: true,
         storageUrl: true,
         imageWidth: true,
         imageHeight: true,
+        fileName: true,
       },
     });
 
@@ -217,13 +217,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       if (imageUrl.startsWith('/')) {
         imageUrl = `${baseUrl}${imageUrl}`;
       }
-    } else if (asset.filePath) {
-      // Local file path - construct safe URL
-      const urlPath = asset.filePath.replace(/^public\//, '/');
-      if (urlPath.includes('..') || !urlPath.startsWith('/')) {
-        return NextResponse.json({ error: 'Invalid image path', success: false }, { status: 400 });
-      }
-      imageUrl = `${baseUrl}${urlPath}`;
     } else {
       return NextResponse.json({ error: 'Image not available', success: false }, { status: 400 });
     }
