@@ -70,17 +70,21 @@ export function CreateProjectDialog({
     }
   };
 
-  const handleClose = () => {
-    if (!creating) {
+  const handleOpenChange = (isOpen: boolean) => {
+    // Only allow closing if not creating
+    if (!isOpen && creating) return;
+
+    if (!isOpen) {
+      // Reset form on close
       setName('');
       setType('object-detection');
       setError(null);
-      onOpenChange(false);
     }
+    onOpenChange(isOpen);
   };
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Create New Roboflow Project</DialogTitle>
@@ -135,7 +139,7 @@ export function CreateProjectDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={handleClose} disabled={creating}>
+          <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={creating}>
             Cancel
           </Button>
           <Button onClick={handleCreate} disabled={creating || !name.trim()}>

@@ -51,15 +51,25 @@ export default function TrainingHubPage() {
 
       console.log(`[Training Hub] Fetching projects, sync=${sync}`);
       const response = await fetch(`/api/roboflow/projects${sync ? '?sync=true' : ''}`);
-      const data = await response.json();
+
+      // Handle non-JSON responses gracefully
+      let data;
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error(`Server returned invalid response (${response.status})`);
+      }
+
       console.log('[Training Hub] API response:', { status: response.status, data });
 
       if (!response.ok) {
-        throw new Error(data.error || `Failed to fetch projects (${response.status})`);
+        throw new Error(data?.error || `Failed to fetch projects (${response.status})`);
       }
 
-      setProjects(data.projects || []);
-      console.log(`[Training Hub] Set ${data.projects?.length || 0} projects`);
+      // Ensure projects is always an array
+      const projects = Array.isArray(data?.projects) ? data.projects : [];
+      setProjects(projects);
+      console.log(`[Training Hub] Set ${projects.length} projects`);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to load projects';
       console.error('[Training Hub] Error fetching projects:', errorMessage);
@@ -319,12 +329,14 @@ export default function TrainingHubPage() {
         </div>
       </main>
 
-      {/* Create Project Dialog */}
-      <CreateProjectDialog
-        open={showCreateDialog}
-        onOpenChange={setShowCreateDialog}
-        onSuccess={handleProjectCreated}
-      />
+      {/* Create Project Dialog - only render when open to avoid portal issues */}
+      {showCreateDialog && (
+        <CreateProjectDialog
+          open={showCreateDialog}
+          onOpenChange={setShowCreateDialog}
+          onSuccess={handleProjectCreated}
+        />
+      )}
     </div>
   );
 }
