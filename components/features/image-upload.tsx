@@ -50,10 +50,11 @@ export function ImageUpload() {
   useEffect(() => {
     fetch("/api/projects")
       .then((res) => res.json())
-      .then((data: Project[]) => {
-        setProjects(data);
-        if (data.length > 0) {
-          setSelectedProject(data[0].id);
+      .then((data) => {
+        const projectList = data.projects || [];
+        setProjects(projectList);
+        if (projectList.length > 0) {
+          setSelectedProject(projectList[0].id);
         }
       })
       .catch((error) => {
