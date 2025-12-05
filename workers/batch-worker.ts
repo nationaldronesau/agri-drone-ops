@@ -27,8 +27,8 @@ const prisma = new PrismaClient();
 // Environment variables
 const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
-// Processing limits
-const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB per image
+// Processing limits - drone images can be 20-50MB
+const MAX_IMAGE_SIZE = 100 * 1024 * 1024; // 100MB per image
 const IMAGE_TIMEOUT = 30000; // 30 seconds per image fetch
 
 // SSRF protection patterns

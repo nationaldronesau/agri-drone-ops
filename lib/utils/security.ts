@@ -39,8 +39,8 @@ export function validateUrl(url: string, context: string = 'URL'): void {
   }
 }
 
-// Processing limits
-export const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
+// Processing limits - drone images can be 20-50MB
+export const MAX_IMAGE_SIZE = 100 * 1024 * 1024; // 100MB
 export const IMAGE_TIMEOUT = 30000; // 30 seconds
 
 /**
