@@ -3,12 +3,25 @@
  *
  * GET  - List all projects (from cache, with optional sync)
  * POST - Create a new project
+ *
+ * Security:
+ * - Authentication required via NextAuth session
+ * - Rate limiting on POST (10 per minute per user)
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth/config';
 import { roboflowProjectsService } from '@/lib/services/roboflow-projects';
+import { checkRateLimit } from '@/lib/utils/security';
 
 export async function GET(request: NextRequest) {
   try {
+    // Check authentication
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     // Check if service is configured
     if (!roboflowProjectsService.isConfigured()) {
       const configError = roboflowProjectsService.getConfigError();
@@ -22,7 +35,7 @@ export async function GET(request: NextRequest) {
     // Check if sync is requested
     const { searchParams } = new URL(request.url);
     const sync = searchParams.get('sync') === 'true';
-    console.log(`[API /roboflow/projects] GET request, sync=${sync}`);
+    console.log(`[API /roboflow/projects] GET request from user ${session.user.id}, sync=${sync}`);
 
     let projects;
     let didSync = false;
@@ -61,6 +74,28 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    // Check authentication
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Rate limit project creation (10 per minute per user)
+    const rateLimitKey = `roboflow-projects-create:${session.user.id}`;
+    const rateLimit = checkRateLimit(rateLimitKey, { maxRequests: 10, windowMs: 60000 });
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        { error: 'Rate limit exceeded. Please try again later.' },
+        {
+          status: 429,
+          headers: {
+            'X-RateLimit-Remaining': '0',
+            'X-RateLimit-Reset': rateLimit.resetTime.toString(),
+          },
+        }
+      );
+    }
+
     // Check if service is configured
     if (!roboflowProjectsService.isConfigured()) {
       return NextResponse.json(
