@@ -132,7 +132,7 @@ from PIL import Image
 import io
 
 MAX_DIMENSION = 8192
-MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
+MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB (drone images are typically 20-50MB)
 
 def validate_image(image_data: bytes) -> Image.Image:
     if len(image_data) > MAX_FILE_SIZE:
