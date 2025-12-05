@@ -61,9 +61,11 @@ export interface SAM3OrchestratorStatus {
 class SAM3Orchestrator {
   /**
    * Get the current status of all SAM3 backends
+   * Refreshes AWS status by actually querying EC2 and health endpoint
    */
   async getStatus(): Promise<SAM3OrchestratorStatus> {
-    const awsStatus = awsSam3Service.getStatus();
+    // Refresh AWS status to get actual EC2 state (not just cached)
+    const awsStatus = await awsSam3Service.refreshStatus();
 
     return {
       awsAvailable: awsSam3Service.isConfigured() && awsSam3Service.isReady(),
