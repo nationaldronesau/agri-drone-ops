@@ -72,8 +72,8 @@ export default function OrthomosaicsPage() {
     try {
       const response = await fetch('/api/projects');
       if (response.ok) {
-        const data: Project[] = await response.json();
-        setProjects(data);
+        const data = await response.json();
+        setProjects(data.projects || []);
       }
     } catch (error) {
       console.error('Error fetching projects:', error);

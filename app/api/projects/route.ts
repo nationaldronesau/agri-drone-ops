@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
       }
     });
 
-    return NextResponse.json(projects);
+    return NextResponse.json({ projects });
   } catch (error) {
     console.error('Failed to fetch projects:', error);
     return NextResponse.json(
