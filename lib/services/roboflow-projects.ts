@@ -100,15 +100,18 @@ class RoboflowProjectsService {
         throw new Error(`Failed to list projects: ${response.status} - ${errorText}`);
       }
 
-      const data: RoboflowProjectListResponse = await response.json();
-      console.log(`[Roboflow Projects] Found ${data.projects?.length || 0} projects`);
+      const data = await response.json();
 
-      if (!data.projects) {
-        console.warn('[Roboflow Projects] No projects array in response:', JSON.stringify(data).substring(0, 200));
+      // Roboflow API returns projects nested under workspace.projects (not top-level)
+      const projects: RoboflowProjectResponse[] = data.workspace?.projects || data.projects || [];
+      console.log(`[Roboflow Projects] Found ${projects.length} projects`);
+
+      if (projects.length === 0) {
+        console.warn('[Roboflow Projects] No projects in response');
         return [];
       }
 
-      return data.projects;
+      return projects;
     } catch (error) {
       console.error('[Roboflow Projects] Fetch error:', error instanceof Error ? error.message : error);
       throw error;

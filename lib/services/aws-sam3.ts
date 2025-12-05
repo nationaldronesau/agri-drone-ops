@@ -655,7 +655,7 @@ class AWSSAM3Service {
   }
 
   /**
-   * Get the current status of the service
+   * Get the current status of the service (cached)
    */
   getStatus(): SAM3Status {
     return {
@@ -667,6 +667,34 @@ class AWSSAM3Service {
       backend: this.instanceState === 'ready' ? 'aws' : null,
       funMessage: this.getRandomFunMessage(),
     };
+  }
+
+  /**
+   * Refresh status by actually querying EC2 and health endpoint
+   * Call this when you need fresh state (e.g., from status API)
+   */
+  async refreshStatus(): Promise<SAM3Status> {
+    if (!this.configured) {
+      return this.getStatus();
+    }
+
+    try {
+      // Query EC2 to get current IP and state
+      await this.discoverInstanceIp();
+
+      // If we have an IP and instance is running, check health
+      if (this.instanceIp && this.instanceState === 'running') {
+        const health = await this.checkHealth();
+        if (health?.modelLoaded) {
+          this.instanceState = 'ready';
+          console.log('[AWS-SAM3] Instance already ready (discovered on refresh)');
+        }
+      }
+    } catch (error) {
+      console.error('[AWS-SAM3] Error refreshing status:', error);
+    }
+
+    return this.getStatus();
   }
 
   /**
