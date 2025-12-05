@@ -126,7 +126,13 @@ class RoboflowProjectsService {
       throw new Error(this.getConfigError() || 'Roboflow not configured');
     }
 
-    const url = `${ROBOFLOW_BASE_URL}/${this.workspace}/${projectId}?api_key=${this.apiKey}`;
+    // Roboflow returns project IDs like "workspace/project-name"
+    // Strip the workspace prefix if present to avoid duplication
+    const projectSlug = projectId.includes('/')
+      ? projectId.split('/').slice(1).join('/')
+      : projectId;
+
+    const url = `${ROBOFLOW_BASE_URL}/${this.workspace}/${projectSlug}?api_key=${this.apiKey}`;
 
     const response = await fetch(url, {
       method: 'GET',
