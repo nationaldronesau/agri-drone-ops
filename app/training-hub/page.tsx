@@ -49,16 +49,21 @@ export default function TrainingHubPage() {
       else setLoading(true);
       setError(null);
 
+      console.log(`[Training Hub] Fetching projects, sync=${sync}`);
       const response = await fetch(`/api/roboflow/projects${sync ? '?sync=true' : ''}`);
       const data = await response.json();
+      console.log('[Training Hub] API response:', { status: response.status, data });
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to fetch projects');
+        throw new Error(data.error || `Failed to fetch projects (${response.status})`);
       }
 
       setProjects(data.projects || []);
+      console.log(`[Training Hub] Set ${data.projects?.length || 0} projects`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load projects');
+      const errorMessage = err instanceof Error ? err.message : 'Failed to load projects';
+      console.error('[Training Hub] Error fetching projects:', errorMessage);
+      setError(errorMessage);
     } finally {
       setLoading(false);
       setSyncing(false);
