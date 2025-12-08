@@ -20,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AlertCircle, ArrowLeft, Brain, Upload } from "lucide-react";
+import { AlertCircle, ArrowLeft, Brain, Upload, Map, Images, Tags, ArrowRight, CheckCircle2 } from "lucide-react";
 import { UppyUploader, type UploadApiResponse } from "@/components/UppyUploader";
 import { ModelSelector, type RoboflowModel } from "@/components/detection/ModelSelector";
 
@@ -255,46 +255,111 @@ export default function UploadPage() {
               )}
 
               {uploadResponse && uploadResponse.files.length > 0 && (
-                <section className="space-y-3 rounded-lg border border-gray-200 bg-white p-4">
-                  <h3 className="text-lg font-semibold">
-                    Latest Upload Results
-                  </h3>
-
-                  <div className="space-y-3">
-                    {uploadResponse.files.map((file) => (
-                      <div
-                        key={`${file.name}-${file.url}`}
-                        className="rounded-lg border border-gray-100 bg-gray-50 p-3"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div>
-                            <p className="text-sm font-medium">{file.name}</p>
-                            <p className="text-xs text-gray-500">{file.url}</p>
-                          </div>
-                          <div className="text-xs text-gray-500">
-                            {file.size?.toLocaleString()} bytes
-                          </div>
-                        </div>
-                        {file.warning && (
-                          <p className="mt-2 text-xs text-yellow-700">
-                            {file.warning}
-                          </p>
-                        )}
-                        {file.error && (
-                          <p className="mt-2 text-xs text-red-700">
-                            {file.error}
-                          </p>
-                        )}
-                        {file.detections && file.detections.length > 0 && (
-                          <p className="mt-2 text-xs text-green-700">
-                            {file.detections.length} detections saved for this
-                            asset.
-                          </p>
-                        )}
+                <>
+                  {/* Success Banner */}
+                  <div className="rounded-lg border border-green-200 bg-green-50 p-4">
+                    <div className="flex items-center gap-3">
+                      <CheckCircle2 className="h-6 w-6 text-green-600" />
+                      <div>
+                        <h3 className="font-semibold text-green-800">
+                          Upload Complete!
+                        </h3>
+                        <p className="text-sm text-green-700">
+                          {uploadResponse.files.filter(f => f.success !== false).length} of {uploadResponse.files.length} images uploaded successfully
+                        </p>
                       </div>
-                    ))}
+                    </div>
                   </div>
-                </section>
+
+                  {/* Next Steps */}
+                  <section className="rounded-lg border-2 border-green-300 bg-gradient-to-r from-green-50 to-blue-50 p-6">
+                    <h3 className="mb-4 text-lg font-semibold text-gray-800">
+                      What would you like to do next?
+                    </h3>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      <Link href="/training-hub">
+                        <Button
+                          variant="outline"
+                          className="h-auto w-full justify-start gap-3 border-2 border-purple-200 bg-white p-4 hover:border-purple-400 hover:bg-purple-50"
+                        >
+                          <Tags className="h-5 w-5 text-purple-600" />
+                          <div className="text-left">
+                            <div className="font-semibold text-purple-700">Label with SAM3</div>
+                            <div className="text-xs text-gray-500">AI-assisted annotation</div>
+                          </div>
+                          <ArrowRight className="ml-auto h-4 w-4 text-purple-400" />
+                        </Button>
+                      </Link>
+                      <Link href="/images">
+                        <Button
+                          variant="outline"
+                          className="h-auto w-full justify-start gap-3 border-2 border-blue-200 bg-white p-4 hover:border-blue-400 hover:bg-blue-50"
+                        >
+                          <Images className="h-5 w-5 text-blue-600" />
+                          <div className="text-left">
+                            <div className="font-semibold text-blue-700">View Images</div>
+                            <div className="text-xs text-gray-500">Browse uploaded files</div>
+                          </div>
+                          <ArrowRight className="ml-auto h-4 w-4 text-blue-400" />
+                        </Button>
+                      </Link>
+                      <Link href="/map">
+                        <Button
+                          variant="outline"
+                          className="h-auto w-full justify-start gap-3 border-2 border-green-200 bg-white p-4 hover:border-green-400 hover:bg-green-50"
+                        >
+                          <Map className="h-5 w-5 text-green-600" />
+                          <div className="text-left">
+                            <div className="font-semibold text-green-700">View on Map</div>
+                            <div className="text-xs text-gray-500">See GPS locations</div>
+                          </div>
+                          <ArrowRight className="ml-auto h-4 w-4 text-green-400" />
+                        </Button>
+                      </Link>
+                    </div>
+                  </section>
+
+                  {/* Upload Results Details */}
+                  <details className="rounded-lg border border-gray-200 bg-white">
+                    <summary className="cursor-pointer p-4 font-semibold hover:bg-gray-50">
+                      Upload Details ({uploadResponse.files.length} files)
+                    </summary>
+                    <div className="space-y-3 border-t p-4">
+                      {uploadResponse.files.map((file) => (
+                        <div
+                          key={`${file.name}-${file.url}`}
+                          className="rounded-lg border border-gray-100 bg-gray-50 p-3"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <p className="text-sm font-medium">{file.name}</p>
+                              <p className="text-xs text-gray-500">{file.url}</p>
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              {file.size?.toLocaleString()} bytes
+                            </div>
+                          </div>
+                          {file.warning && (
+                            <p className="mt-2 text-xs text-yellow-700">
+                              {file.warning}
+                            </p>
+                          )}
+                          {file.error && (
+                            <p className="mt-2 text-xs text-red-700">
+                              {file.error}
+                            </p>
+                          )}
+                          {file.detections && file.detections.length > 0 && (
+                            <p className="mt-2 text-xs text-green-700">
+                              {file.detections.length} detections saved for this
+                              asset.
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                </>
               )}
 
               <section className="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
