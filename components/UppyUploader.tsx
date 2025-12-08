@@ -179,7 +179,14 @@ export function UppyUploader({
         });
 
         if (!response.ok) {
+          // If the upload was already completed or aborted, S3 returns NoSuchUpload.
+          // Return empty array to let Uppy proceed (it will start fresh if needed).
           const errorBody = await response.json().catch(() => ({}));
+          if (errorBody?.details?.includes?.("NoSuchUpload") ||
+              errorBody?.error?.includes?.("NoSuchUpload")) {
+            console.debug("[Uppy] listParts: upload already completed/aborted, returning empty");
+            return [];
+          }
           const message =
             errorBody?.error || "Failed to list multipart upload parts.";
           throw new Error(message);
