@@ -35,6 +35,21 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ parts });
   } catch (error) {
+    // Handle NoSuchUpload error gracefully - this happens when:
+    // 1. Upload was already completed (S3 deletes the session)
+    // 2. Upload was aborted
+    // 3. Upload ID is invalid/expired
+    // Return empty parts array to let Uppy start fresh
+    const err = error as { name?: string; Code?: string; message?: string };
+    if (
+      err?.name === "NoSuchUpload" ||
+      err?.Code === "NoSuchUpload" ||
+      err?.message?.includes("NoSuchUpload")
+    ) {
+      console.debug("listParts: NoSuchUpload - returning empty parts array");
+      return NextResponse.json({ parts: [] });
+    }
+
     console.error("Failed to list multipart upload parts:", error);
     return NextResponse.json(
       {
