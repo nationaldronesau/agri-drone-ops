@@ -81,7 +81,8 @@ export default function MapComponent() {
       const res = await fetch("/api/assets");
       if (res.ok) {
         const data = await res.json();
-        const withGPS = data.filter((a: Asset) => a.gpsLatitude && a.gpsLongitude);
+        const assets = data.assets || [];
+        const withGPS = assets.filter((a: Asset) => a.gpsLatitude && a.gpsLongitude);
         setAssets(withGPS);
 
         if (withGPS.length > 0) {
