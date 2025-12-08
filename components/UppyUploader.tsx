@@ -170,6 +170,24 @@ export function UppyUploader({
 
         return (await response.json()) as CreateMultipartResponse;
       },
+      listParts: async (_file, { uploadId, key, signal }) => {
+        const response = await fetch("/api/s3/multipart/list-parts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal,
+          body: JSON.stringify({ uploadId, key }),
+        });
+
+        if (!response.ok) {
+          const errorBody = await response.json().catch(() => ({}));
+          const message =
+            errorBody?.error || "Failed to list multipart upload parts.";
+          throw new Error(message);
+        }
+
+        const data = await response.json();
+        return data.parts || [];
+      },
       signPart: async (_file, { uploadId, key, partNumber, body, signal }) => {
         const response = await fetch("/api/s3/multipart/sign", {
           method: "POST",
@@ -191,6 +209,21 @@ export function UppyUploader({
         }
 
         return response.json();
+      },
+      abortMultipartUpload: async (_file, { uploadId, key, signal }) => {
+        const response = await fetch("/api/s3/multipart/abort", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal,
+          body: JSON.stringify({ uploadId, key }),
+        });
+
+        if (!response.ok) {
+          const errorBody = await response.json().catch(() => ({}));
+          const message =
+            errorBody?.error || "Failed to abort multipart upload.";
+          throw new Error(message);
+        }
       },
       completeMultipartUpload: async (_file, { uploadId, key, parts, signal }) => {
         const response = await fetch("/api/s3/multipart/complete", {
