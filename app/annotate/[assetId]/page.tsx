@@ -2,14 +2,16 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Save, Trash2, Check, X, ZoomIn, ZoomOut, RotateCcw, Wand2, Pencil, Undo2, Loader2, Square, Search } from "lucide-react";
+import { ArrowLeft, Check, ZoomIn, ZoomOut, RotateCcw, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
 import Link from "next/link";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
+import { Filmstrip } from "@/components/annotation/Filmstrip";
+import { Toolbar } from "@/components/annotation/Toolbar";
+import { ClassSelector, DEFAULT_WEED_CLASSES, getClassByHotkey, getClassColor } from "@/components/annotation/ClassSelector";
+import { AnnotationList } from "@/components/annotation/AnnotationList";
+import { HotkeyReference } from "@/components/annotation/HotkeyReference";
+import { useAnnotationHotkeys, type AnnotationMode } from "@/lib/hooks/useAnnotationHotkeys";
 
 // SAM3 types
 interface SAM3StatusResponse {
@@ -40,7 +42,7 @@ interface SAM3HealthResponse {
 interface SAM3Point {
   x: number;
   y: number;
-  label: 0 | 1;  // 0 = background, 1 = foreground
+  label: 0 | 1;
 }
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -61,6 +63,7 @@ interface Asset {
   gpsLatitude: number;
   gpsLongitude: number;
   project: {
+    id: string;
     name: string;
     location: string;
   };
@@ -105,7 +108,6 @@ interface DrawingPolygon {
   isComplete: boolean;
 }
 
-// Box exemplar types for few-shot detection
 interface BoxExemplar {
   id: string;
   weedType: string;
@@ -120,72 +122,53 @@ interface DrawingBox {
   endY: number;
 }
 
-const WEED_TYPES = [
-  "Unknown Weed",
-  "Suspected Lantana",
-  "Suspected Wattle", 
-  "Suspected Bellyache Bush",
-  "Suspected Calitropis",
-  "Suspected Pine Sapling",
-  "Custom Weed Type"
-];
-
-const CONFIDENCE_LEVELS = [
-  { value: "CERTAIN", label: "Certain" },
-  { value: "LIKELY", label: "Likely" },
-  { value: "UNCERTAIN", label: "Uncertain" }
-];
+const CONFIDENCE_LEVELS = ["CERTAIN", "LIKELY", "UNCERTAIN"] as const;
 
 export default function AnnotatePage() {
   const params = useParams();
   const router = useRouter();
   const assetId = params.assetId as string;
-  
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
-  
+
   const [session, setSession] = useState<AnnotationSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
+
+  // Project assets for filmstrip navigation
+  const [projectAssets, setProjectAssets] = useState<Asset[]>([]);
+  const [currentAssetIndex, setCurrentAssetIndex] = useState(0);
+  const [annotationCounts, setAnnotationCounts] = useState<Record<string, number>>({});
+
   // Drawing state
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentPolygon, setCurrentPolygon] = useState<DrawingPolygon>({ points: [], isComplete: false });
   const [annotations, setAnnotations] = useState<ManualAnnotation[]>([]);
   const [selectedAnnotation, setSelectedAnnotation] = useState<string | null>(null);
-  const [pushingId, setPushingId] = useState<string | null>(null);
-  const [pushError, setPushError] = useState<string | null>(null);
   const [aiSuggestions, setAiSuggestions] = useState<AiSuggestion[]>([]);
-  const [showAiSuggestions, setShowAiSuggestions] = useState(true);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiError, setAiError] = useState<string | null>(null);
-  const [bulkAction, setBulkAction] = useState<"accept" | "reject" | null>(null);
+  const [showAiSuggestions] = useState(true);
 
   // SAM3 state
-  const [annotationMode, setAnnotationMode] = useState<'sam3' | 'manual' | 'box-exemplar'>('sam3');
+  const [annotationMode, setAnnotationMode] = useState<AnnotationMode>('sam3');
   const [sam3Health, setSam3Health] = useState<SAM3HealthResponse | null>(null);
-  const [sam3Status, setSam3Status] = useState<SAM3StatusResponse | null>(null);
   const [sam3Points, setSam3Points] = useState<SAM3Point[]>([]);
   const [sam3PreviewPolygon, setSam3PreviewPolygon] = useState<[number, number][] | null>(null);
   const [sam3Loading, setSam3Loading] = useState(false);
-  const [sam3Score, setSam3Score] = useState<number | null>(null);
+  const [, setSam3Score] = useState<number | null>(null);
   const [sam3Error, setSam3Error] = useState<string | null>(null);
   const [sam3Backend, setSam3Backend] = useState<'aws' | 'roboflow' | null>(null);
-  const [sam3StartupMessage, setSam3StartupMessage] = useState<string | null>(null);
 
-  // Box exemplar state for few-shot detection
+  // Box exemplar state
   const [boxExemplars, setBoxExemplars] = useState<BoxExemplar[]>([]);
   const [currentBox, setCurrentBox] = useState<DrawingBox | null>(null);
   const [isDrawingBox, setIsDrawingBox] = useState(false);
-  const [exemplarWeedType, setExemplarWeedType] = useState(WEED_TYPES[1]); // Default to Lantana
-  const [findAllLoading, setFindAllLoading] = useState(false);
-  const [findAllError, setFindAllError] = useState<string | null>(null);
 
   // Annotation form state
-  const [weedType, setWeedType] = useState(WEED_TYPES[0]);
-  const [confidence, setConfidence] = useState("LIKELY");
-  const [notes, setNotes] = useState("");
-  
+  const [selectedClass, setSelectedClass] = useState(DEFAULT_WEED_CLASSES[0].name);
+  const [confidence, setConfidence] = useState<typeof CONFIDENCE_LEVELS[number]>("LIKELY");
+
   // Canvas scaling and viewport
   const [scale, setScale] = useState(1);
   const [zoomLevel, setZoomLevel] = useState(1);
@@ -194,28 +177,65 @@ export default function AnnotatePage() {
   const [isPanning, setIsPanning] = useState(false);
   const [lastPanPoint, setLastPanPoint] = useState({ x: 0, y: 0 });
 
+  // UI state
+  const [showHotkeyHelp, setShowHotkeyHelp] = useState(false);
+
+  // Load project assets for filmstrip
+  useEffect(() => {
+    const loadProjectAssets = async () => {
+      if (!session?.asset?.project?.id) return;
+
+      try {
+        const response = await fetch(`/api/assets?projectId=${session.asset.project.id}&limit=500`);
+        if (response.ok) {
+          const data = await response.json();
+          setProjectAssets(data.assets || []);
+
+          // Find current asset index
+          const index = (data.assets || []).findIndex((a: Asset) => a.id === assetId);
+          if (index >= 0) setCurrentAssetIndex(index);
+
+          // Load annotation counts for each asset
+          const counts: Record<string, number> = {};
+          for (const asset of data.assets || []) {
+            try {
+              const sessionsRes = await fetch(`/api/annotations/sessions?assetId=${asset.id}`);
+              if (sessionsRes.ok) {
+                const sessions = await sessionsRes.json();
+                const total = sessions.reduce((sum: number, s: { annotations?: unknown[] }) =>
+                  sum + (s.annotations?.length || 0), 0);
+                counts[asset.id] = total;
+              }
+            } catch {
+              // Ignore individual failures
+            }
+          }
+          setAnnotationCounts(counts);
+        }
+      } catch (err) {
+        console.error("Failed to load project assets:", err);
+      }
+    };
+
+    loadProjectAssets();
+  }, [session?.asset?.project?.id, assetId]);
+
   // Load annotation session
   useEffect(() => {
     const loadSession = async () => {
       try {
         setLoading(true);
-
-        // Try to get existing sessions for this asset
         const getResponse = await fetch(`/api/annotations/sessions?assetId=${assetId}`);
-
         if (!getResponse.ok) {
           const errorData = await getResponse.json().catch(() => ({}));
           throw new Error(errorData.error || 'Failed to fetch annotation sessions');
         }
 
         const sessions = await getResponse.json();
-
-        // Find an IN_PROGRESS session
         let currentSession = Array.isArray(sessions)
           ? sessions.find((s: { status: string }) => s.status === 'IN_PROGRESS')
           : null;
 
-        // Create new session if none exists
         if (!currentSession) {
           const postResponse = await fetch('/api/annotations/sessions', {
             method: 'POST',
@@ -227,11 +247,9 @@ export default function AnnotatePage() {
             const errorData = await postResponse.json().catch(() => ({}));
             throw new Error(errorData.error || 'Failed to create annotation session');
           }
-
           currentSession = await postResponse.json();
         }
 
-        // Validate session has required data
         if (!currentSession || !currentSession.asset) {
           throw new Error('Invalid session data received');
         }
@@ -246,12 +264,10 @@ export default function AnnotatePage() {
       }
     };
 
-    if (assetId) {
-      loadSession();
-    }
+    if (assetId) loadSession();
   }, [assetId]);
 
-  // Check SAM3 service status on mount
+  // Check SAM3 service status
   useEffect(() => {
     const checkSam3Status = async () => {
       try {
@@ -259,13 +275,8 @@ export default function AnnotatePage() {
         const status: SAM3StatusResponse = await response.json();
         setSam3Status(status);
 
-        // Determine availability and device from status
         const isAvailable = status.preferredBackend !== 'none';
-        const device = status.aws.ready
-          ? 'aws-gpu'
-          : status.roboflow.ready
-            ? 'roboflow-serverless'
-            : null;
+        const device = status.aws.ready ? 'aws-gpu' : status.roboflow.ready ? 'roboflow-serverless' : null;
 
         setSam3Health({
           available: isAvailable,
@@ -276,37 +287,56 @@ export default function AnnotatePage() {
           funMessage: status.funMessage,
         });
 
-        // If SAM3 is unavailable, default to manual mode
         if (!isAvailable) {
           setAnnotationMode('manual');
           setSam3Error('No SAM3 backend configured');
-        } else {
-          setSam3Error(null);
-          // Show fun message if AWS is starting
-          if (status.aws.configured && !status.aws.ready && status.funMessage) {
-            setSam3StartupMessage(status.funMessage);
-          }
         }
-      } catch (error) {
-        console.log('SAM3 service not available:', error);
-        setSam3Health({
-          available: false,
-          mode: 'unavailable',
-          device: null,
-          latencyMs: null,
-        });
+      } catch {
+        setSam3Health({ available: false, mode: 'unavailable', device: null, latencyMs: null });
         setAnnotationMode('manual');
-        setSam3Error('Unable to connect to SAM3 service');
       }
     };
 
     checkSam3Status();
-    // Poll status every 10 seconds to check if AWS becomes ready
     const interval = setInterval(checkSam3Status, 10000);
     return () => clearInterval(interval);
   }, []);
 
-  // SAM3 prediction function
+  // Fetch AI detections
+  useEffect(() => {
+    const fetchAiDetections = async () => {
+      if (!assetId) return;
+      try {
+        const response = await fetch(`/api/detections?assetId=${assetId}`);
+        if (response.ok) {
+          const data = await response.json();
+          const mapped: AiSuggestion[] = (data || []).map((det: {
+            id: string;
+            className?: string;
+            confidence?: number;
+            boundingBox?: { x: number; y: number; width: number; height: number };
+            verified?: boolean;
+            rejected?: boolean;
+            metadata?: { color?: string };
+          }) => ({
+            id: det.id,
+            className: det.className || "Unknown",
+            confidence: typeof det.confidence === "number" ? det.confidence : null,
+            boundingBox: det.boundingBox,
+            verified: Boolean(det.verified),
+            rejected: Boolean(det.rejected),
+            color: det.metadata?.color,
+          }));
+          setAiSuggestions(mapped);
+        }
+      } catch (err) {
+        console.error("Failed to load AI detections:", err);
+      }
+    };
+    fetchAiDetections();
+  }, [assetId]);
+
+  // SAM3 prediction
   const runSam3Prediction = useCallback(async (points: SAM3Point[]) => {
     if (!session?.asset?.id || points.length === 0) return;
 
@@ -317,420 +347,293 @@ export default function AnnotatePage() {
       const response = await fetch('/api/sam3/predict', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          assetId: session.asset.id,
-          points: points,
-        }),
+        body: JSON.stringify({ assetId: session.asset.id, points }),
       });
 
-      // Handle rate limiting with user-friendly message
       if (response.status === 429) {
         const retryAfter = response.headers.get('Retry-After');
-        const waitTime = retryAfter ? `${retryAfter} seconds` : 'a moment';
-        setSam3Error(`Rate limit reached. Please wait ${waitTime} and try again.`);
+        setSam3Error(`Rate limit reached. Please wait ${retryAfter || 'a moment'} and try again.`);
         return;
       }
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        const errorMsg = errorData.error || 'SAM3 prediction failed';
-        setSam3Error(errorMsg);
-        setSam3PreviewPolygon(null);
-        setSam3Score(null);
+        setSam3Error(errorData.error || 'SAM3 prediction failed');
         return;
       }
 
       const result = await response.json();
-
-      // Track which backend was used
-      if (result.backend) {
-        setSam3Backend(result.backend);
-      }
-
-      // Show startup message if AWS is starting
-      if (result.startupMessage) {
-        setSam3StartupMessage(result.startupMessage);
-      } else {
-        setSam3StartupMessage(null);
-      }
+      if (result.backend) setSam3Backend(result.backend);
 
       if (result.success && result.polygon) {
         setSam3PreviewPolygon(result.polygon);
         setSam3Score(result.score);
         setSam3Error(null);
       } else {
-        console.warn('SAM3 returned no polygon');
         setSam3PreviewPolygon(null);
         setSam3Score(null);
-        // Not an error - just no detection at that point
       }
-    } catch (error) {
-      console.error('SAM3 prediction error:', error);
+    } catch {
       setSam3Error('Connection error. Please check your network.');
-      setSam3PreviewPolygon(null);
-      setSam3Score(null);
     } finally {
       setSam3Loading(false);
     }
   }, [session?.asset?.id]);
 
-  // Accept SAM3 prediction as annotation
-  const acceptSam3Prediction = async () => {
-    if (!session || !sam3PreviewPolygon || sam3PreviewPolygon.length < 3) {
-      alert('No valid SAM3 prediction to accept');
-      return;
-    }
-
-    try {
-      const response = await fetch('/api/annotations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: session.id,
-          weedType,
-          confidence,
-          coordinates: sam3PreviewPolygon,
-          notes: notes.trim() || undefined,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to save annotation');
-      }
-
-      const newAnnotation = await response.json();
-      setAnnotations(prev => [...prev, newAnnotation]);
-
-      // Reset SAM3 state
-      setSam3Points([]);
-      setSam3PreviewPolygon(null);
-      setSam3Score(null);
-      setNotes("");
-      setWeedType(WEED_TYPES[0]);
-      setConfidence("LIKELY");
-    } catch (err) {
-      alert('Failed to save annotation: ' + (err instanceof Error ? err.message : 'Unknown error'));
-    }
-  };
-
-  // Clear SAM3 points and preview
-  const clearSam3 = () => {
+  // Clear helpers
+  const clearSam3 = useCallback(() => {
     setSam3Points([]);
     setSam3PreviewPolygon(null);
     setSam3Score(null);
     setSam3Error(null);
-  };
+  }, []);
 
-  // Undo last SAM3 point
-  const undoSam3Point = () => {
-    if (sam3Points.length === 0) return;
-    const newPoints = sam3Points.slice(0, -1);
-    setSam3Points(newPoints);
-
-    if (newPoints.length > 0) {
-      runSam3Prediction(newPoints);
-    } else {
-      setSam3PreviewPolygon(null);
-      setSam3Score(null);
-    }
-  };
-
-  // Box exemplar functions
-  const addBoxExemplar = useCallback(() => {
-    if (!currentBox || !session?.asset?.id) return;
-
-    const { startX, startY, endX, endY } = currentBox;
-    const x1 = Math.min(startX, endX);
-    const y1 = Math.min(startY, endY);
-    const x2 = Math.max(startX, endX);
-    const y2 = Math.max(startY, endY);
-
-    // Ensure box has minimum size
-    if (Math.abs(x2 - x1) < 10 || Math.abs(y2 - y1) < 10) {
-      setCurrentBox(null);
-      setIsDrawingBox(false);
-      return;
-    }
-
-    const newExemplar: BoxExemplar = {
-      id: `exemplar-${Date.now()}`,
-      weedType: exemplarWeedType,
-      box: { x1, y1, x2, y2 },
-      assetId: session.asset.id,
-    };
-
-    setBoxExemplars(prev => [...prev, newExemplar]);
-    setCurrentBox(null);
-    setIsDrawingBox(false);
-  }, [currentBox, exemplarWeedType, session?.asset?.id]);
-
-  const removeBoxExemplar = (id: string) => {
-    setBoxExemplars(prev => prev.filter(e => e.id !== id));
-  };
-
-  const clearBoxExemplars = () => {
+  const clearBoxExemplars = useCallback(() => {
     setBoxExemplars([]);
     setCurrentBox(null);
     setIsDrawingBox(false);
-    setFindAllError(null);
-  };
+  }, []);
 
-  // Find all similar objects using box exemplars
-  const findAllSimilar = async () => {
-    if (!session?.asset?.id || boxExemplars.length < 1) {
-      setFindAllError('Add at least 1 exemplar box first');
+  const cancelDrawing = useCallback(() => {
+    setCurrentPolygon({ points: [], isComplete: false });
+    setIsDrawing(false);
+  }, []);
+
+  // Navigation
+  const navigateToAsset = useCallback((index: number) => {
+    if (index >= 0 && index < projectAssets.length) {
+      const asset = projectAssets[index];
+      router.push(`/annotate/${asset.id}`);
+    }
+  }, [projectAssets, router]);
+
+  const goToPreviousImage = useCallback(() => {
+    if (currentAssetIndex > 0) navigateToAsset(currentAssetIndex - 1);
+  }, [currentAssetIndex, navigateToAsset]);
+
+  const goToNextImage = useCallback(() => {
+    if (currentAssetIndex < projectAssets.length - 1) navigateToAsset(currentAssetIndex + 1);
+  }, [currentAssetIndex, projectAssets.length, navigateToAsset]);
+
+  // Mode changes
+  const handleModeChange = useCallback((mode: AnnotationMode) => {
+    setAnnotationMode(mode);
+    if (mode !== 'sam3') clearSam3();
+    if (mode !== 'box-exemplar') clearBoxExemplars();
+    if (mode !== 'manual') cancelDrawing();
+  }, [clearSam3, clearBoxExemplars, cancelDrawing]);
+
+  // Class selection via hotkey
+  const handleClassHotkey = useCallback((hotkeyNum: number) => {
+    const weedClass = getClassByHotkey(hotkeyNum);
+    if (weedClass) setSelectedClass(weedClass.name);
+  }, []);
+
+  // Accept annotation
+  const acceptAnnotation = useCallback(async () => {
+    if (!session) return;
+
+    // SAM3 mode
+    if (annotationMode === 'sam3' && sam3PreviewPolygon && sam3PreviewPolygon.length >= 3) {
+      try {
+        const response = await fetch('/api/annotations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: session.id,
+            weedType: selectedClass,
+            confidence,
+            coordinates: sam3PreviewPolygon,
+          }),
+        });
+
+        if (response.ok) {
+          const newAnnotation = await response.json();
+          setAnnotations(prev => [...prev, newAnnotation]);
+          clearSam3();
+        }
+      } catch (err) {
+        console.error('Failed to save annotation:', err);
+      }
       return;
     }
 
-    try {
-      setFindAllLoading(true);
-      setFindAllError(null);
+    // Manual mode
+    if (annotationMode === 'manual' && currentPolygon.isComplete && currentPolygon.points.length >= 3) {
+      try {
+        const response = await fetch('/api/annotations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: session.id,
+            weedType: selectedClass,
+            confidence,
+            coordinates: currentPolygon.points,
+          }),
+        });
 
-      // Convert exemplars to SAM3 box format
-      const boxes = boxExemplars.map(e => ({
-        x1: Math.round(e.box.x1),
-        y1: Math.round(e.box.y1),
-        x2: Math.round(e.box.x2),
-        y2: Math.round(e.box.y2),
-      }));
-
-      const response = await fetch('/api/sam3/predict', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          assetId: session.asset.id,
-          boxes,
-          textPrompt: exemplarWeedType.replace('Suspected ', ''),
-        }),
-      });
-
-      if (response.status === 429) {
-        const retryAfter = response.headers.get('Retry-After');
-        setFindAllError(`Rate limit reached. Wait ${retryAfter || 'a moment'} and retry.`);
-        return;
-      }
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Detection failed');
-      }
-
-      const result = await response.json();
-
-      // Track which backend was used
-      if (result.backend) {
-        setSam3Backend(result.backend);
-      }
-
-      // Show startup message if AWS is starting
-      if (result.startupMessage) {
-        setSam3StartupMessage(result.startupMessage);
-      }
-
-      if (result.success && result.detections && result.detections.length > 0) {
-        // Create annotations from detections
-        for (const detection of result.detections) {
-          if (detection.polygon && detection.polygon.length >= 3) {
-            const annotationResponse = await fetch('/api/annotations', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                sessionId: session.id,
-                weedType: exemplarWeedType,
-                confidence: detection.score >= 0.8 ? 'CERTAIN' : detection.score >= 0.5 ? 'LIKELY' : 'UNCERTAIN',
-                coordinates: detection.polygon,
-                notes: `Auto-detected via few-shot (${Math.round(detection.score * 100)}% confidence)`,
-              }),
-            });
-
-            if (annotationResponse.ok) {
-              const newAnnotation = await annotationResponse.json();
-              setAnnotations(prev => [...prev, newAnnotation]);
-            }
-          }
+        if (response.ok) {
+          const newAnnotation = await response.json();
+          setAnnotations(prev => [...prev, newAnnotation]);
+          cancelDrawing();
         }
-
-        // Clear exemplars after successful detection
-        setBoxExemplars([]);
-        setCurrentBox(null);
-      } else {
-        setFindAllError('No similar objects found. Try adding more exemplars.');
+      } catch (err) {
+        console.error('Failed to save annotation:', err);
       }
-    } catch (error) {
-      console.error('Find all similar error:', error);
-      setFindAllError(error instanceof Error ? error.message : 'Detection failed');
-    } finally {
-      setFindAllLoading(false);
     }
-  };
+  }, [session, annotationMode, sam3PreviewPolygon, currentPolygon, selectedClass, confidence, clearSam3, cancelDrawing]);
 
-  const fetchAiDetections = useCallback(async () => {
-    if (!assetId) return;
+  // Cancel current action
+  const handleCancel = useCallback(() => {
+    if (annotationMode === 'sam3') clearSam3();
+    else if (annotationMode === 'manual') cancelDrawing();
+    else if (annotationMode === 'box-exemplar') clearBoxExemplars();
+    setSelectedAnnotation(null);
+  }, [annotationMode, clearSam3, cancelDrawing, clearBoxExemplars]);
+
+  // Delete annotation
+  const deleteAnnotation = useCallback(async (id?: string) => {
+    const targetId = id || selectedAnnotation;
+    if (!targetId) return;
+
     try {
-      setAiLoading(true);
-      setAiError(null);
-      const response = await fetch(`/api/detections?assetId=${assetId}`);
-      if (!response.ok) {
-        throw new Error("Failed to load AI detections");
+      const response = await fetch(`/api/annotations/${targetId}`, { method: 'DELETE' });
+      if (response.ok) {
+        setAnnotations(prev => prev.filter(a => a.id !== targetId));
+        if (selectedAnnotation === targetId) setSelectedAnnotation(null);
       }
-      const data = await response.json();
-      const mapped: AiSuggestion[] = (data || []).map((det: {
-        id: string;
-        className?: string;
-        confidence?: number;
-        boundingBox?: { x: number; y: number; width: number; height: number };
-        bounding_box?: { x: number; y: number; width: number; height: number };
-        verified?: boolean;
-        rejected?: boolean;
-        metadata?: { color?: string };
-      }) => ({
-        id: det.id,
-        className: det.className || "Unknown",
-        confidence: typeof det.confidence === "number" ? det.confidence : null,
-        boundingBox: det.boundingBox || det.bounding_box || undefined,
-        verified: Boolean(det.verified),
-        rejected: Boolean(det.rejected),
-        color: det.metadata?.color,
-      }));
-      setAiSuggestions(mapped);
     } catch (err) {
-      setAiError(err instanceof Error ? err.message : "Failed to load AI detections");
-    } finally {
-      setAiLoading(false);
+      console.error('Failed to delete annotation:', err);
     }
-  }, [assetId]);
+  }, [selectedAnnotation]);
 
-  useEffect(() => {
-    fetchAiDetections();
-  }, [fetchAiDetections]);
+  // Undo last SAM3 point
+  const handleUndo = useCallback(() => {
+    if (annotationMode === 'sam3' && sam3Points.length > 0) {
+      const newPoints = sam3Points.slice(0, -1);
+      setSam3Points(newPoints);
+      if (newPoints.length > 0) runSam3Prediction(newPoints);
+      else { setSam3PreviewPolygon(null); setSam3Score(null); }
+    }
+  }, [annotationMode, sam3Points, runSam3Prediction]);
 
-  // Setup canvas when image loads
+  // Zoom controls
+  const handleZoomIn = useCallback(() => setZoomLevel(prev => Math.min(prev * 1.2, 5)), []);
+  const handleZoomOut = useCallback(() => setZoomLevel(prev => Math.max(prev / 1.2, 0.1)), []);
+  const handleResetView = useCallback(() => { setZoomLevel(1); setPanOffset({ x: 0, y: 0 }); }, []);
+
+  // Register hotkeys
+  useAnnotationHotkeys({
+    onNextImage: goToNextImage,
+    onPrevImage: goToPreviousImage,
+    onModeChange: handleModeChange,
+    onClassSelect: handleClassHotkey,
+    onAccept: acceptAnnotation,
+    onCancel: handleCancel,
+    onDelete: () => deleteAnnotation(),
+    onUndo: handleUndo,
+    onZoomIn: handleZoomIn,
+    onZoomOut: handleZoomOut,
+    onResetView: handleResetView,
+    onToggleHelp: () => setShowHotkeyHelp(prev => !prev),
+    disabled: loading,
+  });
+
+  // Canvas setup
   const handleImageLoad = useCallback(() => {
     const canvas = canvasRef.current;
     const image = imageRef.current;
-    if (!canvas || !image) return;
-    
-    const containerWidth = canvas.parentElement?.clientWidth || 800;
-    const maxWidth = Math.min(containerWidth - 40, 1200);
-    
-    const imageScale = Math.min(maxWidth / image.naturalWidth, 600 / image.naturalHeight);
+    const container = canvasContainerRef.current;
+    if (!canvas || !image || !container) return;
+
+    const containerWidth = container.clientWidth;
+    const containerHeight = container.clientHeight;
+
+    const imageScale = Math.min(
+      containerWidth / image.naturalWidth,
+      containerHeight / image.naturalHeight
+    );
     setScale(imageScale);
-    
+
     canvas.width = image.naturalWidth * imageScale;
     canvas.height = image.naturalHeight * imageScale;
-    
+
     setImageLoaded(true);
-    redrawCanvas();
   }, []);
 
-  // Redraw canvas with annotations
+  // Redraw canvas
   const redrawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     const image = imageRef.current;
     if (!canvas || !image || !imageLoaded) return;
-    
+
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    
-    // Clear canvas
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // Save context for transformations
     ctx.save();
-    
-    // Apply pan and zoom transformations
     ctx.translate(panOffset.x, panOffset.y);
     ctx.scale(zoomLevel, zoomLevel);
-    
-    // Draw the background image first - scale the image draw to match zoom
     ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
 
-    // Draw AI suggestions as dashed boxes
+    // AI suggestions
     if (showAiSuggestions) {
-      aiSuggestions
-        .filter(s => s.boundingBox && !s.rejected)
-        .forEach((suggestion) => {
-          const color = suggestion.color || '#0ea5e9';
-          const bbox = suggestion.boundingBox!;
-          const startX = (bbox.x - bbox.width / 2) * scale;
-          const startY = (bbox.y - bbox.height / 2) * scale;
-          const boxWidth = bbox.width * scale;
-          const boxHeight = bbox.height * scale;
+      aiSuggestions.filter(s => s.boundingBox && !s.rejected).forEach((suggestion) => {
+        const color = suggestion.color || '#0ea5e9';
+        const bbox = suggestion.boundingBox!;
+        const startX = (bbox.x - bbox.width / 2) * scale;
+        const startY = (bbox.y - bbox.height / 2) * scale;
+        const boxWidth = bbox.width * scale;
+        const boxHeight = bbox.height * scale;
 
-          ctx.save();
-          ctx.setLineDash([6, 4]);
-          ctx.lineWidth = 2 / zoomLevel;
-          ctx.strokeStyle = color;
-          ctx.fillStyle = hexToRgba(color, suggestion.verified ? 0.25 : 0.12);
-          ctx.strokeRect(startX, startY, boxWidth, boxHeight);
-          ctx.fillRect(startX, startY, boxWidth, boxHeight);
-          ctx.font = `${12 / zoomLevel}px Arial`;
-          ctx.fillStyle = '#0f172a';
-          const label = `${suggestion.className} ${suggestion.confidence !== null ? `(${Math.round(suggestion.confidence * 100)}%)` : ''}`;
-          ctx.fillText(label.trim(), startX + 4 / zoomLevel, startY + 14 / zoomLevel);
-          ctx.restore();
-        });
+        ctx.save();
+        ctx.setLineDash([6, 4]);
+        ctx.lineWidth = 2 / zoomLevel;
+        ctx.strokeStyle = color;
+        ctx.fillStyle = hexToRgba(color, suggestion.verified ? 0.25 : 0.12);
+        ctx.strokeRect(startX, startY, boxWidth, boxHeight);
+        ctx.fillRect(startX, startY, boxWidth, boxHeight);
+        ctx.restore();
+      });
       ctx.setLineDash([]);
     }
-    
-    // Draw existing annotations
+
+    // Existing annotations
     annotations.forEach((annotation) => {
       const isSelected = selectedAnnotation === annotation.id;
-      
-      ctx.strokeStyle = isSelected ? '#FF0000' : '#00FF00';
-      ctx.fillStyle = isSelected ? 'rgba(255, 0, 0, 0.1)' : 'rgba(0, 255, 0, 0.1)';
-      ctx.lineWidth = (isSelected ? 3 : 2) / zoomLevel; // Adjust line width for zoom
-      
+      const color = getClassColor(annotation.weedType);
+
+      ctx.strokeStyle = isSelected ? '#FF0000' : color;
+      ctx.fillStyle = hexToRgba(isSelected ? '#FF0000' : color, 0.2);
+      ctx.lineWidth = (isSelected ? 3 : 2) / zoomLevel;
+
       if (annotation.coordinates.length > 2) {
         ctx.beginPath();
         const [startX, startY] = annotation.coordinates[0];
         ctx.moveTo(startX * scale, startY * scale);
-        
-        annotation.coordinates.forEach(([x, y]) => {
-          ctx.lineTo(x * scale, y * scale);
-        });
-        
+        annotation.coordinates.forEach(([x, y]) => ctx.lineTo(x * scale, y * scale));
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
-        
-        // Draw label
-        const centerX = annotation.coordinates.reduce((sum, [x]) => sum + x, 0) / annotation.coordinates.length;
-        const centerY = annotation.coordinates.reduce((sum, [, y]) => sum + y, 0) / annotation.coordinates.length;
-        
-        ctx.fillStyle = '#000';
-        ctx.font = `${12 / zoomLevel}px Arial`; // Adjust font size for zoom
-        ctx.fillText(
-          `${annotation.weedType} (${annotation.confidence})`,
-          centerX * scale,
-          centerY * scale
-        );
       }
     });
-    
-    // Draw current polygon being drawn (manual mode)
+
+    // Current polygon (manual mode)
     if (annotationMode === 'manual' && currentPolygon.points.length > 0) {
       ctx.strokeStyle = '#0080FF';
       ctx.fillStyle = 'rgba(0, 128, 255, 0.1)';
-      ctx.lineWidth = 2 / zoomLevel; // Adjust line width for zoom
+      ctx.lineWidth = 2 / zoomLevel;
 
       if (currentPolygon.points.length > 2) {
         ctx.beginPath();
         const [startX, startY] = currentPolygon.points[0];
         ctx.moveTo(startX * scale, startY * scale);
-
-        currentPolygon.points.forEach(([x, y]) => {
-          ctx.lineTo(x * scale, y * scale);
-        });
-
-        if (currentPolygon.isComplete) {
-          ctx.closePath();
-          ctx.fill();
-        }
+        currentPolygon.points.forEach(([x, y]) => ctx.lineTo(x * scale, y * scale));
+        if (currentPolygon.isComplete) ctx.closePath();
+        ctx.fill();
         ctx.stroke();
       }
 
-      // Draw points - adjust size for zoom
       currentPolygon.points.forEach(([x, y]) => {
         ctx.fillStyle = '#0080FF';
         ctx.beginPath();
@@ -739,535 +642,211 @@ export default function AnnotatePage() {
       });
     }
 
-    // Draw SAM3 preview polygon (SAM3 mode)
+    // SAM3 preview
     if (annotationMode === 'sam3' && sam3PreviewPolygon && sam3PreviewPolygon.length > 2) {
       ctx.save();
       ctx.setLineDash([8, 4]);
-      ctx.strokeStyle = '#3B82F6'; // Blue
+      ctx.strokeStyle = '#3B82F6';
       ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
       ctx.lineWidth = 3 / zoomLevel;
 
       ctx.beginPath();
       const [firstX, firstY] = sam3PreviewPolygon[0];
       ctx.moveTo(firstX * scale, firstY * scale);
-
-      sam3PreviewPolygon.forEach(([x, y]) => {
-        ctx.lineTo(x * scale, y * scale);
-      });
-
+      sam3PreviewPolygon.forEach(([x, y]) => ctx.lineTo(x * scale, y * scale));
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
       ctx.restore();
     }
 
-    // Draw SAM3 click points
+    // SAM3 points
     if (annotationMode === 'sam3' && sam3Points.length > 0) {
       sam3Points.forEach((point) => {
-        // Foreground = green, Background = red
         const color = point.label === 1 ? '#22C55E' : '#EF4444';
-        const innerColor = point.label === 1 ? '#16A34A' : '#DC2626';
-
-        // Outer circle
         ctx.beginPath();
         ctx.fillStyle = color;
         ctx.arc(point.x * scale, point.y * scale, 8 / zoomLevel, 0, 2 * Math.PI);
         ctx.fill();
-
-        // Inner circle
-        ctx.beginPath();
-        ctx.fillStyle = innerColor;
-        ctx.arc(point.x * scale, point.y * scale, 4 / zoomLevel, 0, 2 * Math.PI);
-        ctx.fill();
-
-        // White center dot
         ctx.beginPath();
         ctx.fillStyle = '#FFFFFF';
-        ctx.arc(point.x * scale, point.y * scale, 2 / zoomLevel, 0, 2 * Math.PI);
+        ctx.arc(point.x * scale, point.y * scale, 3 / zoomLevel, 0, 2 * Math.PI);
         ctx.fill();
       });
     }
 
-    // Draw box exemplars (box-exemplar mode)
-    if (boxExemplars.length > 0) {
-      boxExemplars.forEach((exemplar, index) => {
-        const { x1, y1, x2, y2 } = exemplar.box;
-        const boxX = x1 * scale;
-        const boxY = y1 * scale;
-        const boxW = (x2 - x1) * scale;
-        const boxH = (y2 - y1) * scale;
+    // Box exemplars
+    boxExemplars.forEach((exemplar, index) => {
+      const { x1, y1, x2, y2 } = exemplar.box;
+      ctx.save();
+      ctx.strokeStyle = '#8B5CF6';
+      ctx.fillStyle = 'rgba(139, 92, 246, 0.15)';
+      ctx.lineWidth = 2 / zoomLevel;
+      ctx.strokeRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale);
+      ctx.fillRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale);
+      ctx.fillStyle = '#7C3AED';
+      ctx.font = `bold ${12 / zoomLevel}px Arial`;
+      ctx.fillText(`#${index + 1}`, x1 * scale + 4 / zoomLevel, y1 * scale + 14 / zoomLevel);
+      ctx.restore();
+    });
 
-        ctx.save();
-        ctx.strokeStyle = '#8B5CF6'; // Purple
-        ctx.fillStyle = 'rgba(139, 92, 246, 0.15)';
-        ctx.lineWidth = 2 / zoomLevel;
-        ctx.strokeRect(boxX, boxY, boxW, boxH);
-        ctx.fillRect(boxX, boxY, boxW, boxH);
-
-        // Label
-        ctx.fillStyle = '#7C3AED';
-        ctx.font = `bold ${12 / zoomLevel}px Arial`;
-        ctx.fillText(`#${index + 1} ${exemplar.weedType}`, boxX + 4 / zoomLevel, boxY + 14 / zoomLevel);
-        ctx.restore();
-      });
+    // Current box
+    if (annotationMode === 'box-exemplar' && currentBox) {
+      const { startX, startY, endX, endY } = currentBox;
+      const x1 = Math.min(startX, endX);
+      const y1 = Math.min(startY, endY);
+      ctx.save();
+      ctx.setLineDash([6, 3]);
+      ctx.strokeStyle = '#A855F7';
+      ctx.fillStyle = 'rgba(168, 85, 247, 0.2)';
+      ctx.lineWidth = 2 / zoomLevel;
+      ctx.strokeRect(x1 * scale, y1 * scale, Math.abs(endX - startX) * scale, Math.abs(endY - startY) * scale);
+      ctx.fillRect(x1 * scale, y1 * scale, Math.abs(endX - startX) * scale, Math.abs(endY - startY) * scale);
+      ctx.restore();
     }
 
-    // Draw current box being drawn
-    if (annotationMode === 'box-exemplar' && currentBox) {
+    ctx.restore();
+  }, [annotations, currentPolygon, selectedAnnotation, scale, imageLoaded, zoomLevel, panOffset, aiSuggestions, showAiSuggestions, annotationMode, sam3Points, sam3PreviewPolygon, boxExemplars, currentBox]);
+
+  useEffect(() => { redrawCanvas(); }, [redrawCanvas]);
+
+  // Mouse handlers
+  const getImageCoords = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    const canvasX = e.clientX - rect.left;
+    const canvasY = e.clientY - rect.top;
+    return {
+      x: (canvasX - panOffset.x) / (scale * zoomLevel),
+      y: (canvasY - panOffset.y) / (scale * zoomLevel),
+    };
+  }, [panOffset, scale, zoomLevel]);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (e.button === 1 || e.shiftKey) {
+      e.preventDefault();
+      setIsPanning(true);
+      const rect = e.currentTarget.getBoundingClientRect();
+      setLastPanPoint({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+      return;
+    }
+
+    if (annotationMode === 'box-exemplar' && e.button === 0) {
+      const { x, y } = getImageCoords(e);
+      setCurrentBox({ startX: x, startY: y, endX: x, endY: y });
+      setIsDrawingBox(true);
+    }
+  }, [annotationMode, getImageCoords]);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (isPanning) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const currentX = e.clientX - rect.left;
+      const currentY = e.clientY - rect.top;
+      setPanOffset(prev => ({
+        x: prev.x + (currentX - lastPanPoint.x),
+        y: prev.y + (currentY - lastPanPoint.y),
+      }));
+      setLastPanPoint({ x: currentX, y: currentY });
+      return;
+    }
+
+    if (isDrawingBox && annotationMode === 'box-exemplar') {
+      const { x, y } = getImageCoords(e);
+      setCurrentBox(prev => prev ? { ...prev, endX: x, endY: y } : null);
+    }
+  }, [isPanning, lastPanPoint, isDrawingBox, annotationMode, getImageCoords]);
+
+  const handleMouseUp = useCallback(() => {
+    if (isPanning) { setIsPanning(false); return; }
+
+    if (isDrawingBox && annotationMode === 'box-exemplar' && currentBox && session?.asset?.id) {
       const { startX, startY, endX, endY } = currentBox;
       const x1 = Math.min(startX, endX);
       const y1 = Math.min(startY, endY);
       const x2 = Math.max(startX, endX);
       const y2 = Math.max(startY, endY);
 
-      ctx.save();
-      ctx.setLineDash([6, 3]);
-      ctx.strokeStyle = '#A855F7'; // Lighter purple
-      ctx.fillStyle = 'rgba(168, 85, 247, 0.2)';
-      ctx.lineWidth = 2 / zoomLevel;
-      ctx.strokeRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale);
-      ctx.fillRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale);
-      ctx.restore();
+      if (Math.abs(x2 - x1) >= 10 && Math.abs(y2 - y1) >= 10) {
+        setBoxExemplars(prev => [...prev, {
+          id: `exemplar-${Date.now()}`,
+          weedType: selectedClass,
+          box: { x1, y1, x2, y2 },
+          assetId: session.asset.id,
+        }]);
+      }
+      setCurrentBox(null);
+      setIsDrawingBox(false);
     }
+  }, [isPanning, isDrawingBox, annotationMode, currentBox, session?.asset?.id, selectedClass]);
 
-    // Restore context
-    ctx.restore();
-  }, [annotations, currentPolygon, selectedAnnotation, scale, imageLoaded, zoomLevel, panOffset, aiSuggestions, showAiSuggestions, annotationMode, sam3Points, sam3PreviewPolygon, boxExemplars, currentBox]);
+  const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (isPanning || e.shiftKey) return;
+    const { x, y } = getImageCoords(e);
 
-  // Redraw when dependencies change
-  useEffect(() => {
-    redrawCanvas();
-  }, [redrawCanvas]);
-
-  // Zoom functions
-  const handleZoomIn = () => {
-    setZoomLevel(prev => {
-      const newZoom = Math.min(prev * 1.2, 5);
-      console.log('Zoom in:', prev, '->', newZoom);
-      return newZoom;
-    });
-  };
-
-  const handleZoomOut = () => {
-    setZoomLevel(prev => {
-      const newZoom = Math.max(prev / 1.2, 0.1);
-      console.log('Zoom out:', prev, '->', newZoom);
-      return newZoom;
-    });
-  };
-
-  const handleResetView = () => {
-    setZoomLevel(1);
-    setPanOffset({ x: 0, y: 0 });
-  };
-
-  // Pan functions
-  const handleMouseDown = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
-    // Middle mouse or Shift+click for panning (all modes)
-    if (event.button === 1 || event.shiftKey) {
-      event.preventDefault();
-      setIsPanning(true);
-      const rect = event.currentTarget.getBoundingClientRect();
-      setLastPanPoint({
-        x: event.clientX - rect.left,
-        y: event.clientY - rect.top,
-      });
-      return;
-    }
-
-    // Box exemplar mode: start drawing box on left click
-    if (annotationMode === 'box-exemplar' && event.button === 0) {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-
-      const rect = canvas.getBoundingClientRect();
-      const canvasX = event.clientX - rect.left;
-      const canvasY = event.clientY - rect.top;
-
-      // Convert to image coordinates
-      const x = (canvasX - panOffset.x) / (scale * zoomLevel);
-      const y = (canvasY - panOffset.y) / (scale * zoomLevel);
-
-      setCurrentBox({ startX: x, startY: y, endX: x, endY: y });
-      setIsDrawingBox(true);
-    }
-  }, [annotationMode, panOffset, scale, zoomLevel]);
-
-  const handleMouseMove = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
-    if (isPanning) {
-      const rect = event.currentTarget.getBoundingClientRect();
-      const currentX = event.clientX - rect.left;
-      const currentY = event.clientY - rect.top;
-
-      setPanOffset(prev => ({
-        x: prev.x + (currentX - lastPanPoint.x),
-        y: prev.y + (currentY - lastPanPoint.y),
-      }));
-
-      setLastPanPoint({ x: currentX, y: currentY });
-      return;
-    }
-
-    // Update box while drawing in box-exemplar mode
-    if (isDrawingBox && annotationMode === 'box-exemplar') {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-
-      const rect = canvas.getBoundingClientRect();
-      const canvasX = event.clientX - rect.left;
-      const canvasY = event.clientY - rect.top;
-
-      const x = (canvasX - panOffset.x) / (scale * zoomLevel);
-      const y = (canvasY - panOffset.y) / (scale * zoomLevel);
-
-      setCurrentBox(prev => prev ? { ...prev, endX: x, endY: y } : null);
-    }
-  }, [isPanning, lastPanPoint, isDrawingBox, annotationMode, panOffset, scale, zoomLevel]);
-
-  const handleMouseUp = useCallback(() => {
-    if (isPanning) {
-      setIsPanning(false);
-      return;
-    }
-
-    // Finalize box in box-exemplar mode
-    if (isDrawingBox && annotationMode === 'box-exemplar') {
-      addBoxExemplar();
-    }
-  }, [isPanning, isDrawingBox, annotationMode, addBoxExemplar]);
-
-  // Handle canvas clicks
-  const handleCanvasClick = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas || isPanning) return;
-
-    // Don't add points if shift is held (panning mode)
-    if (event.shiftKey) return;
-
-    const rect = canvas.getBoundingClientRect();
-
-    // Get click position relative to canvas
-    const canvasX = event.clientX - rect.left;
-    const canvasY = event.clientY - rect.top;
-
-    // Convert to image coordinates accounting for zoom and pan
-    const x = (canvasX - panOffset.x) / (scale * zoomLevel);
-    const y = (canvasY - panOffset.y) / (scale * zoomLevel);
-
-    // SAM3 mode handling
     if (annotationMode === 'sam3') {
-      // Left click = foreground (1), Right click handled by context menu
-      const newPoint: SAM3Point = {
-        x: Math.round(x),
-        y: Math.round(y),
-        label: 1, // Foreground
-      };
-
+      const newPoint: SAM3Point = { x: Math.round(x), y: Math.round(y), label: 1 };
       const newPoints = [...sam3Points, newPoint];
       setSam3Points(newPoints);
       runSam3Prediction(newPoints);
       return;
     }
 
-    // Manual mode handling
-    if (currentPolygon.isComplete) return;
+    if (annotationMode === 'manual') {
+      if (currentPolygon.isComplete) return;
 
-    // Check if clicking close to first point to close polygon
-    if (currentPolygon.points.length > 2) {
-      const [firstX, firstY] = currentPolygon.points[0];
-      const distance = Math.sqrt((x - firstX) ** 2 + (y - firstY) ** 2);
-
-      if (distance < 10 / (scale * zoomLevel)) {
-        // Close polygon
-        setCurrentPolygon(prev => ({ ...prev, isComplete: true }));
-        return;
+      if (currentPolygon.points.length > 2) {
+        const [firstX, firstY] = currentPolygon.points[0];
+        const distance = Math.sqrt((x - firstX) ** 2 + (y - firstY) ** 2);
+        if (distance < 10 / (scale * zoomLevel)) {
+          setCurrentPolygon(prev => ({ ...prev, isComplete: true }));
+          return;
+        }
       }
+
+      setCurrentPolygon(prev => ({ ...prev, points: [...prev.points, [x, y]] }));
+      if (!isDrawing) setIsDrawing(true);
     }
+  }, [isPanning, getImageCoords, annotationMode, sam3Points, runSam3Prediction, currentPolygon, scale, zoomLevel, isDrawing]);
 
-    // Add new point
-    setCurrentPolygon(prev => ({
-      ...prev,
-      points: [...prev.points, [x, y]]
-    }));
-
-    if (!isDrawing) {
-      setIsDrawing(true);
-    }
-  }, [currentPolygon.points, currentPolygon.isComplete, isDrawing, scale, zoomLevel, panOffset, isPanning, annotationMode, sam3Points, runSam3Prediction]);
-
-  // Handle right-click for SAM3 background points
-  const handleCanvasContextMenu = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
-    event.preventDefault();
-
+  const handleCanvasContextMenu = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
     if (annotationMode !== 'sam3' || isPanning) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const canvasX = event.clientX - rect.left;
-    const canvasY = event.clientY - rect.top;
-
-    const x = (canvasX - panOffset.x) / (scale * zoomLevel);
-    const y = (canvasY - panOffset.y) / (scale * zoomLevel);
-
-    // Right click = background point (label=0)
-    const newPoint: SAM3Point = {
-      x: Math.round(x),
-      y: Math.round(y),
-      label: 0, // Background
-    };
-
+    const { x, y } = getImageCoords(e);
+    const newPoint: SAM3Point = { x: Math.round(x), y: Math.round(y), label: 0 };
     const newPoints = [...sam3Points, newPoint];
     setSam3Points(newPoints);
     runSam3Prediction(newPoints);
-  }, [annotationMode, isPanning, panOffset, scale, zoomLevel, sam3Points, runSam3Prediction]);
-
-  // Save annotation
-  const saveAnnotation = async () => {
-    if (!session || !currentPolygon.isComplete || currentPolygon.points.length < 3) {
-      alert('Please complete drawing a polygon first');
-      return;
-    }
-    
-    try {
-      const response = await fetch('/api/annotations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: session.id,
-          weedType,
-          confidence,
-          coordinates: currentPolygon.points,
-          notes: notes.trim() || undefined,
-        }),
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to save annotation');
-      }
-      
-      const newAnnotation = await response.json();
-      setAnnotations(prev => [...prev, newAnnotation]);
-      
-      // Reset drawing state
-      setCurrentPolygon({ points: [], isComplete: false });
-      setIsDrawing(false);
-      setNotes("");
-      setWeedType(WEED_TYPES[0]);
-      setConfidence("LIKELY");
-      
-    } catch (err) {
-      alert('Failed to save annotation: ' + (err instanceof Error ? err.message : 'Unknown error'));
-    }
-  };
-
-  // Cancel current drawing
-  const cancelDrawing = () => {
-    setCurrentPolygon({ points: [], isComplete: false });
-    setIsDrawing(false);
-  };
-
-  // Delete annotation
-  const deleteAnnotation = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this annotation?')) return;
-    
-    try {
-      const response = await fetch(`/api/annotations/${id}`, {
-        method: 'DELETE',
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to delete annotation');
-      }
-      
-      setAnnotations(prev => prev.filter(a => a.id !== id));
-      if (selectedAnnotation === id) {
-        setSelectedAnnotation(null);
-      }
-    } catch (err) {
-      alert('Failed to delete annotation: ' + (err instanceof Error ? err.message : 'Unknown error'));
-    }
-  };
+  }, [annotationMode, isPanning, getImageCoords, sam3Points, runSam3Prediction]);
 
   // Complete session
   const completeSession = async () => {
     if (!session) return;
-    
-    if (annotations.length === 0) {
-      if (!confirm('No annotations have been created. Are you sure you want to complete this session?')) {
-        return;
-      }
-    }
-    
     try {
       await fetch(`/api/annotations/sessions/${session.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'COMPLETED' }),
       });
-      
-      alert(`Session completed! ${annotations.length} annotations saved.`);
       router.push('/images');
     } catch (err) {
-      alert('Failed to complete session: ' + (err instanceof Error ? err.message : 'Unknown error'));
+      console.error('Failed to complete session:', err);
     }
   };
 
-  const pushToTraining = async (annotationId: string) => {
-    try {
-      setPushingId(annotationId);
-      setPushError(null);
-
-      const response = await fetch("/api/roboflow/training/upload", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ annotationId }),
-      });
-
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw new Error(body?.error || "Failed to push annotation to training");
-      }
-
-      setAnnotations((prev) =>
-        prev.map((annotation) =>
-          annotation.id === annotationId
-            ? {
-                ...annotation,
-                pushedToTraining: true,
-                pushedAt: new Date().toISOString(),
-              }
-            : annotation,
-        ),
-      );
-    } catch (err) {
-      setPushError(
-        err instanceof Error ? err.message : "Failed to push to training",
-      );
-    } finally {
-      setPushingId(null);
-    }
-  };
-
-  const acceptDetection = async (detectionId: string) => {
-    const detection = aiSuggestions.find((d) => d.id === detectionId);
-    if (!detection) return;
-    try {
-      await fetch(`/api/detections/${detectionId}/verify`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          verified: true,
-          className: detection.className,
-          boundingBox: detection.boundingBox,
-        }),
-      });
-      setAiSuggestions((prev) =>
-        prev.map((item) =>
-          item.id === detectionId
-            ? { ...item, verified: true, rejected: false }
-            : item,
-        ),
-      );
-    } catch (error) {
-      setAiError(
-        error instanceof Error ? error.message : "Failed to accept detection",
-      );
-    }
-  };
-
-  const rejectDetection = async (detectionId: string) => {
-    try {
-      await fetch(`/api/detections/${detectionId}/reject`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
-      setAiSuggestions((prev) =>
-        prev.map((item) =>
-          item.id === detectionId ? { ...item, rejected: true } : item,
-        ),
-      );
-    } catch (error) {
-      setAiError(
-        error instanceof Error ? error.message : "Failed to reject detection",
-      );
-    }
-  };
-
-  const acceptAllDetections = async () => {
-    if (aiSuggestions.length === 0) return;
-    setBulkAction("accept");
-    try {
-      await Promise.all(
-        aiSuggestions
-          .filter((d) => !d.rejected)
-          .map((d) =>
-            fetch(`/api/detections/${d.id}/verify`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                verified: true,
-                className: d.className,
-                boundingBox: d.boundingBox,
-              }),
-            }),
-          ),
-      );
-      setAiSuggestions((prev) =>
-        prev.map((item) =>
-          item.rejected ? item : { ...item, verified: true, rejected: false },
-        ),
-      );
-    } catch (error) {
-      setAiError(
-        error instanceof Error ? error.message : "Failed to accept all",
-      );
-    } finally {
-      setBulkAction(null);
-    }
-  };
-
-  const rejectAllDetections = async () => {
-    if (aiSuggestions.length === 0) return;
-    setBulkAction("reject");
-    try {
-      await Promise.all(
-        aiSuggestions
-          .filter((d) => !d.rejected)
-          .map((d) =>
-            fetch(`/api/detections/${d.id}/reject`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-            }),
-          ),
-      );
-      setAiSuggestions((prev) =>
-        prev.map((item) => ({ ...item, rejected: true, verified: false })),
-      );
-    } catch (error) {
-      setAiError(
-        error instanceof Error ? error.message : "Failed to reject all",
-      );
-    } finally {
-      setBulkAction(null);
-    }
-  };
-
-  const updateSuggestionClass = (detectionId: string, newClass: string) => {
-    setAiSuggestions((prev) =>
-      prev.map((item) =>
-        item.id === detectionId ? { ...item, className: newClass } : item,
-      ),
-    );
-  };
+  // Determine action states
+  const canAccept = (annotationMode === 'sam3' && sam3PreviewPolygon && sam3PreviewPolygon.length >= 3) ||
+    (annotationMode === 'manual' && currentPolygon.isComplete && currentPolygon.points.length >= 3);
+  const canUndo = annotationMode === 'sam3' && sam3Points.length > 0;
+  const canDelete = !!selectedAnnotation;
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="h-screen flex items-center justify-center bg-gray-100">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500 mx-auto mb-4"></div>
-          <p>Loading annotation session...</p>
+          <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2 text-blue-500" />
+          <p className="text-gray-600">Loading annotation session...</p>
         </div>
       </div>
     );
@@ -1275,739 +854,219 @@ export default function AnnotatePage() {
 
   if (error || !session) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle className="text-red-600">Error</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="mb-4">{error || 'Session not found'}</p>
-            <Link href="/images">
-              <Button>Return to Images</Button>
-            </Link>
-          </CardContent>
-        </Card>
+      <div className="h-screen flex items-center justify-center bg-gray-100">
+        <div className="bg-white p-6 rounded-lg shadow-lg max-w-md text-center">
+          <p className="text-red-600 mb-4">{error || 'Session not found'}</p>
+          <Link href="/images">
+            <Button>Return to Images</Button>
+          </Link>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <Link href="/images">
-                <Button variant="ghost" size="sm">
-                  <ArrowLeft className="w-4 h-4 mr-2" />
-                  Back to Images
-                </Button>
-              </Link>
-              <div className="flex items-center space-x-2">
-                <div className="w-8 h-8 bg-gradient-to-r from-green-500 to-blue-500 rounded-lg"></div>
-                <span className="text-xl font-bold bg-gradient-to-r from-green-600 to-blue-600 bg-clip-text text-transparent">
-                  AgriDrone Ops
-                </span>
+    <div className="h-screen flex flex-col bg-gray-100 overflow-hidden">
+      {/* Compact Header */}
+      <header className="h-12 bg-white border-b border-gray-200 flex items-center justify-between px-4 flex-shrink-0">
+        <div className="flex items-center gap-3">
+          <Link href="/images">
+            <Button variant="ghost" size="sm" className="h-8 px-2">
+              <ArrowLeft className="w-4 h-4" />
+            </Button>
+          </Link>
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-sm truncate max-w-[200px]">{session.asset.fileName}</span>
+            <Badge variant="outline" className="text-xs">
+              {currentAssetIndex + 1} / {projectAssets.length || 1}
+            </Badge>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {/* SAM3 Status */}
+          {sam3Health && (
+            <Badge variant={sam3Health.available ? "default" : "secondary"} className="text-xs">
+              {sam3Health.available ? (sam3Backend === 'aws' ? 'SAM3 AWS' : 'SAM3') : 'SAM3 Unavailable'}
+            </Badge>
+          )}
+
+          <Button
+            size="sm"
+            onClick={completeSession}
+            className="h-8 bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600"
+          >
+            <Check className="w-4 h-4 mr-1" />
+            Done
+          </Button>
+        </div>
+      </header>
+
+      {/* Filmstrip */}
+      {projectAssets.length > 1 && (
+        <Filmstrip
+          assets={projectAssets}
+          currentIndex={currentAssetIndex}
+          onSelect={navigateToAsset}
+          annotationCounts={annotationCounts}
+        />
+      )}
+
+      {/* Main Content */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Canvas Area - Takes most of the space */}
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* Canvas Container */}
+          <div
+            ref={canvasContainerRef}
+            className="flex-1 relative flex items-center justify-center bg-gray-800 overflow-hidden"
+          >
+            <img
+              ref={imageRef}
+              src={session.asset.storageUrl}
+              alt={session.asset.fileName}
+              onLoad={handleImageLoad}
+              className="hidden"
+            />
+            <canvas
+              ref={canvasRef}
+              onClick={handleCanvasClick}
+              onContextMenu={handleCanvasContextMenu}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+              className={`max-w-full max-h-full ${isPanning ? 'cursor-grabbing' : 'cursor-crosshair'}`}
+              style={{ display: imageLoaded ? 'block' : 'none' }}
+            />
+            {!imageLoaded && (
+              <div className="text-white text-center">
+                <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2" />
+                <p className="text-sm">Loading image...</p>
               </div>
+            )}
+
+            {/* SAM3 Loading Overlay */}
+            {sam3Loading && (
+              <div className="absolute inset-0 bg-black/20 flex items-center justify-center">
+                <div className="bg-white rounded-lg px-4 py-2 flex items-center gap-2 shadow-lg">
+                  <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+                  <span className="text-sm">Processing...</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Footer Bar */}
+          <div className="h-12 bg-white border-t border-gray-200 flex items-center justify-between px-4 flex-shrink-0">
+            {/* Zoom Controls */}
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={handleZoomOut} className="h-8 w-8 p-0">
+                <ZoomOut className="h-4 w-4" />
+              </Button>
+              <span className="text-xs text-gray-500 w-12 text-center">{Math.round(zoomLevel * 100)}%</span>
+              <Button variant="ghost" size="sm" onClick={handleZoomIn} className="h-8 w-8 p-0">
+                <ZoomIn className="h-4 w-4" />
+              </Button>
+              <Button variant="ghost" size="sm" onClick={handleResetView} className="h-8 px-2">
+                <RotateCcw className="h-4 w-4 mr-1" />
+                <span className="text-xs">Fit</span>
+              </Button>
             </div>
-            <div className="flex space-x-2">
+
+            {/* Navigation */}
+            <div className="flex items-center gap-2">
               <Button
-                onClick={completeSession}
-                className="bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600"
+                variant="outline"
+                size="sm"
+                onClick={goToPreviousImage}
+                disabled={currentAssetIndex === 0}
+                className="h-8"
               >
-                <Check className="w-4 h-4 mr-2" />
-                Complete Session
+                <ChevronLeft className="h-4 w-4 mr-1" />
+                Prev
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={goToNextImage}
+                disabled={currentAssetIndex >= projectAssets.length - 1}
+                className="h-8"
+              >
+                Next
+                <ChevronRight className="h-4 w-4 ml-1" />
               </Button>
             </div>
           </div>
         </div>
-      </header>
 
-      {/* Main Content */}
-      <main className="container mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Image Canvas */}
-          <div className="lg:col-span-2">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>Annotation - {session.asset.fileName}</CardTitle>
-                    <CardDescription>
-                      {annotationMode === 'sam3' && 'Left-click to mark object, Right-click to exclude. Click Accept when satisfied.'}
-                      {annotationMode === 'manual' && 'Click to draw polygon points. Close the polygon by clicking near the first point.'}
-                      {annotationMode === 'box-exemplar' && 'Draw boxes around examples, then click "Find All Similar" to detect all matching objects.'}
-                    </CardDescription>
-                  </div>
-                  {/* Mode Toggle */}
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant={annotationMode === 'sam3' ? 'default' : 'outline'}
-                      onClick={() => {
-                        setAnnotationMode('sam3');
-                        cancelDrawing();
-                        clearBoxExemplars();
-                      }}
-                      disabled={!sam3Health?.available}
-                      className={annotationMode === 'sam3' ? 'bg-blue-500 hover:bg-blue-600' : ''}
-                    >
-                      <Wand2 className="w-4 h-4 mr-1" />
-                      AI Segment
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant={annotationMode === 'box-exemplar' ? 'default' : 'outline'}
-                      onClick={() => {
-                        setAnnotationMode('box-exemplar');
-                        cancelDrawing();
-                        clearSam3();
-                      }}
-                      disabled={!sam3Health?.available}
-                      className={annotationMode === 'box-exemplar' ? 'bg-purple-500 hover:bg-purple-600' : ''}
-                    >
-                      <Square className="w-4 h-4 mr-1" />
-                      Few-Shot
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant={annotationMode === 'manual' ? 'default' : 'outline'}
-                      onClick={() => {
-                        setAnnotationMode('manual');
-                        clearSam3();
-                        clearBoxExemplars();
-                      }}
-                      className={annotationMode === 'manual' ? 'bg-orange-500 hover:bg-orange-600' : ''}
-                    >
-                      <Pencil className="w-4 h-4 mr-1" />
-                      Manual
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {/* SAM3 Status Indicator */}
-                {sam3Health && (
-                  <div className={`mb-4 p-3 rounded-lg border ${
-                    sam3Health.available
-                      ? sam3Health.device === 'aws-gpu' ? 'bg-green-50 border-green-200' : 'bg-blue-50 border-blue-200'
-                      : 'bg-red-50 border-red-200'
-                  }`}>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${
-                          sam3Health.available
-                            ? sam3Health.device === 'aws-gpu' ? 'bg-green-500 animate-pulse' : 'bg-blue-500'
-                            : 'bg-red-500'
-                        }`} />
-                        <span className="text-sm font-medium">
-                          {sam3Health.available
-                            ? sam3Health.device === 'aws-gpu'
-                              ? 'SAM3 Ready (AWS GPU)'
-                              : 'SAM3 Ready (Roboflow)'
-                            : 'SAM3 Unavailable'}
-                        </span>
-                        {sam3Backend && (
-                          <Badge variant="outline" className="ml-2 text-xs">
-                            {sam3Backend === 'aws' ? 'AWS' : 'Roboflow'}
-                          </Badge>
-                        )}
-                      </div>
-                      <span className="text-xs text-gray-500">
-                        {sam3Health.device === 'aws-gpu' && 'GPU inference (~2s)'}
-                        {sam3Health.device === 'roboflow-serverless' && 'Serverless inference'}
-                        {sam3Health.mode === 'unavailable' && 'Using manual mode'}
-                      </span>
-                    </div>
-                    {/* Show AWS status details */}
-                    {sam3Status?.aws.configured && !sam3Status?.aws.ready && (
-                      <div className="mt-2 flex items-center gap-2 text-sm text-amber-700">
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>{sam3StartupMessage || 'Starting AWS instance...'}</span>
-                      </div>
-                    )}
-                    {/* Show error details when SAM3 unavailable */}
-                    {!sam3Health.available && sam3Error && (
-                      <p className="mt-2 text-xs text-red-600">{sam3Error}</p>
-                    )}
-                  </div>
-                )}
+        {/* Right Sidebar - Compact Tools */}
+        <div className="w-52 bg-white border-l border-gray-200 p-3 overflow-y-auto flex-shrink-0">
+          {/* Toolbar */}
+          <Toolbar
+            mode={annotationMode}
+            onModeChange={handleModeChange}
+            sam3Available={sam3Health?.available}
+            sam3Loading={sam3Loading}
+            onUndo={handleUndo}
+            onDelete={() => deleteAnnotation()}
+            onAccept={acceptAnnotation}
+            onShowHelp={() => setShowHotkeyHelp(true)}
+            canUndo={canUndo}
+            canDelete={canDelete}
+            canAccept={canAccept}
+          />
 
-                {/* SAM3 Prediction Error */}
-                {sam3Health?.available && sam3Error && (
-                  <div className="mb-4 p-3 rounded-lg border bg-amber-50 border-amber-200">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 rounded-full bg-amber-500" />
-                      <span className="text-sm text-amber-800">{sam3Error}</span>
-                    </div>
-                    <button
-                      onClick={() => setSam3Error(null)}
-                      className="mt-1 text-xs text-amber-600 hover:text-amber-800 underline"
-                    >
-                      Dismiss
-                    </button>
-                  </div>
-                )}
+          {/* Class Selector */}
+          <ClassSelector
+            selectedClass={selectedClass}
+            onClassSelect={setSelectedClass}
+            className="mt-3"
+          />
 
-                {/* Zoom and Pan Controls */}
-                <div className="flex items-center justify-between mb-4 p-3 bg-gray-50 rounded-lg border">
-                  <div className="flex items-center space-x-2">
-                    <span className="text-sm font-medium text-gray-700">View:</span>
-                    <Button size="sm" variant="outline" onClick={handleZoomIn} title="Zoom In">
-                      <ZoomIn className="w-4 h-4" />
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={handleZoomOut} title="Zoom Out">
-                      <ZoomOut className="w-4 h-4" />
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={handleResetView} title="Reset View">
-                      <RotateCcw className="w-4 h-4" />
-                    </Button>
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {Math.round(zoomLevel * 100)}% | Shift+Click to Pan
-                  </div>
-                </div>
-                
-                <div className="relative">
-                  <img
-                    ref={imageRef}
-                    src={session.asset.storageUrl}
-                    alt={session.asset.fileName}
-                    onLoad={handleImageLoad}
-                    onError={(e) => {
-                      console.error('Image failed to load:', session.asset.storageUrl);
-                      console.error('Error:', e);
-                    }}
-                    className="hidden"
-                  />
-                  <canvas
-                    ref={canvasRef}
-                    onClick={handleCanvasClick}
-                    onContextMenu={handleCanvasContextMenu}
-                    onMouseDown={handleMouseDown}
-                    onMouseMove={handleMouseMove}
-                    onMouseUp={handleMouseUp}
-                    onMouseLeave={handleMouseUp}
-                    className={`border border-gray-300 rounded max-w-full ${
-                      isPanning ? 'cursor-grabbing' : 'cursor-crosshair'
-                    }`}
-                    style={{ display: imageLoaded ? 'block' : 'none' }}
-                  />
-                  {!imageLoaded && (
-                    <div className="flex items-center justify-center h-64 bg-gray-100 rounded border border-gray-300">
-                      <div className="text-center">
-                        <p className="text-gray-600 mb-2">Loading image...</p>
-                        <p className="text-xs text-gray-400">Image URL: {session.asset.storageUrl}</p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-                
-                {/* SAM3 Controls */}
-                {annotationMode === 'sam3' && (sam3Points.length > 0 || sam3Loading) && (
-                  <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        {sam3Loading ? (
-                          <div className="flex items-center gap-2">
-                            <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
-                            <span className="text-blue-800">Processing...</span>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            <span className="text-blue-800">
-                              {sam3Points.length} point{sam3Points.length !== 1 ? 's' : ''} placed
-                            </span>
-                            {sam3Score !== null && (
-                              <Badge variant="outline" className="bg-white">
-                                {Math.round(sam3Score * 100)}% confidence
-                              </Badge>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={undoSam3Point}
-                          disabled={sam3Points.length === 0 || sam3Loading}
-                        >
-                          <Undo2 className="w-4 h-4 mr-1" />
-                          Undo
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={clearSam3}
-                          disabled={sam3Loading}
-                        >
-                          <X className="w-4 h-4 mr-1" />
-                          Clear
-                        </Button>
-                        <Button
-                          size="sm"
-                          onClick={acceptSam3Prediction}
-                          disabled={!sam3PreviewPolygon || sam3Loading}
-                          className="bg-green-500 hover:bg-green-600"
-                        >
-                          <Check className="w-4 h-4 mr-1" />
-                          Accept
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="mt-2 text-xs text-blue-600">
-                      <span className="inline-flex items-center gap-1">
-                        <span className="w-3 h-3 rounded-full bg-green-500"></span> Left-click = include
-                      </span>
-                      <span className="mx-3">|</span>
-                      <span className="inline-flex items-center gap-1">
-                        <span className="w-3 h-3 rounded-full bg-red-500"></span> Right-click = exclude
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Manual Drawing Controls */}
-                {annotationMode === 'manual' && isDrawing && (
-                  <div className="mt-4 p-4 bg-orange-50 rounded-lg border border-orange-200">
-                    <div className="flex items-center justify-between">
-                      <p className="text-orange-800">
-                        Drawing polygon... {currentPolygon.points.length} points
-                        {currentPolygon.points.length > 2 && " (click first point to close)"}
-                      </p>
-                      <div className="space-x-2">
-                        <Button size="sm" variant="outline" onClick={cancelDrawing}>
-                          <X className="w-4 h-4 mr-1" />
-                          Cancel
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Box Exemplar Controls */}
-                {annotationMode === 'box-exemplar' && (
-                  <div className="mt-4 p-4 bg-purple-50 rounded-lg border border-purple-200">
-                    <div className="flex items-center justify-between mb-3">
-                      <div>
-                        <h4 className="font-medium text-purple-900">Few-Shot Detection</h4>
-                        <p className="text-xs text-purple-600">
-                          Draw boxes around {boxExemplars.length === 0 ? 'example objects' : `${boxExemplars.length} exemplar${boxExemplars.length !== 1 ? 's' : ''}`}
-                        </p>
-                      </div>
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={clearBoxExemplars}
-                          disabled={boxExemplars.length === 0 || findAllLoading}
-                        >
-                          <X className="w-4 h-4 mr-1" />
-                          Clear
-                        </Button>
-                        <Button
-                          size="sm"
-                          onClick={findAllSimilar}
-                          disabled={boxExemplars.length === 0 || findAllLoading}
-                          className="bg-purple-500 hover:bg-purple-600"
-                        >
-                          {findAllLoading ? (
-                            <>
-                              <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                              Detecting...
-                            </>
-                          ) : (
-                            <>
-                              <Search className="w-4 h-4 mr-1" />
-                              Find All Similar
-                            </>
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-
-                    {/* Weed Type Selector */}
-                    <div className="flex items-center gap-3 mb-3">
-                      <Label className="text-sm text-purple-800 whitespace-nowrap">Label as:</Label>
-                      <Select value={exemplarWeedType} onValueChange={setExemplarWeedType}>
-                        <SelectTrigger className="w-48 h-8 text-sm">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {WEED_TYPES.filter(t => t !== 'Unknown Weed' && t !== 'Custom Weed Type').map(type => (
-                            <SelectItem key={type} value={type}>{type}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {/* Exemplar List */}
-                    {boxExemplars.length > 0 && (
-                      <div className="space-y-1">
-                        {boxExemplars.map((exemplar, index) => (
-                          <div key={exemplar.id} className="flex items-center justify-between text-sm bg-white rounded px-2 py-1">
-                            <span className="text-purple-800">
-                              #{index + 1} {exemplar.weedType}
-                            </span>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => removeBoxExemplar(exemplar.id)}
-                              className="h-6 w-6 p-0 text-red-500 hover:text-red-700"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Error Display */}
-                    {findAllError && (
-                      <div className="mt-2 text-sm text-red-600 bg-red-50 rounded px-2 py-1">
-                        {findAllError}
-                      </div>
-                    )}
-
-                    {/* Instructions */}
-                    {boxExemplars.length === 0 && (
-                      <p className="text-xs text-purple-500 mt-2">
-                        Click and drag to draw a box around an example of what you want to detect.
-                      </p>
-                    )}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+          {/* Confidence */}
+          <div className="mt-3 bg-gray-100 rounded-lg p-2">
+            <div className="text-xs font-medium text-gray-500 px-2 pb-1">Confidence</div>
+            <div className="flex gap-1">
+              {CONFIDENCE_LEVELS.map((level) => (
+                <button
+                  key={level}
+                  onClick={() => setConfidence(level)}
+                  className={`flex-1 text-xs py-1.5 rounded transition-colors ${
+                    confidence === level
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-white hover:bg-gray-50 text-gray-600'
+                  }`}
+                >
+                  {level.slice(0, 1)}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {/* Annotation Panel */}
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>AI Suggestions</CardTitle>
-                    <CardDescription>
-                      {aiLoading
-                        ? "Loading detections..."
-                        : `${aiSuggestions.filter((s) => !s.rejected).length} pending`}
-                    </CardDescription>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={fetchAiDetections}
-                      disabled={aiLoading}
-                    >
-                      Refresh
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant={showAiSuggestions ? "default" : "outline"}
-                      onClick={() => setShowAiSuggestions((prev) => !prev)}
-                    >
-                      {showAiSuggestions ? "Hide" : "Show"}
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {aiError && (
-                  <div className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">
-                    {aiError}
-                  </div>
-                )}
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    className="flex-1"
-                    onClick={acceptAllDetections}
-                    disabled={bulkAction !== null || aiSuggestions.length === 0}
-                  >
-                    {bulkAction === "accept" ? "Accepting..." : "Accept All"}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="flex-1"
-                    onClick={rejectAllDetections}
-                    disabled={bulkAction !== null || aiSuggestions.length === 0}
-                  >
-                    {bulkAction === "reject" ? "Rejecting..." : "Reject All"}
-                  </Button>
-                </div>
+          {/* Annotation List */}
+          <AnnotationList
+            annotations={annotations}
+            selectedId={selectedAnnotation}
+            onSelect={setSelectedAnnotation}
+            onDelete={deleteAnnotation}
+            className="mt-3"
+          />
 
-                {aiSuggestions.length === 0 ? (
-                  <p className="text-sm text-gray-500">
-                    No AI detections for this asset.
-                  </p>
-                ) : (
-                  <div className="space-y-2">
-                    {aiSuggestions.map((suggestion) => (
-                      <div
-                        key={suggestion.id}
-                        className="rounded border border-gray-200 bg-gray-50 p-3"
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex flex-col">
-                            <Badge variant={suggestion.verified ? "default" : "secondary"}>
-                              {suggestion.className}
-                            </Badge>
-                            <span className="text-xs text-gray-500">
-                              {suggestion.confidence !== null
-                                ? `${Math.round(suggestion.confidence * 100)}%`
-                                : "No confidence"}
-                            </span>
-                          </div>
-                          <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => acceptDetection(suggestion.id)}
-                              disabled={suggestion.verified || suggestion.rejected}
-                            >
-                              ✓ Accept
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="text-red-600"
-                              onClick={() => rejectDetection(suggestion.id)}
-                              disabled={suggestion.rejected}
-                            >
-                              ✗ Reject
-                            </Button>
-                          </div>
-                        </div>
-                        <div className="mt-2">
-                          <Label className="text-xs">Edit class</Label>
-                          <Select
-                            value={suggestion.className}
-                            onValueChange={(value) =>
-                              updateSuggestionClass(suggestion.id, value)
-                            }
-                          >
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {WEED_TYPES.map((type) => (
-                                <SelectItem key={type} value={type}>
-                                  {type}
-                                </SelectItem>
-                              ))}
-                              {!WEED_TYPES.includes(suggestion.className) && (
-                                <SelectItem value={suggestion.className}>
-                                  {suggestion.className}
-                                </SelectItem>
-                              )}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        {suggestion.rejected && (
-                          <p className="mt-2 text-xs text-red-600">
-                            Rejected — hidden from canvas
-                          </p>
-                        )}
-                        {suggestion.verified && !suggestion.rejected && (
-                          <p className="mt-2 text-xs text-green-700">
-                            Accepted — ready for training push
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-            {/* Current Annotation Form */}
-            <Card>
-              <CardHeader>
-                <CardTitle>
-                  {annotationMode === 'sam3' ? 'SAM3 Annotation' : 'New Annotation'}
-                </CardTitle>
-                <CardDescription>
-                  {annotationMode === 'sam3'
-                    ? 'Click on the image to segment, then fill details below'
-                    : 'Draw a polygon on the image, then fill details below'}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div>
-                  <Label htmlFor="weedType">Weed Type</Label>
-                  <Select value={weedType} onValueChange={setWeedType}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {WEED_TYPES.map(type => (
-                        <SelectItem key={type} value={type}>{type}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <Label htmlFor="confidence">Confidence Level</Label>
-                  <Select value={confidence} onValueChange={setConfidence}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {CONFIDENCE_LEVELS.map(level => (
-                        <SelectItem key={level.value} value={level.value}>
-                          {level.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <Label htmlFor="notes">Notes (Optional)</Label>
-                  <Textarea
-                    id="notes"
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    placeholder="Additional observations..."
-                    rows={2}
-                  />
-                </div>
-
-                {/* SAM3 mode button */}
-                {annotationMode === 'sam3' && (
-                  <Button
-                    onClick={acceptSam3Prediction}
-                    disabled={!sam3PreviewPolygon || sam3Loading}
-                    className="w-full bg-blue-500 hover:bg-blue-600"
-                  >
-                    {sam3Loading ? (
-                      <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        Processing...
-                      </>
-                    ) : (
-                      <>
-                        <Wand2 className="w-4 h-4 mr-2" />
-                        Accept AI Segmentation
-                      </>
-                    )}
-                  </Button>
-                )}
-
-                {/* Manual mode button */}
-                {annotationMode === 'manual' && (
-                  <Button
-                    onClick={saveAnnotation}
-                    disabled={!currentPolygon.isComplete || currentPolygon.points.length < 3}
-                    className="w-full"
-                  >
-                    <Save className="w-4 h-4 mr-2" />
-                    Save Annotation
-                  </Button>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Existing Annotations */}
-            <Card>
-              <CardHeader>
-              <CardTitle>Annotations ({annotations.length})</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {pushError && (
-                <div className="mb-3 rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">
-                  {pushError}
-                </div>
-              )}
-              {annotations.length === 0 ? (
-                <p className="text-gray-500 text-center py-4">No annotations yet</p>
-              ) : (
-                <div className="space-y-2">
-                  {annotations.map((annotation) => (
-                      <div
-                        key={annotation.id}
-                        className={`p-3 rounded border cursor-pointer transition-colors ${
-                          selectedAnnotation === annotation.id
-                            ? 'border-red-300 bg-red-50'
-                            : 'border-gray-200 hover:border-green-300 hover:bg-green-50'
-                        }`}
-                        onClick={() => setSelectedAnnotation(
-                          selectedAnnotation === annotation.id ? null : annotation.id
-                        )}
-                      >
-                        <div className="flex justify-between items-start">
-                          <div className="flex-1">
-                            <p className="font-medium text-sm">{annotation.weedType}</p>
-                            <p className="text-xs text-gray-500">{annotation.confidence}</p>
-                            {annotation.notes && (
-                              <p className="text-xs text-gray-600 mt-1">{annotation.notes}</p>
-                            )}
-                            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-gray-500">
-                              <Badge variant={annotation.verified ? "default" : "outline"}>
-                                {annotation.verified ? "Verified" : "Unverified"}
-                              </Badge>
-                              {annotation.pushedToTraining ? (
-                                <Badge variant="secondary">Sent to Training</Badge>
-                              ) : annotation.verified ? (
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="text-xs"
-                                  disabled={pushingId === annotation.id}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    pushToTraining(annotation.id);
-                                  }}
-                                >
-                                  {pushingId === annotation.id ? "Pushing..." : "Push to Training"}
-                                </Button>
-                              ) : null}
-                            </div>
-                          </div>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              deleteAnnotation(annotation.id);
-                            }}
-                            className="text-red-500 hover:text-red-700 hover:bg-red-50"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Session Info */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Session Info</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-2 text-sm">
-                  <p><span className="font-medium">Project:</span> {session.asset.project.name}</p>
-                  <p><span className="font-medium">Location:</span> {session.asset.project.location}</p>
-                  <p><span className="font-medium">Image:</span> {session.asset.fileName}</p>
-                  <p><span className="font-medium">Dimensions:</span> {session.asset.imageWidth} × {session.asset.imageHeight}</p>
-                  {session.asset.gpsLatitude && session.asset.gpsLongitude && (
-                    <p><span className="font-medium">GPS:</span> {session.asset.gpsLatitude.toFixed(6)}, {session.asset.gpsLongitude.toFixed(6)}</p>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+          {/* SAM3 Error */}
+          {sam3Error && (
+            <div className="mt-3 p-2 bg-amber-50 border border-amber-200 rounded-lg">
+              <p className="text-xs text-amber-800">{sam3Error}</p>
+            </div>
+          )}
         </div>
-      </main>
+      </div>
+
+      {/* Hotkey Reference Modal */}
+      <HotkeyReference
+        open={showHotkeyHelp}
+        onClose={() => setShowHotkeyHelp(false)}
+      />
     </div>
   );
 }
