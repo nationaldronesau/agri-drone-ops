@@ -3,9 +3,21 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, MapPin, Camera, Calendar, Download, Eye, Edit3 } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { ArrowLeft, MapPin, Calendar, Eye, Edit3, FolderOpen } from "lucide-react";
 import Link from "next/link";
-import Image from "next/image";
+
+interface Project {
+  id: string;
+  name: string;
+  location: string | null;
+}
 
 interface Asset {
   id: string;
@@ -21,29 +33,58 @@ interface Asset {
   gimbalYaw: number | null;
   metadata: any;
   createdAt: string;
+  project?: Project;
 }
 
 export default function ImagesPage() {
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('all');
   const [loading, setLoading] = useState(true);
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
 
+  // Fetch projects on mount
   useEffect(() => {
-    fetchAssets();
+    fetchProjects();
   }, []);
 
-  const fetchAssets = async () => {
+  // Fetch assets when project filter changes
+  useEffect(() => {
+    fetchAssets(selectedProjectId);
+  }, [selectedProjectId]);
+
+  const fetchProjects = async () => {
     try {
-      const response = await fetch('/api/assets');
+      const response = await fetch('/api/projects');
       if (response.ok) {
         const data = await response.json();
-        setAssets(data);
+        setProjects(data.projects || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch projects:', error);
+    }
+  };
+
+  const fetchAssets = async (projectId: string) => {
+    try {
+      setLoading(true);
+      const url = projectId && projectId !== 'all'
+        ? `/api/assets?projectId=${projectId}`
+        : '/api/assets';
+      const response = await fetch(url);
+      if (response.ok) {
+        const data = await response.json();
+        setAssets(data.assets || []);
       }
     } catch (error) {
       console.error('Failed to fetch assets:', error);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleProjectChange = (value: string) => {
+    setSelectedProjectId(value);
   };
 
   const formatFileSize = (bytes: number) => {
@@ -94,10 +135,34 @@ export default function ImagesPage() {
       {/* Main Content */}
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Uploaded Images</h1>
-          <p className="text-gray-600">
-            {assets.length} image{assets.length !== 1 ? 's' : ''} uploaded to your project
-          </p>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900 mb-2">Uploaded Images</h1>
+              <p className="text-gray-600">
+                {assets.length} image{assets.length !== 1 ? 's' : ''}{' '}
+                {selectedProjectId !== 'all' ? 'in selected project' : 'across all projects'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <FolderOpen className="w-4 h-4 text-gray-500" />
+              <Select value={selectedProjectId} onValueChange={handleProjectChange}>
+                <SelectTrigger className="w-[220px]">
+                  <SelectValue placeholder="Filter by project" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Projects</SelectItem>
+                  {projects.map((project) => (
+                    <SelectItem key={project.id} value={project.id}>
+                      {project.name}
+                      {project.location && (
+                        <span className="text-gray-400 ml-1">({project.location})</span>
+                      )}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
         </div>
 
         {loading ? (
@@ -148,7 +213,16 @@ export default function ImagesPage() {
                 </div>
                 <CardContent className="p-4">
                   <h3 className="font-semibold text-gray-900 truncate mb-2">{asset.fileName}</h3>
-                  
+
+                  {asset.project && selectedProjectId === 'all' && (
+                    <div className="mb-2">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                        <FolderOpen className="w-3 h-3 mr-1" />
+                        {asset.project.name}
+                      </span>
+                    </div>
+                  )}
+
                   <div className="space-y-2 text-sm">
                     {asset.gpsLatitude && asset.gpsLongitude && (
                       <div className="flex items-center gap-2 text-gray-600">
