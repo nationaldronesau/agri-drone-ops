@@ -35,6 +35,17 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    // Handle NoSuchUpload gracefully - upload may already be completed or aborted
+    const err = error as { name?: string; Code?: string; message?: string };
+    if (
+      err?.name === "NoSuchUpload" ||
+      err?.Code === "NoSuchUpload" ||
+      err?.message?.includes("NoSuchUpload")
+    ) {
+      console.debug("abortMultipartUpload: NoSuchUpload - already completed/aborted");
+      return NextResponse.json({ success: true });
+    }
+
     console.error("Failed to abort multipart upload:", error);
     return NextResponse.json(
       {
