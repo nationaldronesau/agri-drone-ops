@@ -6,15 +6,13 @@ import {
   GetObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
+  ListPartsCommand,
   PutObjectCommand,
   S3Client,
   UploadPartCommand,
   type CompletedPart,
-  type PutObjectCommandInput,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { randomUUID } from "crypto";
-import path from "path";
 
 // Initialize S3 client
 export const s3Client = new S3Client({
@@ -243,6 +241,29 @@ export class S3Service {
     });
 
     await s3Client.send(command);
+  }
+
+  /**
+   * List parts that have been uploaded for a multipart upload session.
+   * Required by Uppy for resumable uploads.
+   */
+  static async listParts(options: {
+    key: string;
+    uploadId: string;
+  }): Promise<Array<{ PartNumber: number; Size: number; ETag: string }>> {
+    const command = new ListPartsCommand({
+      Bucket: this.bucketName,
+      Key: options.key,
+      UploadId: options.uploadId,
+    });
+
+    const response = await s3Client.send(command);
+
+    return (response.Parts || []).map((part) => ({
+      PartNumber: part.PartNumber || 0,
+      Size: part.Size || 0,
+      ETag: part.ETag || "",
+    }));
   }
 
   /**
