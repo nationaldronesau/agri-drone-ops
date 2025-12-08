@@ -1,12 +1,51 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth/config';
 import prisma from '@/lib/db';
+
+// Helper to verify user has access to project via team membership
+async function verifyProjectAccess(userId: string, projectId: string): Promise<boolean> {
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { teamId: true }
+  });
+
+  if (!project) return false;
+
+  const membership = await prisma.teamMember.findFirst({
+    where: {
+      userId,
+      teamId: project.teamId
+    }
+  });
+
+  return !!membership;
+}
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    // Authentication check
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
     const { id } = await params;
+
+    // Authorization check - verify user has access to this project
+    const hasAccess = await verifyProjectAccess(session.user.id, id);
+    if (!hasAccess) {
+      return NextResponse.json(
+        { error: 'Project not found or access denied' },
+        { status: 404 }
+      );
+    }
 
     const project = await prisma.project.findUnique({
       where: { id },
@@ -39,7 +78,26 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    // Authentication check
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
     const { id } = await params;
+
+    // Authorization check - verify user has access to this project
+    const hasAccess = await verifyProjectAccess(session.user.id, id);
+    if (!hasAccess) {
+      return NextResponse.json(
+        { error: 'Project not found or access denied' },
+        { status: 404 }
+      );
+    }
+
     const { name, description, location, purpose, season } = await request.json();
 
     const project = await prisma.project.update({
@@ -73,7 +131,25 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    // Authentication check
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
     const { id } = await params;
+
+    // Authorization check - verify user has access to this project
+    const hasAccess = await verifyProjectAccess(session.user.id, id);
+    if (!hasAccess) {
+      return NextResponse.json(
+        { error: 'Project not found or access denied' },
+        { status: 404 }
+      );
+    }
 
     await prisma.project.delete({
       where: { id }
