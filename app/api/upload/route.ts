@@ -136,6 +136,30 @@ export async function POST(request: NextRequest) {
           throw new Error("File is stored in an unsupported S3 bucket.");
         }
 
+        // Check for duplicate files by S3 key
+        const existingAsset = await prisma.asset.findFirst({
+          where: {
+            OR: [
+              { s3Key: key },
+              // Also check by filename + project to catch re-uploads
+              { fileName: file.name, projectId }
+            ]
+          }
+        });
+
+        if (existingAsset) {
+          console.log(`Skipping duplicate file: ${file.name} (existing asset: ${existingAsset.id})`);
+          uploadResults.push({
+            id: existingAsset.id,
+            name: file.name,
+            url: existingAsset.storageUrl,
+            size: file.size,
+            success: true,
+            warning: "File already exists in project, skipped duplicate upload",
+            duplicate: true,
+          });
+          continue;
+        }
 
         const buffer = await S3Service.downloadFile(key, bucket);
         const extractedData = defaultExtractedMetadata();
