@@ -118,7 +118,7 @@ export function InteractiveDetectionOverlay({
       {imageLoaded && containerSize.width > 0 && (
         <svg
           className="absolute inset-0 w-full h-full pointer-events-none"
-          viewBox={`0 0 ${containerSize.width} ${containerSize.height * (actualImageSize.height / actualImageSize.width)}`}
+          viewBox={`0 0 ${containerSize.width} ${containerSize.height}`}
           preserveAspectRatio="xMidYMid meet"
         >
           {detections.map((detection) => {
