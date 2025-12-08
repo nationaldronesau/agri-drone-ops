@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect, useCallback, use } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -64,12 +64,9 @@ interface BatchJobResponse {
   annotations: PendingAnnotation[];
 }
 
-interface PageProps {
-  params: Promise<{ batchId: string }>;
-}
-
-export default function BatchReviewPage({ params }: PageProps) {
-  const { batchId } = use(params);
+export default function BatchReviewPage() {
+  const params = useParams();
+  const batchId = params.batchId as string;
   const router = useRouter();
 
   const [batchJob, setBatchJob] = useState<BatchJob | null>(null);
