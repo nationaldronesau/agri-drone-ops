@@ -18,14 +18,20 @@ import {
 
 export async function POST(request: NextRequest) {
   try {
-    // Check authentication
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    // Skip auth check in development mode (auth is disabled)
+    const isDev = process.env.NODE_ENV === 'development';
+    let userId = 'dev-user';
+
+    if (!isDev) {
+      const session = await getServerSession(authOptions);
+      if (!session?.user?.id) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+      userId = session.user.id;
     }
 
     // Rate limit training push (10 per minute per user)
-    const rateLimitKey = `training-push-detections:${session.user.id}`;
+    const rateLimitKey = `training-push-detections:${userId}`;
     const rateLimit = checkRateLimit(rateLimitKey, { maxRequests: 10, windowMs: 60000 });
     if (!rateLimit.allowed) {
       return NextResponse.json(
@@ -57,18 +63,22 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'roboflowProjectId is required' }, { status: 400 });
     }
 
-    // Verify user has access to the project (through team membership)
-    const project = await prisma.project.findFirst({
-      where: {
-        id: projectId,
-        team: {
-          members: {
-            some: {
-              userId: session.user.id,
+    // Verify project exists (skip team membership check in dev mode)
+    const projectWhere = isDev
+      ? { id: projectId }
+      : {
+          id: projectId,
+          team: {
+            members: {
+              some: {
+                userId,
+              },
             },
           },
-        },
-      },
+        };
+
+    const project = await prisma.project.findFirst({
+      where: projectWhere,
     });
 
     if (!project) {

@@ -43,6 +43,8 @@ export async function GET(request: NextRequest) {
             gpsLatitude: true,
             gpsLongitude: true,
             altitude: true,
+            imageWidth: true,
+            imageHeight: true,
             projectId: true,
             project: {
               select: {

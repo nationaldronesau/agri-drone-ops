@@ -100,11 +100,11 @@ export default function ImproveWorkflowPage() {
     const fetchStats = async () => {
       setLoadingStats(true);
       try {
-        const response = await fetch(`/api/detections?projectId=${selectedProjectId}&stats=true`);
+        const response = await fetch(`/api/detections?projectId=${selectedProjectId}`);
         const data = await response.json();
 
-        // Calculate stats from detections
-        const detections = data.detections || [];
+        // Calculate stats from detections - API returns array directly
+        const detections = Array.isArray(data) ? data : [];
         const statsData: DetectionStats = {
           total: detections.length,
           verified: detections.filter((d: { verified: boolean }) => d.verified).length,
