@@ -14,6 +14,9 @@ import {
   Leaf,
   CheckCircle2,
   AlertCircle,
+  Wand2,
+  Clock,
+  Eye,
 } from 'lucide-react';
 import { CreateProjectDialog } from '@/components/training/CreateProjectDialog';
 
@@ -36,8 +39,27 @@ interface RoboflowProject {
   classes: RoboflowClass[];
 }
 
+interface BatchJob {
+  id: string;
+  projectId: string;
+  weedType: string;
+  status: string;
+  totalImages: number;
+  processedImages: number;
+  detectionsFound: number;
+  createdAt: string;
+  completedAt: string | null;
+  _count: {
+    pendingAnnotations: number;
+  };
+  project?: {
+    name: string;
+  };
+}
+
 export default function TrainingHubPage() {
   const [projects, setProjects] = useState<RoboflowProject[]>([]);
+  const [batchJobs, setBatchJobs] = useState<BatchJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -80,8 +102,22 @@ export default function TrainingHubPage() {
     }
   };
 
+  const fetchBatchJobs = async () => {
+    try {
+      // Fetch all batch jobs across projects
+      const response = await fetch('/api/sam3/batch/all');
+      if (response.ok) {
+        const data = await response.json();
+        setBatchJobs(data.batchJobs || []);
+      }
+    } catch (err) {
+      console.error('[Training Hub] Error fetching batch jobs:', err);
+    }
+  };
+
   useEffect(() => {
     fetchProjects();
+    fetchBatchJobs();
   }, []);
 
   const handleProjectCreated = () => {
@@ -201,6 +237,101 @@ export default function TrainingHubPage() {
             </Link>
           </Card>
         </div>
+
+        {/* Assisted Labeling Card - Full Width */}
+        <Card className="hover:shadow-lg transition-all cursor-pointer group border-2 hover:border-purple-300 mb-8">
+          <Link href="/training-hub/new-species/label">
+            <CardHeader className="pb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-400 to-purple-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+                  <Wand2 className="w-6 h-6 text-white" />
+                </div>
+                <div className="flex-1">
+                  <CardTitle className="text-xl">Assisted Labeling (SAM3 Batch)</CardTitle>
+                  <CardDescription>Label a few exemplars, then apply to entire dataset</CardDescription>
+                </div>
+                <div className="flex items-center text-purple-600 font-medium group-hover:gap-3 transition-all">
+                  Start <ArrowRight className="w-4 h-4 ml-2" />
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="grid md:grid-cols-3 gap-4 text-sm text-gray-600">
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center text-xs font-bold">1</span>
+                  Label 2-5 examples with SAM3
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center text-xs font-bold">2</span>
+                  AI applies predictions to all images
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center text-xs font-bold">3</span>
+                  Review & push accepted annotations
+                </div>
+              </div>
+            </CardContent>
+          </Link>
+        </Card>
+
+        {/* Pending Reviews Section */}
+        {batchJobs.length > 0 && (
+          <div className="mb-8">
+            <div className="flex items-center gap-2 mb-4">
+              <Clock className="w-5 h-5 text-amber-600" />
+              <h2 className="text-lg font-semibold text-gray-900">Pending Reviews</h2>
+              <span className="px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-700">
+                {batchJobs.filter(j => j.status === 'COMPLETED' && j._count.pendingAnnotations > 0).length} awaiting review
+              </span>
+            </div>
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {batchJobs.filter(j => j._count.pendingAnnotations > 0 || j.status === 'PROCESSING' || j.status === 'QUEUED').slice(0, 6).map((job) => (
+                <Link key={job.id} href={`/training-hub/review/${job.id}`}>
+                  <Card className="hover:shadow-md transition-shadow cursor-pointer">
+                    <CardContent className="py-4">
+                      <div className="flex items-start justify-between mb-2">
+                        <div>
+                          <p className="font-medium text-gray-900">{job.weedType}</p>
+                          <p className="text-xs text-gray-500">{job.project?.name || 'Unknown Project'}</p>
+                        </div>
+                        <span className={`px-2 py-1 text-xs rounded-full ${
+                          job.status === 'COMPLETED' ? 'bg-green-100 text-green-700' :
+                          job.status === 'PROCESSING' ? 'bg-blue-100 text-blue-700' :
+                          job.status === 'FAILED' ? 'bg-red-100 text-red-700' :
+                          'bg-gray-100 text-gray-700'
+                        }`}>
+                          {job.status}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-gray-600">
+                          {job.detectionsFound} detections
+                        </span>
+                        <span className="text-amber-600 font-medium flex items-center gap-1">
+                          <Eye className="w-4 h-4" />
+                          {job._count.pendingAnnotations} to review
+                        </span>
+                      </div>
+                      {(job.status === 'PROCESSING' || job.status === 'QUEUED') && (
+                        <div className="mt-2">
+                          <div className="text-xs text-gray-500 mb-1">
+                            {job.processedImages} / {job.totalImages} images
+                          </div>
+                          <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-blue-500 transition-all"
+                              style={{ width: `${(job.processedImages / job.totalImages) * 100}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Roboflow Projects Section */}
         <div className="mb-6">
