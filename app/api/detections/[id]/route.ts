@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth/config";
 import prisma from "@/lib/db";
 import { z } from "zod";
 
@@ -10,12 +12,57 @@ const updateSchema = z.object({
   originalClass: z.string().nullable().optional(),
 });
 
+// Helper to check if user has access to a detection via team membership
+async function checkDetectionAccess(detectionId: string, userId: string): Promise<boolean> {
+  const detection = await prisma.detection.findFirst({
+    where: {
+      id: detectionId,
+      asset: {
+        project: {
+          team: {
+            members: {
+              some: {
+                userId,
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  return !!detection;
+}
+
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    // Skip auth check in development mode (auth is disabled)
+    const isDev = process.env.NODE_ENV === "development";
+    let userId: string | null = null;
+
+    if (!isDev) {
+      const session = await getServerSession(authOptions);
+      if (!session?.user?.id) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      userId = session.user.id;
+    }
+
     const { id } = await params;
+
+    // In production, verify user has access to this detection
+    if (!isDev && userId) {
+      const hasAccess = await checkDetectionAccess(id, userId);
+      if (!hasAccess) {
+        return NextResponse.json(
+          { error: "Detection not found or access denied" },
+          { status: 403 },
+        );
+      }
+    }
+
     const detection = await prisma.detection.findUnique({
       where: { id },
       include: {
@@ -57,7 +104,31 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    // Skip auth check in development mode (auth is disabled)
+    const isDev = process.env.NODE_ENV === "development";
+    let userId: string | null = null;
+
+    if (!isDev) {
+      const session = await getServerSession(authOptions);
+      if (!session?.user?.id) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      userId = session.user.id;
+    }
+
     const { id } = await params;
+
+    // In production, verify user has access to this detection
+    if (!isDev && userId) {
+      const hasAccess = await checkDetectionAccess(id, userId);
+      if (!hasAccess) {
+        return NextResponse.json(
+          { error: "Detection not found or access denied" },
+          { status: 403 },
+        );
+      }
+    }
+
     const body = await request.json();
     const parsed = updateSchema.safeParse(body);
 
