@@ -560,46 +560,78 @@ export default function AnnotatePage() {
     }
   }, [annotationMode, sam3Points, runSam3Prediction]);
 
-  // Apply exemplars to current image using SAM3
+  // Apply exemplars to current image using SAM3 (direct, no Redis needed)
   const applyToCurrentImage = useCallback(async () => {
     if (!session?.asset?.id || boxExemplars.length === 0) return;
 
     setBatchProcessing(true);
+    setSam3Error(null);
     try {
-      const response = await fetch('/api/sam3/batch', {
+      // Use direct SAM3 predict endpoint with box prompts
+      const response = await fetch('/api/sam3/predict', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          projectId: session.asset.project?.id,
-          weedType: selectedClass,
-          exemplars: boxExemplars.map(e => e.box),
-          assetIds: [session.asset.id], // Only current image
+          assetId: session.asset.id,
+          boxes: boxExemplars.map(e => e.box),
           textPrompt: selectedClass,
         }),
       });
 
       if (response.ok) {
         const data = await response.json();
-        setBatchJobId(data.batchJobId);
-        // Redirect to review page
-        window.location.href = `/training-hub/review/${data.batchJobId}`;
+
+        if (data.success && data.detections && data.detections.length > 0) {
+          // Save each detection as an annotation
+          const newAnnotations = [];
+          for (const detection of data.detections) {
+            if (detection.polygon && detection.polygon.length >= 3) {
+              const annotationResponse = await fetch('/api/annotations', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  sessionId: session.id,
+                  weedType: selectedClass,
+                  confidence: 'LIKELY',
+                  coordinates: detection.polygon,
+                }),
+              });
+
+              if (annotationResponse.ok) {
+                const newAnnotation = await annotationResponse.json();
+                newAnnotations.push(newAnnotation);
+              }
+            }
+          }
+
+          if (newAnnotations.length > 0) {
+            setAnnotations(prev => [...prev, ...newAnnotations]);
+            clearBoxExemplars();
+            setSam3Error(null);
+          } else {
+            setSam3Error(`Found ${data.detections.length} detections but none had valid polygons`);
+          }
+        } else {
+          setSam3Error(data.error || 'No similar objects found in image');
+        }
       } else {
         const errorData = await response.json();
-        setSam3Error(errorData.error || 'Failed to start batch processing');
+        setSam3Error(errorData.error || 'Failed to process image');
       }
     } catch (err) {
       console.error('Failed to apply to current image:', err);
-      setSam3Error('Failed to start batch processing');
+      setSam3Error('Failed to process image');
     } finally {
       setBatchProcessing(false);
     }
-  }, [session, boxExemplars, selectedClass]);
+  }, [session, boxExemplars, selectedClass, clearBoxExemplars]);
 
-  // Apply exemplars to all project images
+  // Apply exemplars to all project images (requires Redis for batch queue)
   const applyToAllImages = useCallback(async () => {
     if (!session?.asset?.project?.id || boxExemplars.length === 0) return;
 
     setBatchProcessing(true);
+    setSam3Error(null);
     try {
       const response = await fetch('/api/sam3/batch', {
         method: 'POST',
@@ -620,7 +652,12 @@ export default function AnnotatePage() {
         window.location.href = `/training-hub/review/${data.batchJobId}`;
       } else {
         const errorData = await response.json();
-        setSam3Error(errorData.error || 'Failed to start batch processing');
+        // Provide clearer error for Redis unavailability
+        if (errorData.error?.includes('Queue service unavailable')) {
+          setSam3Error('Batch processing requires Redis. Use "Apply to This Image" for single-image processing, or contact support to enable batch processing.');
+        } else {
+          setSam3Error(errorData.error || 'Failed to start batch processing');
+        }
       }
     } catch (err) {
       console.error('Failed to apply to all images:', err);
