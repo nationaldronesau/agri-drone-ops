@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Check, ZoomIn, ZoomOut, RotateCcw, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
+import { ArrowLeft, Check, ZoomIn, ZoomOut, RotateCcw, Loader2, ChevronLeft, ChevronRight, Sparkles, Images } from "lucide-react";
 import Link from "next/link";
 import { Filmstrip } from "@/components/annotation/Filmstrip";
 import { Toolbar } from "@/components/annotation/Toolbar";
@@ -179,6 +179,10 @@ export default function AnnotatePage() {
 
   // UI state
   const [showHotkeyHelp, setShowHotkeyHelp] = useState(false);
+
+  // Batch processing state
+  const [batchProcessing, setBatchProcessing] = useState(false);
+  const [batchJobId, setBatchJobId] = useState<string | null>(null);
 
   // Load project assets for filmstrip
   useEffect(() => {
@@ -555,6 +559,76 @@ export default function AnnotatePage() {
       else { setSam3PreviewPolygon(null); setSam3Score(null); }
     }
   }, [annotationMode, sam3Points, runSam3Prediction]);
+
+  // Apply exemplars to current image using SAM3
+  const applyToCurrentImage = useCallback(async () => {
+    if (!session?.asset?.id || boxExemplars.length === 0) return;
+
+    setBatchProcessing(true);
+    try {
+      const response = await fetch('/api/sam3/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: session.asset.project?.id,
+          weedType: selectedClass,
+          exemplars: boxExemplars.map(e => e.box),
+          assetIds: [session.asset.id], // Only current image
+          textPrompt: selectedClass,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setBatchJobId(data.batchJobId);
+        // Redirect to review page
+        window.location.href = `/training-hub/review/${data.batchJobId}`;
+      } else {
+        const errorData = await response.json();
+        setSam3Error(errorData.error || 'Failed to start batch processing');
+      }
+    } catch (err) {
+      console.error('Failed to apply to current image:', err);
+      setSam3Error('Failed to start batch processing');
+    } finally {
+      setBatchProcessing(false);
+    }
+  }, [session, boxExemplars, selectedClass]);
+
+  // Apply exemplars to all project images
+  const applyToAllImages = useCallback(async () => {
+    if (!session?.asset?.project?.id || boxExemplars.length === 0) return;
+
+    setBatchProcessing(true);
+    try {
+      const response = await fetch('/api/sam3/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: session.asset.project.id,
+          weedType: selectedClass,
+          exemplars: boxExemplars.map(e => e.box),
+          // No assetIds = process all images in project
+          textPrompt: selectedClass,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setBatchJobId(data.batchJobId);
+        // Redirect to review page
+        window.location.href = `/training-hub/review/${data.batchJobId}`;
+      } else {
+        const errorData = await response.json();
+        setSam3Error(errorData.error || 'Failed to start batch processing');
+      }
+    } catch (err) {
+      console.error('Failed to apply to all images:', err);
+      setSam3Error('Failed to start batch processing');
+    } finally {
+      setBatchProcessing(false);
+    }
+  }, [session, boxExemplars, selectedClass]);
 
   // Zoom controls
   const handleZoomIn = useCallback(() => setZoomLevel(prev => Math.min(prev * 1.2, 5)), []);
@@ -1092,6 +1166,47 @@ export default function AnnotatePage() {
             onDelete={deleteAnnotation}
             className="mt-3"
           />
+
+          {/* Few-Shot Batch Actions */}
+          {annotationMode === 'box-exemplar' && boxExemplars.length > 0 && (
+            <div className="mt-3 bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200 rounded-lg p-3">
+              <div className="text-xs font-medium text-purple-700 mb-2">
+                {boxExemplars.length} exemplar{boxExemplars.length !== 1 ? 's' : ''} drawn
+              </div>
+              <div className="space-y-2">
+                <Button
+                  onClick={applyToCurrentImage}
+                  disabled={batchProcessing}
+                  size="sm"
+                  className="w-full bg-purple-500 hover:bg-purple-600 text-white text-xs h-8"
+                >
+                  {batchProcessing ? (
+                    <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-3 h-3 mr-1" />
+                  )}
+                  Apply to This Image
+                </Button>
+                <Button
+                  onClick={applyToAllImages}
+                  disabled={batchProcessing}
+                  size="sm"
+                  variant="outline"
+                  className="w-full border-purple-300 text-purple-700 hover:bg-purple-50 text-xs h-8"
+                >
+                  {batchProcessing ? (
+                    <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                  ) : (
+                    <Images className="w-3 h-3 mr-1" />
+                  )}
+                  Apply to All {projectAssets.length} Images
+                </Button>
+              </div>
+              <p className="text-[10px] text-purple-600 mt-2">
+                SAM3 will find similar objects in your images
+              </p>
+            </div>
+          )}
 
           {/* SAM3 Error */}
           {sam3Error && (
