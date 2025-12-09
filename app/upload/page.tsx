@@ -277,7 +277,11 @@ export default function UploadPage() {
                       What would you like to do next?
                     </h3>
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                      <Link href="/training-hub">
+                      <Link href={
+                        uploadResponse.files.find(f => f.success !== false && f.id)?.id
+                          ? `/annotate/${uploadResponse.files.find(f => f.success !== false && f.id)?.id}`
+                          : `/images${selectedProject ? `?project=${selectedProject}` : ''}`
+                      }>
                         <Button
                           variant="outline"
                           className="h-auto w-full justify-start gap-3 border-2 border-purple-200 bg-white p-4 hover:border-purple-400 hover:bg-purple-50"
