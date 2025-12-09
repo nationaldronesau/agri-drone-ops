@@ -68,7 +68,8 @@ export default function PushCorrectionsPage() {
       const response = await fetch(`/api/detections?projectId=${projectId}`);
       const data = await response.json();
 
-      const detections = data.detections || [];
+      // API returns array directly
+      const detections = Array.isArray(data) ? data : [];
       setSummary({
         verified: detections.filter(
           (d: { verified: boolean; userCorrected: boolean }) => d.verified && !d.userCorrected

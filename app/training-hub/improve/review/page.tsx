@@ -40,6 +40,8 @@ interface Detection {
     id: string;
     fileName: string;
     storageUrl: string;
+    imageWidth?: number;
+    imageHeight?: number;
   };
 }
 
@@ -88,11 +90,13 @@ function ReviewPageContent() {
     const fetchDetections = async () => {
       try {
         setLoading(true);
+        // Fetch detections that need review (not yet verified or rejected)
         const response = await fetch(
-          `/api/detections?projectId=${projectId}&minConfidence=${session.confidenceThreshold}`
+          `/api/detections?projectId=${projectId}&needsReview=true&maxConfidence=${session.confidenceThreshold || 0.7}`
         );
         const data = await response.json();
-        setDetections(data.detections || []);
+        // API returns array directly, not wrapped in { detections: [] }
+        setDetections(Array.isArray(data) ? data : []);
       } catch (err) {
         console.error('Failed to fetch detections:', err);
       } finally {
@@ -319,21 +323,25 @@ function ReviewPageContent() {
                           alt={currentDetection.asset.fileName}
                           className="w-full h-full object-contain"
                         />
-                        {/* Bounding box overlay */}
-                        <div
-                          className="absolute border-2 border-yellow-400"
-                          style={{
-                            left: `${currentDetection.boundingBox.x}%`,
-                            top: `${currentDetection.boundingBox.y}%`,
-                            width: `${currentDetection.boundingBox.width}%`,
-                            height: `${currentDetection.boundingBox.height}%`,
-                          }}
-                        >
-                          <span className="absolute -top-6 left-0 px-2 py-0.5 bg-yellow-400 text-black text-xs font-medium rounded">
-                            {currentDetection.className} (
-                            {(currentDetection.confidence * 100).toFixed(0)}%)
-                          </span>
-                        </div>
+                        {/* Bounding box overlay - convert pixel coords to percentages */}
+                        {currentDetection.asset.imageWidth && currentDetection.asset.imageHeight && (
+                          <div
+                            className="absolute border-2 border-yellow-400"
+                            style={{
+                              // Roboflow returns center x,y and width,height in pixels
+                              // Convert to percentage-based CSS positioning (top-left corner)
+                              left: `${((currentDetection.boundingBox.x - currentDetection.boundingBox.width / 2) / currentDetection.asset.imageWidth!) * 100}%`,
+                              top: `${((currentDetection.boundingBox.y - currentDetection.boundingBox.height / 2) / currentDetection.asset.imageHeight!) * 100}%`,
+                              width: `${(currentDetection.boundingBox.width / currentDetection.asset.imageWidth!) * 100}%`,
+                              height: `${(currentDetection.boundingBox.height / currentDetection.asset.imageHeight!) * 100}%`,
+                            }}
+                          >
+                            <span className="absolute -top-6 left-0 px-2 py-0.5 bg-yellow-400 text-black text-xs font-medium rounded whitespace-nowrap">
+                              {currentDetection.className} (
+                              {(currentDetection.confidence * 100).toFixed(0)}%)
+                            </span>
+                          </div>
+                        )}
                       </div>
                       <CardContent className="p-4">
                         <div className="flex items-center justify-between mb-4">
