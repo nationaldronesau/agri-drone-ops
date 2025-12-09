@@ -240,7 +240,7 @@ export default function TrainingHubPage() {
 
         {/* Assisted Labeling Card - Full Width */}
         <Card className="hover:shadow-lg transition-all cursor-pointer group border-2 hover:border-purple-300 mb-8">
-          <Link href="/training-hub/new-species/label">
+          <Link href="/training-hub/new-species">
             <CardHeader className="pb-3">
               <div className="flex items-center gap-3">
                 <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-400 to-purple-600 flex items-center justify-center group-hover:scale-110 transition-transform">
