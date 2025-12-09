@@ -479,8 +479,48 @@ export default function AnnotatePage() {
       } catch (err) {
         console.error('Failed to save annotation:', err);
       }
+      return;
     }
-  }, [session, annotationMode, sam3PreviewPolygon, currentPolygon, selectedClass, confidence, clearSam3, cancelDrawing]);
+
+    // Box exemplar (Few-Shot) mode - save all exemplars as annotations
+    if (annotationMode === 'box-exemplar' && boxExemplars.length > 0) {
+      try {
+        const newAnnotations = [];
+        for (const exemplar of boxExemplars) {
+          const { x1, y1, x2, y2 } = exemplar.box;
+          // Convert bounding box to polygon coordinates (4 corners)
+          const coordinates: [number, number][] = [
+            [x1, y1], // top-left
+            [x2, y1], // top-right
+            [x2, y2], // bottom-right
+            [x1, y2], // bottom-left
+          ];
+
+          const response = await fetch('/api/annotations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sessionId: session.id,
+              weedType: exemplar.weedType,
+              confidence,
+              coordinates,
+            }),
+          });
+
+          if (response.ok) {
+            const newAnnotation = await response.json();
+            newAnnotations.push(newAnnotation);
+          }
+        }
+        if (newAnnotations.length > 0) {
+          setAnnotations(prev => [...prev, ...newAnnotations]);
+          clearBoxExemplars();
+        }
+      } catch (err) {
+        console.error('Failed to save box exemplar annotations:', err);
+      }
+    }
+  }, [session, annotationMode, sam3PreviewPolygon, currentPolygon, boxExemplars, selectedClass, confidence, clearSam3, cancelDrawing, clearBoxExemplars]);
 
   // Cancel current action
   const handleCancel = useCallback(() => {
@@ -836,7 +876,8 @@ export default function AnnotatePage() {
 
   // Determine action states
   const canAccept = (annotationMode === 'sam3' && sam3PreviewPolygon && sam3PreviewPolygon.length >= 3) ||
-    (annotationMode === 'manual' && currentPolygon.isComplete && currentPolygon.points.length >= 3);
+    (annotationMode === 'manual' && currentPolygon.isComplete && currentPolygon.points.length >= 3) ||
+    (annotationMode === 'box-exemplar' && boxExemplars.length > 0);
   const canUndo = annotationMode === 'sam3' && sam3Points.length > 0;
   const canDelete = !!selectedAnnotation;
 

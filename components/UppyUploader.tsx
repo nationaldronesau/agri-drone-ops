@@ -284,37 +284,51 @@ export function UppyUploader({
         return;
       }
 
-      const filesPayload = result.successful.map((file) => {
-        const awsMeta = (file.meta?.awsMultipart || {}) as {
-          key?: string;
-          bucket?: string;
-        };
-        const responseBody = file.response?.body as
-          | { key?: string; bucket?: string; url?: string }
-          | undefined;
-        const resolvedKey =
-          responseBody?.key ||
-          awsMeta.key ||
-          (() => {
-            try {
-              return new URL(file.uploadURL ?? "").pathname.replace(/^\//, "");
-            } catch {
-              return undefined;
-            }
-          })();
+      const filesPayload = result.successful
+        .filter((file) => {
+          // Filter out files without valid upload URLs
+          if (!file.uploadURL) {
+            console.warn(`[Uppy] Skipping file ${file.name} - no upload URL`);
+            return false;
+          }
+          return true;
+        })
+        .map((file) => {
+          const awsMeta = (file.meta?.awsMultipart || {}) as {
+            key?: string;
+            bucket?: string;
+          };
+          const responseBody = file.response?.body as
+            | { key?: string; bucket?: string; url?: string }
+            | undefined;
+          const resolvedKey =
+            responseBody?.key ||
+            awsMeta.key ||
+            (() => {
+              try {
+                return new URL(file.uploadURL ?? "").pathname.replace(/^\//, "");
+              } catch {
+                return undefined;
+              }
+            })();
 
-        return {
-          url: file.uploadURL,
-          name: file.name,
-          size: file.size,
-          mimeType:
-            file.type ||
-            (file.data instanceof File ? file.data.type : undefined) ||
-            "application/octet-stream",
-          key: resolvedKey,
-          bucket: responseBody?.bucket || awsMeta.bucket,
-        };
-      });
+          return {
+            url: file.uploadURL,
+            name: file.name,
+            size: file.size,
+            mimeType:
+              file.type ||
+              (file.data instanceof File ? file.data.type : undefined) ||
+              "application/octet-stream",
+            key: resolvedKey,
+            bucket: responseBody?.bucket || awsMeta.bucket,
+          };
+        });
+
+      if (filesPayload.length === 0) {
+        uppy.info("No files with valid upload URLs to process.", "error", 5000);
+        return;
+      }
 
       processingRef.current = true;
       callbacksRef.current.onProcessingStart?.();
