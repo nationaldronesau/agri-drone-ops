@@ -273,7 +273,6 @@ export default function AnnotatePage() {
       try {
         const response = await fetch('/api/sam3/status');
         const status: SAM3StatusResponse = await response.json();
-        setSam3Status(status);
 
         const isAvailable = status.preferredBackend !== 'none';
         const device = status.aws.ready ? 'aws-gpu' : status.roboflow.ready ? 'roboflow-serverless' : null;
