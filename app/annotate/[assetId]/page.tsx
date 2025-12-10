@@ -196,6 +196,7 @@ export default function AnnotatePage() {
   // UI state
   const [showHotkeyHelp, setShowHotkeyHelp] = useState(false);
   const [hoveredAnnotation, setHoveredAnnotation] = useState<string | null>(null);
+  const [deleteIconPosition, setDeleteIconPosition] = useState<{ x: number; y: number } | null>(null);
 
   // Batch processing state
   const [batchProcessing, setBatchProcessing] = useState(false);
@@ -836,11 +837,16 @@ export default function AnnotatePage() {
 
         // Draw delete icon on hovered annotation
         if (isHovered) {
-          // Calculate centroid of polygon for icon placement
+          // Calculate centroid of polygon for icon placement (in image coordinates)
           const sumX = annotation.coordinates.reduce((sum, [x]) => sum + x, 0);
           const sumY = annotation.coordinates.reduce((sum, [, y]) => sum + y, 0);
-          const centerX = (sumX / annotation.coordinates.length) * scale;
-          const centerY = (sumY / annotation.coordinates.length) * scale;
+          const iconX = sumX / annotation.coordinates.length;
+          const iconY = sumY / annotation.coordinates.length;
+          const centerX = iconX * scale;
+          const centerY = iconY * scale;
+
+          // Store icon position for click detection (in image coordinates)
+          setDeleteIconPosition({ x: iconX, y: iconY });
 
           // Draw delete circle background
           const iconRadius = 14 / zoomLevel;
@@ -1046,10 +1052,21 @@ export default function AnnotatePage() {
     if (isPanning || e.shiftKey) return;
     const { x, y } = getImageCoords(e);
 
-    // If clicking on a hovered annotation, delete it
-    if (hoveredAnnotation) {
-      deleteAnnotation(hoveredAnnotation);
-      setHoveredAnnotation(null);
+    // If clicking on the delete icon of a hovered annotation, delete it
+    // Only delete if clicking within the icon radius (20px in image coords)
+    if (hoveredAnnotation && deleteIconPosition) {
+      const iconClickRadius = 20 / (scale * zoomLevel); // Icon hit area in image coordinates
+      const distToIcon = Math.sqrt(
+        Math.pow(x - deleteIconPosition.x, 2) + Math.pow(y - deleteIconPosition.y, 2)
+      );
+      if (distToIcon <= iconClickRadius) {
+        deleteAnnotation(hoveredAnnotation);
+        setHoveredAnnotation(null);
+        setDeleteIconPosition(null);
+        return;
+      }
+      // Clicked inside annotation but not on icon - just select it instead
+      setSelectedAnnotation(hoveredAnnotation);
       return;
     }
 
@@ -1076,7 +1093,7 @@ export default function AnnotatePage() {
       setCurrentPolygon(prev => ({ ...prev, points: [...prev.points, [x, y]] }));
       if (!isDrawing) setIsDrawing(true);
     }
-  }, [isPanning, getImageCoords, annotationMode, sam3Points, runSam3Prediction, currentPolygon, scale, zoomLevel, isDrawing, hoveredAnnotation, deleteAnnotation]);
+  }, [isPanning, getImageCoords, annotationMode, sam3Points, runSam3Prediction, currentPolygon, scale, zoomLevel, isDrawing, hoveredAnnotation, deleteAnnotation, deleteIconPosition]);
 
   const handleCanvasContextMenu = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     e.preventDefault();
