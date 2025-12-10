@@ -54,6 +54,22 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+// Check if a point is inside a polygon using ray casting algorithm
+function isPointInPolygon(x: number, y: number, polygon: [number, number][]): boolean {
+  if (polygon.length < 3) return false;
+
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i][0], yi = polygon[i][1];
+    const xj = polygon[j][0], yj = polygon[j][1];
+
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
 interface Asset {
   id: string;
   fileName: string;
@@ -179,6 +195,8 @@ export default function AnnotatePage() {
 
   // UI state
   const [showHotkeyHelp, setShowHotkeyHelp] = useState(false);
+  const [hoveredAnnotation, setHoveredAnnotation] = useState<string | null>(null);
+  const [deleteIconPosition, setDeleteIconPosition] = useState<{ x: number; y: number } | null>(null);
 
   // Batch processing state
   const [batchProcessing, setBatchProcessing] = useState(false);
@@ -801,11 +819,12 @@ export default function AnnotatePage() {
     // Existing annotations
     annotations.forEach((annotation) => {
       const isSelected = selectedAnnotation === annotation.id;
+      const isHovered = hoveredAnnotation === annotation.id;
       const color = getClassColor(annotation.weedType);
 
-      ctx.strokeStyle = isSelected ? '#FF0000' : color;
-      ctx.fillStyle = hexToRgba(isSelected ? '#FF0000' : color, 0.2);
-      ctx.lineWidth = (isSelected ? 3 : 2) / zoomLevel;
+      ctx.strokeStyle = isSelected ? '#FF0000' : isHovered ? '#EF4444' : color;
+      ctx.fillStyle = hexToRgba(isSelected ? '#FF0000' : isHovered ? '#EF4444' : color, isHovered ? 0.35 : 0.2);
+      ctx.lineWidth = (isSelected || isHovered ? 3 : 2) / zoomLevel;
 
       if (annotation.coordinates.length > 2) {
         ctx.beginPath();
@@ -815,6 +834,41 @@ export default function AnnotatePage() {
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
+
+        // Draw delete icon on hovered annotation
+        if (isHovered) {
+          // Calculate centroid of polygon for icon placement (in image coordinates)
+          const sumX = annotation.coordinates.reduce((sum, [x]) => sum + x, 0);
+          const sumY = annotation.coordinates.reduce((sum, [, y]) => sum + y, 0);
+          const iconX = sumX / annotation.coordinates.length;
+          const iconY = sumY / annotation.coordinates.length;
+          const centerX = iconX * scale;
+          const centerY = iconY * scale;
+
+          // Store icon position for click detection (in image coordinates)
+          setDeleteIconPosition({ x: iconX, y: iconY });
+
+          // Draw delete circle background
+          const iconRadius = 14 / zoomLevel;
+          ctx.beginPath();
+          ctx.arc(centerX, centerY, iconRadius, 0, 2 * Math.PI);
+          ctx.fillStyle = '#EF4444';
+          ctx.fill();
+          ctx.strokeStyle = '#FFFFFF';
+          ctx.lineWidth = 2 / zoomLevel;
+          ctx.stroke();
+
+          // Draw X icon
+          const xSize = 6 / zoomLevel;
+          ctx.beginPath();
+          ctx.moveTo(centerX - xSize, centerY - xSize);
+          ctx.lineTo(centerX + xSize, centerY + xSize);
+          ctx.moveTo(centerX + xSize, centerY - xSize);
+          ctx.lineTo(centerX - xSize, centerY + xSize);
+          ctx.strokeStyle = '#FFFFFF';
+          ctx.lineWidth = 2.5 / zoomLevel;
+          ctx.stroke();
+        }
       }
     });
 
@@ -906,7 +960,7 @@ export default function AnnotatePage() {
     }
 
     ctx.restore();
-  }, [annotations, currentPolygon, selectedAnnotation, scale, imageLoaded, zoomLevel, panOffset, aiSuggestions, showAiSuggestions, annotationMode, sam3Points, sam3PreviewPolygon, boxExemplars, currentBox]);
+  }, [annotations, currentPolygon, selectedAnnotation, hoveredAnnotation, scale, imageLoaded, zoomLevel, panOffset, aiSuggestions, showAiSuggestions, annotationMode, sam3Points, sam3PreviewPolygon, boxExemplars, currentBox]);
 
   useEffect(() => { redrawCanvas(); }, [redrawCanvas]);
 
@@ -956,7 +1010,20 @@ export default function AnnotatePage() {
       const { x, y } = getImageCoords(e);
       setCurrentBox(prev => prev ? { ...prev, endX: x, endY: y } : null);
     }
-  }, [isPanning, lastPanPoint, isDrawingBox, annotationMode, getImageCoords]);
+
+    // Check if hovering over an annotation (for delete on hover)
+    const { x, y } = getImageCoords(e);
+    let foundHovered: string | null = null;
+    // Check in reverse order so topmost annotation is found first
+    for (let i = annotations.length - 1; i >= 0; i--) {
+      const annotation = annotations[i];
+      if (annotation.coordinates.length >= 3 && isPointInPolygon(x, y, annotation.coordinates)) {
+        foundHovered = annotation.id;
+        break;
+      }
+    }
+    setHoveredAnnotation(foundHovered);
+  }, [isPanning, lastPanPoint, isDrawingBox, annotationMode, getImageCoords, annotations]);
 
   const handleMouseUp = useCallback(() => {
     if (isPanning) { setIsPanning(false); return; }
@@ -985,6 +1052,24 @@ export default function AnnotatePage() {
     if (isPanning || e.shiftKey) return;
     const { x, y } = getImageCoords(e);
 
+    // If clicking on the delete icon of a hovered annotation, delete it
+    // Only delete if clicking within the icon radius (20px in image coords)
+    if (hoveredAnnotation && deleteIconPosition) {
+      const iconClickRadius = 20 / (scale * zoomLevel); // Icon hit area in image coordinates
+      const distToIcon = Math.sqrt(
+        Math.pow(x - deleteIconPosition.x, 2) + Math.pow(y - deleteIconPosition.y, 2)
+      );
+      if (distToIcon <= iconClickRadius) {
+        deleteAnnotation(hoveredAnnotation);
+        setHoveredAnnotation(null);
+        setDeleteIconPosition(null);
+        return;
+      }
+      // Clicked inside annotation but not on icon - just select it instead
+      setSelectedAnnotation(hoveredAnnotation);
+      return;
+    }
+
     if (annotationMode === 'sam3') {
       const newPoint: SAM3Point = { x: Math.round(x), y: Math.round(y), label: 1 };
       const newPoints = [...sam3Points, newPoint];
@@ -1008,7 +1093,7 @@ export default function AnnotatePage() {
       setCurrentPolygon(prev => ({ ...prev, points: [...prev.points, [x, y]] }));
       if (!isDrawing) setIsDrawing(true);
     }
-  }, [isPanning, getImageCoords, annotationMode, sam3Points, runSam3Prediction, currentPolygon, scale, zoomLevel, isDrawing]);
+  }, [isPanning, getImageCoords, annotationMode, sam3Points, runSam3Prediction, currentPolygon, scale, zoomLevel, isDrawing, hoveredAnnotation, deleteAnnotation, deleteIconPosition]);
 
   const handleCanvasContextMenu = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     e.preventDefault();
@@ -1137,7 +1222,7 @@ export default function AnnotatePage() {
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
               onMouseLeave={handleMouseUp}
-              className={`max-w-full max-h-full ${isPanning ? 'cursor-grabbing' : 'cursor-crosshair'}`}
+              className={`max-w-full max-h-full ${isPanning ? 'cursor-grabbing' : hoveredAnnotation ? 'cursor-pointer' : 'cursor-crosshair'}`}
               style={{ display: imageLoaded ? 'block' : 'none' }}
             />
             {!imageLoaded && (
