@@ -145,18 +145,21 @@ class SAM3Orchestrator {
       }
 
       // AWS is ready, try to predict
+      console.log(`[Orchestrator] Attempting AWS prediction. Has imageUrl: ${!!request.imageUrl}, Has assetId: ${!!request.assetId}, Has points: ${request.points?.length || 0}`);
       const awsResult = await this.predictWithAWS(request);
-      if (awsResult && awsResult.success) {
+
+      if (awsResult === null) {
+        console.log('[Orchestrator] AWS returned null (likely missing imageUrl/assetId for point prediction), falling back to Roboflow');
+      } else if (!awsResult.success) {
+        console.log(`[Orchestrator] AWS prediction failed: ${awsResult.error}, falling back to Roboflow`);
+      } else {
+        console.log(`[Orchestrator] AWS prediction succeeded with ${awsResult.detections.length} detections`);
         return {
           ...awsResult,
           backend: 'aws',
           processingTimeMs: Date.now() - startTime,
         };
       }
-
-      // AWS failed, fall back to Roboflow with error context
-      const awsError = awsResult?.error || 'Unknown AWS error';
-      console.log(`[Orchestrator] AWS prediction failed (${awsError}), falling back to Roboflow`);
     }
 
     return this.fallbackToRoboflow(request, startTime);
