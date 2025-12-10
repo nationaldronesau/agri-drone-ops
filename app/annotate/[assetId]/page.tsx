@@ -550,6 +550,56 @@ export default function AnnotatePage() {
     }
   }, [selectedAnnotation]);
 
+  // Verify annotation (mark as accepted)
+  const verifyAnnotation = useCallback(async (id: string) => {
+    try {
+      const response = await fetch(`/api/annotations/${id}/verify`, { method: 'POST' });
+      if (response.ok) {
+        const updated = await response.json();
+        setAnnotations(prev => prev.map(a => a.id === id ? { ...a, verified: true, verifiedAt: updated.verifiedAt } : a));
+      }
+    } catch (err) {
+      console.error('Failed to verify annotation:', err);
+    }
+  }, []);
+
+  // Push verified annotations to Roboflow
+  const [isPushing, setIsPushing] = useState(false);
+  const pushToRoboflow = useCallback(async () => {
+    if (!session?.id) return;
+
+    setIsPushing(true);
+    try {
+      const response = await fetch('/api/roboflow/push-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: session.id }),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        // Update local state to mark annotations as pushed
+        setAnnotations(prev => prev.map(a =>
+          a.verified && !a.pushedToTraining
+            ? { ...a, pushedToTraining: true, pushedAt: new Date().toISOString() }
+            : a
+        ));
+        setSam3Error(null);
+        // Show success message briefly
+        setSam3Error(`Successfully pushed ${result.pushed || 0} annotations to Roboflow!`);
+        setTimeout(() => setSam3Error(null), 3000);
+      } else {
+        const error = await response.json();
+        setSam3Error(error.error || 'Failed to push to Roboflow');
+      }
+    } catch (err) {
+      console.error('Failed to push to Roboflow:', err);
+      setSam3Error('Failed to push to Roboflow');
+    } finally {
+      setIsPushing(false);
+    }
+  }, [session]);
+
   // Undo last SAM3 point
   const handleUndo = useCallback(() => {
     if (annotationMode === 'sam3' && sam3Points.length > 0) {
@@ -1201,6 +1251,9 @@ export default function AnnotatePage() {
             selectedId={selectedAnnotation}
             onSelect={setSelectedAnnotation}
             onDelete={deleteAnnotation}
+            onVerify={verifyAnnotation}
+            onPushToRoboflow={pushToRoboflow}
+            isPushing={isPushing}
             className="mt-3"
           />
 
