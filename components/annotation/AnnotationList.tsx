@@ -1,6 +1,6 @@
 "use client";
 
-import { Trash2, Check, X, Upload, Loader2 } from "lucide-react";
+import { Trash2, Check, X, Upload, Loader2, CheckCheck, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { getClassColor } from "./ClassSelector";
@@ -20,6 +20,7 @@ interface AnnotationListProps {
   onSelect: (id: string | null) => void;
   onDelete: (id: string) => void;
   onVerify?: (id: string) => void;
+  onVerifyAll?: () => void;
   onPushToRoboflow?: () => void;
   isPushing?: boolean;
   className?: string;
@@ -31,6 +32,7 @@ export function AnnotationList({
   onSelect,
   onDelete,
   onVerify,
+  onVerifyAll,
   onPushToRoboflow,
   isPushing,
   className,
@@ -164,7 +166,7 @@ export function AnnotationList({
         })}
       </div>
 
-      {/* Summary and Push Button */}
+      {/* Summary and Actions */}
       <div className="mt-2 pt-2 border-t border-gray-200 px-2 space-y-2">
         {/* Status summary */}
         <div className="flex items-center gap-2 text-[10px] text-gray-500">
@@ -188,6 +190,30 @@ export function AnnotationList({
           )}
         </div>
 
+        {/* Workflow hint when there are pending annotations */}
+        {unverifiedCount > 0 && verifiedCount === 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-md p-2">
+            <p className="text-[10px] text-amber-700 leading-relaxed">
+              <strong>Next step:</strong> Review each annotation using{" "}
+              <Check className="inline h-3 w-3 text-green-600" /> to approve or{" "}
+              <X className="inline h-3 w-3 text-red-500" /> to reject.
+            </p>
+          </div>
+        )}
+
+        {/* Verify All button - show when there are pending annotations */}
+        {onVerifyAll && unverifiedCount > 0 && (
+          <Button
+            onClick={onVerifyAll}
+            size="sm"
+            variant="outline"
+            className="w-full h-7 text-xs border-green-300 text-green-700 hover:bg-green-50 hover:border-green-400"
+          >
+            <CheckCheck className="h-3 w-3 mr-1" />
+            Approve All {unverifiedCount} Annotations
+          </Button>
+        )}
+
         {/* Push to Roboflow button */}
         {onPushToRoboflow && verifiedCount > 0 && (
           <Button
@@ -205,9 +231,19 @@ export function AnnotationList({
               <>
                 <Upload className="h-3 w-3 mr-1" />
                 Push {verifiedCount} to Roboflow
+                <ArrowRight className="h-3 w-3 ml-1" />
               </>
             )}
           </Button>
+        )}
+
+        {/* Workflow complete message */}
+        {pushedCount > 0 && unverifiedCount === 0 && verifiedCount === 0 && (
+          <div className="bg-purple-50 border border-purple-200 rounded-md p-2">
+            <p className="text-[10px] text-purple-700 leading-relaxed">
+              <strong>Done!</strong> All annotations pushed to Roboflow for model training.
+            </p>
+          </div>
         )}
 
         {/* Legend */}
