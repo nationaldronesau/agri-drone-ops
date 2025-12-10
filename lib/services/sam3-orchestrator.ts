@@ -280,13 +280,24 @@ class SAM3Orchestrator {
           scaling
         );
 
-        // Create polygon from bbox (AWS API returns bbox, not polygon)
-        const polygon: [number, number][] = [
-          [scaledBbox.x1, scaledBbox.y1],
-          [scaledBbox.x2, scaledBbox.y1],
-          [scaledBbox.x2, scaledBbox.y2],
-          [scaledBbox.x1, scaledBbox.y2],
-        ];
+        // Use polygon from API if available (v0.6.0+), otherwise fall back to bbox rectangle
+        let polygon: [number, number][];
+        if (det.polygon && Array.isArray(det.polygon) && det.polygon.length >= 3) {
+          // Scale polygon coordinates back to original image space
+          const inverseScale = 1 / scaling.scaleFactor;
+          polygon = det.polygon.map((point: number[]) => [
+            Math.round(point[0] * inverseScale),
+            Math.round(point[1] * inverseScale),
+          ] as [number, number]);
+        } else {
+          // Fallback: Create polygon from bbox (for older API versions)
+          polygon = [
+            [scaledBbox.x1, scaledBbox.y1],
+            [scaledBbox.x2, scaledBbox.y1],
+            [scaledBbox.x2, scaledBbox.y2],
+            [scaledBbox.x1, scaledBbox.y2],
+          ];
+        }
 
         return {
           polygon,
