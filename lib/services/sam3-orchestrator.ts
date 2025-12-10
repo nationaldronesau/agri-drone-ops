@@ -436,8 +436,11 @@ class SAM3Orchestrator {
       }
 
       const result = await response.json();
+      console.log('[Orchestrator] Roboflow raw response:', JSON.stringify(result).substring(0, 500));
+
       // Parse response and scale coordinates back to original size
       const detections = this.parseRoboflowResponse(result, scaleFactor);
+      console.log(`[Orchestrator] Parsed ${detections.length} detections from Roboflow`);
 
       return {
         success: true,

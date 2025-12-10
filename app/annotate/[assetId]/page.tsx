@@ -384,17 +384,27 @@ export default function AnnotatePage() {
       }
 
       const result = await response.json();
+      console.log('[SAM3] Prediction result:', result);
       if (result.backend) setSam3Backend(result.backend);
 
-      if (result.success && result.polygon) {
+      if (result.success && result.polygon && result.polygon.length >= 3) {
         setSam3PreviewPolygon(result.polygon);
         setSam3Score(result.score);
         setSam3Error(null);
-      } else {
+      } else if (result.success && (!result.polygon || result.polygon.length < 3)) {
+        // API succeeded but no polygon returned - likely nothing detected at that point
         setSam3PreviewPolygon(null);
         setSam3Score(null);
+        setSam3Error(`No object detected at that point. Try clicking on a different area. (Backend: ${result.backend || 'unknown'})`);
+        setTimeout(() => setSam3Error(null), 4000);
+      } else {
+        // API returned an error
+        setSam3PreviewPolygon(null);
+        setSam3Score(null);
+        setSam3Error(result.error || 'SAM3 prediction failed');
       }
-    } catch {
+    } catch (err) {
+      console.error('[SAM3] Connection error:', err);
       setSam3Error('Connection error. Please check your network.');
     } finally {
       setSam3Loading(false);
