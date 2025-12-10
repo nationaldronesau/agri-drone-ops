@@ -581,6 +581,31 @@ export default function AnnotatePage() {
     }
   }, []);
 
+  // Verify all unverified annotations at once
+  const verifyAllAnnotations = useCallback(async () => {
+    const unverified = annotations.filter(a => !a.verified);
+    if (unverified.length === 0) return;
+
+    // Verify all in parallel
+    const results = await Promise.allSettled(
+      unverified.map(a => fetch(`/api/annotations/${a.id}/verify`, { method: 'POST' }))
+    );
+
+    // Update state for successful verifications
+    const successIds = new Set<string>();
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled' && result.value.ok) {
+        successIds.add(unverified[index].id);
+      }
+    });
+
+    if (successIds.size > 0) {
+      setAnnotations(prev => prev.map(a =>
+        successIds.has(a.id) ? { ...a, verified: true, verifiedAt: new Date().toISOString() } : a
+      ));
+    }
+  }, [annotations]);
+
   // Push verified annotations to Roboflow
   const [isPushing, setIsPushing] = useState(false);
   const pushToRoboflow = useCallback(async () => {
@@ -1337,6 +1362,7 @@ export default function AnnotatePage() {
             onSelect={setSelectedAnnotation}
             onDelete={deleteAnnotation}
             onVerify={verifyAnnotation}
+            onVerifyAll={verifyAllAnnotations}
             onPushToRoboflow={pushToRoboflow}
             isPushing={isPushing}
             className="mt-3"
