@@ -575,11 +575,43 @@ export default function AnnotatePage() {
       if (response.ok) {
         const updated = await response.json();
         setAnnotations(prev => prev.map(a => a.id === id ? { ...a, verified: true, verifiedAt: updated.verifiedAt } : a));
+      } else {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+        console.error('Verify failed:', error);
+        setSam3Error(`Failed to verify: ${error.error || 'Server error'}`);
+        setTimeout(() => setSam3Error(null), 3000);
       }
     } catch (err) {
       console.error('Failed to verify annotation:', err);
+      setSam3Error('Failed to verify annotation. Check console for details.');
+      setTimeout(() => setSam3Error(null), 3000);
     }
   }, []);
+
+  // Verify all unverified annotations at once
+  const verifyAllAnnotations = useCallback(async () => {
+    const unverified = annotations.filter(a => !a.verified);
+    if (unverified.length === 0) return;
+
+    // Verify all in parallel
+    const results = await Promise.allSettled(
+      unverified.map(a => fetch(`/api/annotations/${a.id}/verify`, { method: 'POST' }))
+    );
+
+    // Update state for successful verifications
+    const successIds = new Set<string>();
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled' && result.value.ok) {
+        successIds.add(unverified[index].id);
+      }
+    });
+
+    if (successIds.size > 0) {
+      setAnnotations(prev => prev.map(a =>
+        successIds.has(a.id) ? { ...a, verified: true, verifiedAt: new Date().toISOString() } : a
+      ));
+    }
+  }, [annotations]);
 
   // Push verified annotations to Roboflow
   const [isPushing, setIsPushing] = useState(false);
@@ -1052,8 +1084,8 @@ export default function AnnotatePage() {
     if (isPanning || e.shiftKey) return;
     const { x, y } = getImageCoords(e);
 
-    // If clicking on the delete icon of a hovered annotation, delete it
-    // Only delete if clicking within the icon radius (20px in image coords)
+    // In SAM3 or manual mode, prioritize placing points over selecting annotations
+    // Only handle delete icon clicks, not general annotation selection
     if (hoveredAnnotation && deleteIconPosition) {
       const iconClickRadius = 20 / (scale * zoomLevel); // Icon hit area in image coordinates
       const distToIcon = Math.sqrt(
@@ -1065,9 +1097,12 @@ export default function AnnotatePage() {
         setDeleteIconPosition(null);
         return;
       }
-      // Clicked inside annotation but not on icon - just select it instead
-      setSelectedAnnotation(hoveredAnnotation);
-      return;
+      // In drawing modes (sam3, manual), don't select annotation - let the drawing continue
+      // Only select annotation if we're not actively drawing
+      if (annotationMode !== 'sam3' && annotationMode !== 'manual') {
+        setSelectedAnnotation(hoveredAnnotation);
+        return;
+      }
     }
 
     if (annotationMode === 'sam3') {
@@ -1337,6 +1372,7 @@ export default function AnnotatePage() {
             onSelect={setSelectedAnnotation}
             onDelete={deleteAnnotation}
             onVerify={verifyAnnotation}
+            onVerifyAll={verifyAllAnnotations}
             onPushToRoboflow={pushToRoboflow}
             isPushing={isPushing}
             className="mt-3"
