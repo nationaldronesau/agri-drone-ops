@@ -363,6 +363,7 @@ class AWSSAM3Service {
 
   /**
    * Check the health of the SAM3 API
+   * SAM3 v0.6.0 uses /health endpoint (not /api/v1/health)
    */
   async checkHealth(): Promise<{ modelLoaded: boolean; gpuAvailable: boolean } | null> {
     if (!this.instanceIp) return null;
@@ -375,8 +376,8 @@ class AWSSAM3Service {
       if (!response.ok) return null;
 
       const data = await response.json();
-      // SAM3 service returns: { status, model_loaded, gpu_available, device }
-      this.modelLoaded = data.model_loaded === true;
+      // SAM3 v0.6.0 returns: { status, model_loaded, gpu_available, ready, version, features }
+      this.modelLoaded = data.model_loaded === true || data.ready === true;
       this.gpuAvailable = data.gpu_available === true;
 
       return {
@@ -390,13 +391,14 @@ class AWSSAM3Service {
 
   /**
    * Warm up the SAM3 model (required after instance start)
+   * SAM3 v0.6.0 uses /warmup endpoint (not /api/v1/warmup)
    */
   async warmup(): Promise<boolean> {
     if (!this.instanceIp) return false;
 
     try {
       console.log('[AWS-SAM3] Warming up model...');
-      const response = await fetch(`http://${this.instanceIp}:${SAM3_PORT}/api/v1/warmup`, {
+      const response = await fetch(`http://${this.instanceIp}:${SAM3_PORT}/warmup`, {
         method: 'POST',
         signal: AbortSignal.timeout(120000), // 2 minutes for warmup
       });
@@ -408,7 +410,8 @@ class AWSSAM3Service {
 
       const data = await response.json();
       console.log('[AWS-SAM3] Warmup complete:', data);
-      this.modelLoaded = data.success === true;
+      // SAM3 v0.6.0 returns: { status: "loaded", backend, gpu }
+      this.modelLoaded = data.status === 'loaded' || data.success === true;
       return this.modelLoaded;
     } catch (error) {
       console.error('[AWS-SAM3] Warmup error:', error);
@@ -568,8 +571,11 @@ class AWSSAM3Service {
   }
 
   /**
-   * Call the SAM3 /api/v1/predict endpoint for point-based segmentation
-   * This endpoint accepts click points and returns a polygon mask
+   * Call the SAM3 /segment endpoint for point-based segmentation
+   * SAM3 v0.6.0 uses /segment for all segmentation (points converted to boxes internally)
+   *
+   * For click-to-segment, we fetch the image, create a small box around the click point,
+   * and use the /segment endpoint.
    */
   async predictWithPoints(request: SAM3PointPredictRequest): Promise<SAM3PointPredictResult> {
     if (!this.configured) {
@@ -594,24 +600,67 @@ class AWSSAM3Service {
 
     try {
       console.log(
-        `[AWS-SAM3] Calling /api/v1/predict with ${request.points.length} points for asset: ${request.assetId}`
+        `[AWS-SAM3] Calling /segment with ${request.points.length} points for asset: ${request.assetId}`
       );
 
-      const response = await fetch(`http://${this.instanceIp}:${SAM3_PORT}/api/v1/predict`, {
+      // Fetch the image from the URL
+      const imageResponse = await fetch(request.imageUrl, {
+        signal: AbortSignal.timeout(30000),
+      });
+
+      if (!imageResponse.ok) {
+        console.error(`[AWS-SAM3] Failed to fetch image: ${imageResponse.status}`);
+        return {
+          success: false,
+          response: null,
+          error: `Failed to fetch image: ${imageResponse.status}`,
+          errorCode: 'API_ERROR',
+        };
+      }
+
+      const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+
+      // Resize image for GPU memory limits
+      const { buffer: resizedBuffer, scaling } = await this.resizeImage(imageBuffer);
+      const base64Image = resizedBuffer.toString('base64');
+
+      // Convert points to boxes for /segment endpoint
+      // Create a small box around each foreground point (label=1)
+      // Use a box size that's reasonable for typical weed detection
+      const BOX_HALF_SIZE = 50; // 50px radius around the click point
+      const boxes = request.points
+        .filter(p => p.label === 1) // Only foreground points
+        .map(p => ({
+          x1: Math.max(0, Math.round(p.x * scaling.scaleFactor) - BOX_HALF_SIZE),
+          y1: Math.max(0, Math.round(p.y * scaling.scaleFactor) - BOX_HALF_SIZE),
+          x2: Math.round(p.x * scaling.scaleFactor) + BOX_HALF_SIZE,
+          y2: Math.round(p.y * scaling.scaleFactor) + BOX_HALF_SIZE,
+        }));
+
+      if (boxes.length === 0) {
+        return {
+          success: false,
+          response: null,
+          error: 'No foreground points provided',
+          errorCode: 'API_ERROR',
+        };
+      }
+
+      const response = await fetch(`http://${this.instanceIp}:${SAM3_PORT}/segment`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          imageUrl: request.imageUrl,
-          assetId: request.assetId,
-          points: request.points,
-          simplifyTolerance: request.simplifyTolerance ?? 0.02,
+          image: base64Image,
+          boxes: boxes,
+          class_name: 'detection',
+          return_polygons: true,
         }),
         signal: AbortSignal.timeout(120000), // 2 minutes timeout
       });
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unknown error');
-        console.error(`[AWS-SAM3] Predict failed: ${response.status} - ${errorText}`);
+        console.error(`[AWS-SAM3] Segment failed: ${response.status} - ${errorText}`);
         return {
           success: false,
           response: null,
@@ -621,15 +670,63 @@ class AWSSAM3Service {
       }
 
       const result = await response.json();
-      console.log(`[AWS-SAM3] Predict returned score: ${result.score}`);
+      console.log(`[AWS-SAM3] Segment returned ${result.count} detections`);
+
+      // Convert /segment response to point predict response format
+      // Scale coordinates back to original image size
+      const inverseScale = 1 / scaling.scaleFactor;
+
+      if (result.detections && result.detections.length > 0) {
+        const detection = result.detections[0]; // Take first detection for point-based
+
+        // Scale polygon back to original coordinates
+        const polygon = detection.polygon
+          ? detection.polygon.map((p: number[]) => [
+              Math.round(p[0] * inverseScale),
+              Math.round(p[1] * inverseScale)
+            ])
+          : null;
+
+        // Scale bbox back to original coordinates
+        const bbox = detection.bbox
+          ? [
+              Math.round(detection.bbox[0] * inverseScale),
+              Math.round(detection.bbox[1] * inverseScale),
+              Math.round(detection.bbox[2] * inverseScale),
+              Math.round(detection.bbox[3] * inverseScale),
+            ]
+          : null;
+
+        return {
+          success: true,
+          response: {
+            success: true,
+            score: detection.confidence || 0.9,
+            polygon: polygon,
+            bbox: bbox as [number, number, number, number] | null,
+            processingTimeMs: 0,
+            device: 'cuda',
+            message: `Segmented with ${result.count} detection(s)`,
+          },
+        };
+      }
+
       return {
         success: true,
-        response: result,
+        response: {
+          success: true,
+          score: 0,
+          polygon: null,
+          bbox: null,
+          processingTimeMs: 0,
+          device: 'cuda',
+          message: 'No detections found',
+        },
       };
     } catch (error) {
       const isTimeout = error instanceof Error && error.name === 'TimeoutError';
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error('[AWS-SAM3] Predict error:', errorMessage);
+      console.error('[AWS-SAM3] Segment error:', errorMessage);
 
       return {
         success: false,
