@@ -129,7 +129,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(project, { status: 201 });
   } catch (error) {
-    console.error('Error creating training project:', error instanceof Error ? error.message : 'Unknown error');
+    console.error('Error creating training project:', error);
     return NextResponse.json(
       { error: 'Failed to create training project. Please try again.' },
       { status: 500 }
