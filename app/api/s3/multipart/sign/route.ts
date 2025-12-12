@@ -48,10 +48,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("Failed to sign multipart upload part:", error);
     return NextResponse.json(
-      {
-        error: "Failed to sign multipart upload part",
-        details: error instanceof Error ? error.message : "Unknown error",
-      },
+      { error: "Failed to sign upload part. Please try again." },
       { status: 500 },
     );
   }

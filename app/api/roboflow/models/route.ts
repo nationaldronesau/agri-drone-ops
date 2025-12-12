@@ -129,9 +129,9 @@ export async function GET(request: NextRequest) {
       count: models.length,
     });
   } catch (error) {
-    console.error('Error fetching Roboflow models:', error);
+    console.error('Error fetching models:', error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to fetch models' },
+      { error: 'Failed to fetch detection models. Please try again.' },
       { status: 500 }
     );
   }
