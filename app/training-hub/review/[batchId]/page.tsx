@@ -183,7 +183,7 @@ export default function BatchReviewPage() {
       let sessionId: string | undefined;
       if (sessionRes.ok) {
         const sessionData = await sessionRes.json();
-        sessionId = sessionData.session?.id;
+        sessionId = sessionData.id;
       }
 
       const response = await fetch('/api/annotations/pending', {
@@ -253,7 +253,7 @@ export default function BatchReviewPage() {
       let sessionId: string | undefined;
       if (sessionRes.ok) {
         const sessionData = await sessionRes.json();
-        sessionId = sessionData.session?.id;
+        sessionId = sessionData.id;
       }
 
       const response = await fetch('/api/annotations/pending', {

@@ -1,6 +1,7 @@
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
+  CopyObjectCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
@@ -284,11 +285,13 @@ export class S3Service {
     expiresIn: number;
     uploadUrl: string;
   }> {
-    const key = this.buildUserUploadKey({
+    const key = this.generateKey({
       userId: options.userId,
       projectId: options.projectId,
       flightSession: options.flightSession,
-      originalFileName: options.fileName,
+      fileName: options.fileName,
+      contentType: options.contentType,
+      metadata: options.metadata,
     });
 
     const command = new PutObjectCommand({
@@ -441,7 +444,7 @@ export class S3Service {
    */
   static async copyObject(sourceKey: string, destinationKey: string): Promise<void> {
     try {
-      const command = new PutObjectCommand({
+      const command = new CopyObjectCommand({
         Bucket: BUCKET_NAME,
         Key: destinationKey,
         CopySource: `${BUCKET_NAME}/${sourceKey}`,
