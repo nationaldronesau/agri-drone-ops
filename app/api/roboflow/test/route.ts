@@ -48,7 +48,7 @@ export async function GET(request: NextRequest) {
             details: detailData
           });
         } catch (error) {
-          console.error(`Failed to get details for project ${project.id}:`, error instanceof Error ? error.message : 'Unknown');
+          console.error(`Failed to get details for project ${project.id}:`, error);
           projectDetails.push({
             id: project.id,
             name: project.name,
@@ -67,7 +67,7 @@ export async function GET(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Training API test failed:', error instanceof Error ? error.message : 'Unknown error');
+    console.error('Training API test failed:', error);
     return NextResponse.json({
       error: 'API test failed. Please check your configuration.'
     }, { status: 500 });

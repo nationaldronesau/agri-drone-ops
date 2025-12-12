@@ -129,7 +129,7 @@ export async function GET(request: NextRequest) {
       count: models.length,
     });
   } catch (error) {
-    console.error('Error fetching models:', error instanceof Error ? error.message : 'Unknown error');
+    console.error('Error fetching models:', error);
     return NextResponse.json(
       { error: 'Failed to fetch detection models. Please try again.' },
       { status: 500 }

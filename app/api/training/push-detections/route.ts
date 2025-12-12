@@ -232,7 +232,7 @@ export async function POST(request: NextRequest) {
 
         successCount++;
       } catch (error) {
-        console.error(`Error pushing detection for asset ${assetId}:`, error instanceof Error ? error.message : 'Unknown');
+        console.error(`Error pushing detection for asset ${assetId}:`, error);
         errors.push({
           assetId,
           error: 'Failed to process this image',
@@ -249,7 +249,7 @@ export async function POST(request: NextRequest) {
       errors: errors.slice(0, 10),
     });
   } catch (error) {
-    console.error('Error pushing detections:', error instanceof Error ? error.message : 'Unknown error');
+    console.error('Error pushing detections:', error);
     return NextResponse.json(
       { error: 'Failed to upload detections for training. Please try again.' },
       { status: 500 }

@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
       errors: result.errors,
     });
   } catch (error) {
-    console.error("Training batch upload error:", error instanceof Error ? error.message : "Unknown error");
+    console.error("Training batch upload error:", error);
     return NextResponse.json(
       {
         success: false,

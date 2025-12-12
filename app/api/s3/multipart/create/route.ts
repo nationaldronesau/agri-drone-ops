@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
       partSize: multipart.partSize,
     });
   } catch (error) {
-    console.error("Failed to initiate multipart upload:", error instanceof Error ? error.message : "Unknown error");
+    console.error("Failed to initiate multipart upload:", error);
     return NextResponse.json(
       { error: "Failed to initiate file upload. Please try again." },
       { status: 500 },

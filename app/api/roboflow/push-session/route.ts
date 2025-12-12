@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
       errors: result.errors,
     });
   } catch (error) {
-    console.error('Error pushing to training service:', error instanceof Error ? error.message : 'Unknown error');
+    console.error('Error pushing to training service:', error);
     return NextResponse.json(
       { error: 'Failed to upload for training. Please try again.' },
       { status: 500 }

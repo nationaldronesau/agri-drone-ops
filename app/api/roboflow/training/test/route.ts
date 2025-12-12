@@ -6,7 +6,7 @@ export async function GET(_request: NextRequest) {
     const result = await roboflowTrainingService.testConnection();
     return NextResponse.json({ success: true, ...result });
   } catch (error) {
-    console.error("Training service test failed:", error instanceof Error ? error.message : "Unknown error");
+    console.error("Training service test failed:", error);
     return NextResponse.json(
       {
         success: false,

@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
       roboflowId: result.id,
     });
   } catch (error) {
-    console.error("Training upload error:", error instanceof Error ? error.message : "Unknown error");
+    console.error("Training upload error:", error);
     return NextResponse.json(
       {
         success: false,

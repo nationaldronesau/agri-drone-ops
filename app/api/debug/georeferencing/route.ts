@@ -139,7 +139,7 @@ export async function GET(request: NextRequest) {
     });
     
   } catch (error) {
-    console.error('Debug georeferencing error:', error instanceof Error ? error.message : 'Unknown error');
+    console.error('Debug georeferencing error:', error);
     return NextResponse.json(
       { error: 'Failed to debug georeferencing. Please try again.' },
       { status: 500 }

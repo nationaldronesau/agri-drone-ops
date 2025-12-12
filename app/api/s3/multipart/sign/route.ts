@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
       expiresIn: presign.expiresIn,
     });
   } catch (error) {
-    console.error("Failed to sign multipart upload part:", error instanceof Error ? error.message : "Unknown error");
+    console.error("Failed to sign multipart upload part:", error);
     return NextResponse.json(
       { error: "Failed to sign upload part. Please try again." },
       { status: 500 },
