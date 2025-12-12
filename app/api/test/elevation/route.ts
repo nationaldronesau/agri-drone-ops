@@ -128,12 +128,9 @@ export async function GET(request: NextRequest) {
     });
     
   } catch (error) {
-    console.error('Elevation test failed:', error);
+    console.error('Elevation test failed:', error instanceof Error ? error.message : 'Unknown error');
     return NextResponse.json(
-      { 
-        error: 'Elevation test failed', 
-        details: error instanceof Error ? error.message : 'Unknown error' 
-      },
+      { error: 'Elevation test failed. Please try again.' },
       { status: 500 }
     );
   }

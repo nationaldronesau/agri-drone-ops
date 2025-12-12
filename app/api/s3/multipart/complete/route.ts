@@ -50,12 +50,9 @@ export async function POST(request: NextRequest) {
       url: S3Service.buildPublicUrl(completed.key, completed.bucket),
     });
   } catch (error) {
-    console.error("Failed to complete multipart upload:", error);
+    console.error("Failed to complete multipart upload:", error instanceof Error ? error.message : "Unknown error");
     return NextResponse.json(
-      {
-        error: "Failed to complete multipart upload",
-        details: error instanceof Error ? error.message : "Unknown error",
-      },
+      { error: "Failed to complete file upload. Please try again." },
       { status: 500 },
     );
   }

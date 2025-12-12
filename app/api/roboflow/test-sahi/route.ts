@@ -30,11 +30,9 @@ export async function POST(request: NextRequest) {
     });
     
   } catch (error) {
-    console.error('SAHI test failed:', error);
+    console.error('SAHI test failed:', error instanceof Error ? error.message : 'Unknown error');
     return NextResponse.json({
-      error: 'SAHI test failed',
-      message: error.message,
-      details: error.toString()
+      error: 'SAHI detection test failed. Please check your configuration.'
     }, { status: 500 });
   }
 }

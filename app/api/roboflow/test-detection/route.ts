@@ -64,10 +64,9 @@ export async function POST(request: NextRequest) {
     });
     
   } catch (error) {
-    console.error('Detection test failed:', error);
+    console.error('Detection test failed:', error instanceof Error ? error.message : 'Unknown error');
     return NextResponse.json({
-      error: 'Detection test failed',
-      message: error.message
+      error: 'Detection test failed. Please check your configuration.'
     }, { status: 500 });
   }
 }

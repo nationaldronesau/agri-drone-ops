@@ -127,9 +127,9 @@ export async function POST(request: NextRequest) {
       errors: errors.slice(0, 10), // Limit error details
     });
   } catch (error) {
-    console.error('Error pushing annotations:', error);
+    console.error('Error pushing annotations:', error instanceof Error ? error.message : 'Unknown error');
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to push annotations' },
+      { error: 'Failed to upload annotations for training. Please try again.' },
       { status: 500 }
     );
   }

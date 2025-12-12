@@ -98,9 +98,9 @@ export async function POST(request: NextRequest) {
       errors: result.errors,
     });
   } catch (error) {
-    console.error('Error pushing to Roboflow:', error);
+    console.error('Error pushing to training service:', error instanceof Error ? error.message : 'Unknown error');
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to push to Roboflow' },
+      { error: 'Failed to upload for training. Please try again.' },
       { status: 500 }
     );
   }

@@ -511,12 +511,9 @@ export async function POST(request: NextRequest) {
       files: uploadResults,
     });
   } catch (error) {
-    console.error("Upload error:", error);
+    console.error("Upload error:", error instanceof Error ? error.message : "Unknown error");
     return NextResponse.json(
-      {
-        error: "Failed to process uploads",
-        details: error instanceof Error ? error.message : "Unknown error",
-      },
+      { error: "Failed to process uploads. Please try again." },
       { status: 500 },
     );
   }

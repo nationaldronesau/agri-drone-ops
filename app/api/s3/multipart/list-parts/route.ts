@@ -50,12 +50,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ parts: [] });
     }
 
-    console.error("Failed to list multipart upload parts:", error);
+    console.error("Failed to list multipart upload parts:", error instanceof Error ? error.message : "Unknown error");
     return NextResponse.json(
-      {
-        error: "Failed to list multipart upload parts",
-        details: error instanceof Error ? error.message : "Unknown error",
-      },
+      { error: "Failed to list upload parts. Please try again." },
       { status: 500 },
     );
   }

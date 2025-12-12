@@ -129,9 +129,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(project, { status: 201 });
   } catch (error) {
-    console.error('Error creating Roboflow project:', error);
+    console.error('Error creating training project:', error instanceof Error ? error.message : 'Unknown error');
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to create project' },
+      { error: 'Failed to create training project. Please try again.' },
       { status: 500 }
     );
   }
