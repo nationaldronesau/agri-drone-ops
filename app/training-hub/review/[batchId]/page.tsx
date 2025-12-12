@@ -355,13 +355,13 @@ export default function BatchReviewPage() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to push to Roboflow');
+        throw new Error(data.error || 'Failed to upload for training');
       }
 
-      alert(`Successfully pushed ${data.pushed} annotations to Roboflow!`);
+      alert(`Successfully uploaded ${data.pushed} annotations for training!`);
       router.push('/training-hub');
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to push to Roboflow');
+      alert(err instanceof Error ? err.message : 'Failed to upload for training');
     } finally {
       setPushing(false);
     }
@@ -430,7 +430,7 @@ export default function BatchReviewPage() {
                   ) : (
                     <Upload className="w-4 h-4 mr-2" />
                   )}
-                  Push {summary.accepted} to Roboflow
+                  Upload {summary.accepted} for Training
                 </Button>
               )}
             </div>

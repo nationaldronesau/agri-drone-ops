@@ -646,15 +646,15 @@ export default function AnnotatePage() {
         ));
         setSam3Error(null);
         // Show success message briefly
-        setSam3Error(`Successfully pushed ${result.pushed || 0} annotations to Roboflow!`);
+        setSam3Error(`Successfully uploaded ${result.pushed || 0} annotations for training!`);
         setTimeout(() => setSam3Error(null), 3000);
       } else {
         const error = await response.json();
-        setSam3Error(error.error || 'Failed to push to Roboflow');
+        setSam3Error(error.error || 'Failed to upload for training');
       }
     } catch (err) {
-      console.error('Failed to push to Roboflow:', err);
-      setSam3Error('Failed to push to Roboflow');
+      console.error('Failed to upload for training:', err);
+      setSam3Error('Failed to upload for training');
     } finally {
       setIsPushing(false);
     }

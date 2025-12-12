@@ -277,20 +277,20 @@ export default function ImproveWorkflowPage() {
             </CardContent>
           </Card>
 
-          {/* Target Roboflow Project Card */}
+          {/* Target Training Project Card */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Target className="w-5 h-5" />
-                Target Roboflow Project
+                Target Training Project
               </CardTitle>
               <CardDescription>
-                Select the Roboflow project to push verified/corrected annotations to.
+                Select the training project to upload verified/corrected annotations to.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label>Roboflow Project</Label>
+                <Label>Training Project</Label>
                 <RoboflowProjectSelector
                   value={selectedRoboflowProjectId}
                   onChange={handleRoboflowProjectChange}

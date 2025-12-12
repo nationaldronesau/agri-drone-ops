@@ -333,12 +333,12 @@ export default function TrainingHubPage() {
           </div>
         )}
 
-        {/* Roboflow Projects Section */}
+        {/* Training Projects Section */}
         <div className="mb-6">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Database className="w-5 h-5 text-gray-600" />
-              <h2 className="text-lg font-semibold text-gray-900">Your Roboflow Projects</h2>
+              <h2 className="text-lg font-semibold text-gray-900">Your Training Projects</h2>
             </div>
             <Button
               variant="outline"
@@ -392,7 +392,7 @@ export default function TrainingHubPage() {
                 <Database className="w-12 h-12 text-gray-300 mx-auto mb-4" />
                 <h3 className="text-lg font-medium text-gray-900 mb-2">No projects yet</h3>
                 <p className="text-gray-500 mb-4">
-                  Create a new Roboflow project or sync existing ones from your workspace.
+                  Create a new training project or sync existing ones from your workspace.
                 </p>
                 <div className="flex items-center justify-center gap-3">
                   <Button
@@ -401,7 +401,7 @@ export default function TrainingHubPage() {
                     disabled={syncing}
                   >
                     <RefreshCw className={`w-4 h-4 mr-2 ${syncing ? 'animate-spin' : ''}`} />
-                    Sync from Roboflow
+                    Sync Training Data
                   </Button>
                   <Button onClick={() => setShowCreateDialog(true)}>
                     <Plus className="w-4 h-4 mr-2" />

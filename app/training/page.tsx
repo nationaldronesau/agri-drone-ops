@@ -129,7 +129,7 @@ export default function TrainingPage() {
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle>Sent to Roboflow</CardTitle>
+              <CardTitle>Uploaded for Training</CardTitle>
               <CardDescription>Already pushed</CardDescription>
             </CardHeader>
             <CardContent>
@@ -194,21 +194,21 @@ export default function TrainingPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Roboflow Dashboard</CardTitle>
+            <CardTitle>Training Dashboard</CardTitle>
             <CardDescription>
-              Jump to Roboflow to monitor uploads and training runs.
+              Monitor uploads and training runs.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex items-center justify-between">
             <p className="text-sm text-gray-600">
-              Ensure your Roboflow API key and training project are set in the environment.
+              Ensure your API key and training project are set in the environment.
             </p>
             <Link
               href="https://app.roboflow.com"
               target="_blank"
               rel="noreferrer"
             >
-              <Button variant="outline">Open Roboflow</Button>
+              <Button variant="outline">View Training Status</Button>
             </Link>
           </CardContent>
         </Card>

@@ -167,7 +167,7 @@ export default function Home() {
                   </div>
                   <CardTitle className="text-white text-lg">AI Detection</CardTitle>
                   <CardDescription className="text-slate-400">
-                    Roboflow-powered models for wattle, lantana, and more
+                    AI-powered models for wattle, lantana, and more
                   </CardDescription>
                 </CardHeader>
                 <CardContent>

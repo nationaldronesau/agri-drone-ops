@@ -97,7 +97,7 @@ export function ModelSelector({
       <div className="border rounded-lg p-4 bg-gray-50">
         <div className="flex items-center gap-2 text-gray-500">
           <RefreshCw className="w-4 h-4 animate-spin" />
-          <span>Loading models from Roboflow...</span>
+          <span>Loading detection models...</span>
         </div>
       </div>
     );
@@ -132,7 +132,7 @@ export function ModelSelector({
           <span className="font-medium">No deployed models found</span>
         </div>
         <p className="text-sm text-amber-600">
-          Train and deploy a model in Roboflow to use it for detection.
+          Train and deploy a model to use it for detection.
         </p>
       </div>
     );

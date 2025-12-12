@@ -227,7 +227,7 @@ export function ClassSelector({
           size="icon"
           onClick={() => fetchClasses(true)}
           disabled={syncing}
-          title="Sync classes from Roboflow"
+          title="Sync classes from training project"
         >
           <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
         </Button>
@@ -249,8 +249,8 @@ export function ClassSelector({
           <DialogHeader>
             <DialogTitle>Add New Class</DialogTitle>
             <DialogDescription>
-              Add a new class to this project. The class will be created locally and synced to
-              Roboflow when you push annotations.
+              Add a new class to this project. The class will be created locally and synced
+              when you upload annotations for training.
             </DialogDescription>
           </DialogHeader>
 

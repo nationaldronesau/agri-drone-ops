@@ -248,16 +248,16 @@ export default function NewSpeciesWorkflowPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Sparkles className="w-5 h-5" />
-                Target Roboflow Project
+                Target Training Project
               </CardTitle>
               <CardDescription>
-                Select or create a Roboflow project where your annotations will be pushed. This
+                Select or create a training project where your annotations will be uploaded. This
                 project will be used to train the detection model.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label>Roboflow Project</Label>
+                <Label>Training Project</Label>
                 <RoboflowProjectSelector
                   value={selectedRoboflowProjectId}
                   onChange={handleRoboflowProjectChange}
