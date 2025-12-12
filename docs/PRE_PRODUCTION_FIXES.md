@@ -1,7 +1,7 @@
 # Pre-Production Fixes Tracking
 
 **Created**: 2024-12-12
-**Status**: IN PROGRESS
+**Status**: IN PROGRESS (Critical + Branding complete, Security fixes pending)
 
 ## Critical Blockers (Week 1) - COMPLETED
 
@@ -49,37 +49,39 @@
 
 ---
 
-## High Priority - Roboflow Branding (Week 2)
+## High Priority - Roboflow Branding (Week 2) - COMPLETED
 
-### 8. [ ] Remove Roboflow References from Annotation Page
+### 8. [x] Remove Roboflow References from Annotation Page
 - **File**: `app/annotate/[assetId]/page.tsx`
 - **Lines**: 649, 653, 657
-- **Status**: PENDING
+- **Status**: ✅ COMPLETED (2024-12-12)
 
-### 9. [ ] Remove Roboflow References from AnnotationList
+### 9. [x] Remove Roboflow References from AnnotationList
 - **File**: `components/annotation/AnnotationList.tsx`
 - **Lines**: 233, 244
-- **Status**: PENDING
+- **Status**: ✅ COMPLETED (2024-12-12)
 
-### 10. [ ] Remove Roboflow References from Training Pages
+### 10. [x] Remove Roboflow References from Training Pages
 - **Files**:
   - `app/training/page.tsx` (lines 132, 197-211)
   - `app/training-hub/new-species/page.tsx` (lines 251-293)
-  - `app/training-hub/new-species/push/page.tsx` (lines 159-367)
+  - `app/training-hub/improve/push/page.tsx` (lines 159-367)
   - `app/training-hub/improve/page.tsx` (lines 285-312)
-- **Status**: PENDING
+  - `app/training-hub/page.tsx`
+  - `app/training-hub/review/[batchId]/page.tsx`
+- **Status**: ✅ COMPLETED (2024-12-12)
 
-### 11. [ ] Remove Roboflow References from Components
+### 11. [x] Remove Roboflow References from Components
 - **Files**:
   - `components/training/RoboflowProjectSelector.tsx`
   - `components/training/CreateProjectDialog.tsx`
   - `components/training/ClassSelector.tsx`
   - `components/detection/ModelSelector.tsx`
-- **Status**: PENDING
+- **Status**: ✅ COMPLETED (2024-12-12)
 
-### 12. [ ] Remove Roboflow Reference from Landing Page
+### 12. [x] Remove Roboflow Reference from Landing Page
 - **File**: `app/page.tsx:170`
-- **Status**: PENDING
+- **Status**: ✅ COMPLETED (2024-12-12)
 
 ---
 
@@ -126,10 +128,11 @@
 | 2024-12-12 | Export security | DONE | CSV/KML escaping + coordinate validation |
 | 2024-12-12 | GPS validation | DONE | Safety-critical coordinate validation |
 | 2024-12-12 | Build verified | DONE | All fixes compile successfully |
+| 2024-12-12 | Roboflow branding removed | DONE | 13 files updated, all user-visible strings changed |
 
 ---
 
-## Terminology Replacements (for Roboflow removal)
+## Terminology Replacements (for Roboflow removal) - APPLIED
 
 | Current | Replace With |
 |---------|--------------|
