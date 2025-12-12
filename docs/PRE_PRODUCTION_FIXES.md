@@ -1,7 +1,7 @@
 # Pre-Production Fixes Tracking
 
 **Created**: 2024-12-12
-**Status**: IN PROGRESS (Critical + Branding complete, Security fixes pending)
+**Status**: IN PROGRESS (Critical + Branding + API Error Sanitization complete)
 
 ## Critical Blockers (Week 1) - COMPLETED
 
@@ -87,9 +87,15 @@
 
 ## Security Fixes (Week 2)
 
-### 13. [ ] Sanitize API Error Messages
-- **Files**: 27+ API routes expose internal error details
-- **Status**: PENDING
+### 13. [x] Sanitize API Error Messages
+- **Files**: 21 API routes updated to remove internal error details
+- **PR**: #58 (merged)
+- **Changes**:
+  - Created `lib/api-utils.ts` with reusable safe error utilities
+  - Removed `error.message` exposure from all catch blocks
+  - Fixed `configError` exposure in `roboflow/projects/route.ts`
+  - Improved logging consistency to preserve full stack traces server-side
+- **Status**: ✅ COMPLETED (2024-12-12)
 
 ### 14. [ ] Add Project Ownership Verification
 - **File**: `app/api/upload/route.ts:90`
@@ -129,6 +135,7 @@
 | 2024-12-12 | GPS validation | DONE | Safety-critical coordinate validation |
 | 2024-12-12 | Build verified | DONE | All fixes compile successfully |
 | 2024-12-12 | Roboflow branding removed | DONE | 13 files updated, all user-visible strings changed |
+| 2024-12-12 | API error sanitization | DONE | PR #58 merged - 21 routes secured |
 
 ---
 
