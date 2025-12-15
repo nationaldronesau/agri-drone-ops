@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
     // Get user's teams to filter accessible orthomosaics
     const userTeams = await getUserTeamIds();
     if (userTeams.teamIds.length === 0) {
-      return NextResponse.json([]);
+      return NextResponse.json({ orthomosaics: [] });
     }
 
     const orthomosaics = await prisma.orthomosaic.findMany({
@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
       }
     });
 
-    return NextResponse.json(orthomosaics);
+    return NextResponse.json({ orthomosaics });
   } catch (error) {
     console.error('Error fetching orthomosaics:', error);
     return NextResponse.json(

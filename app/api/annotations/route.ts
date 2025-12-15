@@ -17,7 +17,7 @@ export async function GET(request: NextRequest) {
     // Get user's teams to filter accessible annotations
     const userTeams = await getUserTeamIds();
     if (userTeams.teamIds.length === 0) {
-      return NextResponse.json([]);
+      return NextResponse.json({ annotations: [] });
     }
 
     const searchParams = request.nextUrl.searchParams;
@@ -84,7 +84,7 @@ export async function GET(request: NextRequest) {
       }
     });
 
-    return NextResponse.json(annotations);
+    return NextResponse.json({ annotations });
   } catch (error) {
     console.error('Error fetching manual annotations:', error);
     return NextResponse.json(
@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
   try {
     // Authenticate user
     const auth = await getAuthenticatedUser();
-    if (!auth.authenticated) {
+    if (!auth.authenticated || !auth.userId) {
       return NextResponse.json(
         { error: auth.error || 'Unauthorized' },
         { status: 401 }
@@ -160,6 +160,14 @@ export async function POST(request: NextRequest) {
     if (!session) {
       return NextResponse.json(
         { error: 'Annotation session not found' },
+        { status: 404 }
+      );
+    }
+
+    // Verify session has valid project and team structure
+    if (!session.asset?.project?.team?.members) {
+      return NextResponse.json(
+        { error: 'Session has no associated project or team' },
         { status: 404 }
       );
     }

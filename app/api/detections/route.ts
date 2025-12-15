@@ -36,6 +36,30 @@ export async function GET(request: NextRequest) {
 
     // Get user's teams to filter accessible detections
     const userTeams = await getUserTeamIds();
+
+    // If assetId specified, verify user has access to the asset's project
+    if (assetId && userTeams.teamIds.length > 0) {
+      const asset = await prisma.asset.findUnique({
+        where: { id: assetId },
+        select: {
+          project: {
+            select: { teamId: true }
+          }
+        }
+      });
+      if (!asset) {
+        return NextResponse.json(
+          { error: 'Asset not found' },
+          { status: 404 }
+        );
+      }
+      if (!userTeams.teamIds.includes(asset.project.teamId)) {
+        return NextResponse.json(
+          { error: 'Access denied to this asset' },
+          { status: 403 }
+        );
+      }
+    }
     if (userTeams.teamIds.length === 0) {
       return NextResponse.json(searchParams.get('all') === 'true' ? [] : { data: [], pagination: { page: 1, limit: DEFAULT_PAGE_SIZE, totalCount: 0, totalPages: 0, hasMore: false } });
     }

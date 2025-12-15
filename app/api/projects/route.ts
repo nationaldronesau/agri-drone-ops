@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
+import { getAuthenticatedUser, getUserTeamIds, getUserTeamMemberships, canManageTeam } from '@/lib/auth/api-auth';
 
 export async function GET(request: NextRequest) {
   try {
@@ -65,27 +65,30 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get user's teams
-    const userTeams = await getUserTeamIds();
+    // Get user's teams with roles
+    const userMemberships = await getUserTeamMemberships();
 
-    // If teamId is specified, verify user is a member
+    // If teamId is specified, verify user is OWNER or ADMIN
     let targetTeamId = teamId;
     if (targetTeamId) {
-      if (!userTeams.teamIds.includes(targetTeamId)) {
+      if (!canManageTeam(userMemberships.memberships, targetTeamId)) {
         return NextResponse.json(
-          { error: 'Access denied - not a member of specified team' },
+          { error: 'Access denied - requires OWNER or ADMIN role to create projects' },
           { status: 403 }
         );
       }
     } else {
-      // Use user's first team or create a personal team
-      if (userTeams.teamIds.length > 0) {
-        targetTeamId = userTeams.teamIds[0];
+      // Use user's first team where they are OWNER/ADMIN, or create a personal team
+      const managedTeam = userMemberships.memberships.find(
+        m => m.role === 'OWNER' || m.role === 'ADMIN'
+      );
+      if (managedTeam) {
+        targetTeamId = managedTeam.teamId;
       } else {
-        // Create a personal team for the user
+        // Create a personal team for the user with unique name
         const personalTeam = await prisma.team.create({
           data: {
-            name: `Personal Team`,
+            name: `Personal Team - ${auth.userId.slice(-8)}`,
             description: 'Auto-created personal team',
             members: {
               create: {
