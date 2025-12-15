@@ -108,6 +108,39 @@ export async function checkProjectAccess(projectId: string): Promise<ProjectAuth
 }
 
 /**
+ * Get all team IDs that the authenticated user is a member of.
+ * Returns empty array if not authenticated.
+ */
+export async function getUserTeamIds(): Promise<{ authenticated: boolean; userId?: string; teamIds: string[]; error?: string }> {
+  const auth = await getAuthenticatedUser();
+
+  if (!auth.authenticated || !auth.userId) {
+    return { authenticated: false, teamIds: [], error: auth.error };
+  }
+
+  try {
+    const memberships = await prisma.teamMember.findMany({
+      where: { userId: auth.userId },
+      select: { teamId: true },
+    });
+
+    return {
+      authenticated: true,
+      userId: auth.userId,
+      teamIds: memberships.map((m) => m.teamId),
+    };
+  } catch (error) {
+    console.error('Get user teams error:', error);
+    return {
+      authenticated: true,
+      userId: auth.userId,
+      teamIds: [],
+      error: 'Failed to get user teams',
+    };
+  }
+}
+
+/**
  * Check if the authenticated user has access to an asset through its project.
  */
 export async function checkAssetAccess(assetId: string): Promise<ProjectAuthResult> {
