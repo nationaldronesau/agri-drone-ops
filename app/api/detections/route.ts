@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 
+// Pagination defaults
+const DEFAULT_PAGE_SIZE = 100;
+const MAX_PAGE_SIZE = 500;
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -8,7 +12,15 @@ export async function GET(request: NextRequest) {
     const assetId = searchParams.get('assetId');
     const needsReview = searchParams.get('needsReview');
     const maxConfidence = searchParams.get('maxConfidence');
-    
+
+    // Pagination parameters (set all=true to return all results without pagination)
+    const returnAll = searchParams.get('all') === 'true';
+    const pageParam = searchParams.get('page');
+    const limitParam = searchParams.get('limit');
+    const page = Math.max(1, parseInt(pageParam || '1', 10) || 1);
+    const limit = returnAll ? undefined : Math.min(MAX_PAGE_SIZE, Math.max(1, parseInt(limitParam || String(DEFAULT_PAGE_SIZE), 10) || DEFAULT_PAGE_SIZE));
+    const skip = returnAll ? undefined : (page - 1) * (limit || DEFAULT_PAGE_SIZE);
+
     const where: {
       job?: { projectId: string };
       assetId?: string;
@@ -31,7 +43,10 @@ export async function GET(request: NextRequest) {
         lt: maxConfidence ? parseFloat(maxConfidence) : 0.7
       };
     }
-    
+
+    // Get total count for pagination metadata
+    const totalCount = await prisma.detection.count({ where });
+
     const detections = await prisma.detection.findMany({
       where,
       include: {
@@ -61,10 +76,30 @@ export async function GET(request: NextRequest) {
         ...(needsReview === 'true'
           ? { confidence: 'asc' as const }
           : { createdAt: 'desc' as const })
-      }
+      },
+      skip,
+      take: limit,
     });
-    
-    return NextResponse.json(detections);
+
+    // Return all results without pagination wrapper if all=true
+    if (returnAll) {
+      return NextResponse.json(detections);
+    }
+
+    const effectiveLimit = limit || DEFAULT_PAGE_SIZE;
+    const totalPages = Math.ceil(totalCount / effectiveLimit);
+    const hasMore = page < totalPages;
+
+    return NextResponse.json({
+      data: detections,
+      pagination: {
+        page,
+        limit: effectiveLimit,
+        totalCount,
+        totalPages,
+        hasMore,
+      },
+    });
   } catch (error) {
     console.error('Error fetching detections:', error);
     return NextResponse.json(

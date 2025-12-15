@@ -100,10 +100,11 @@ export default function ImproveWorkflowPage() {
     const fetchStats = async () => {
       setLoadingStats(true);
       try {
-        const response = await fetch(`/api/detections?projectId=${selectedProjectId}`);
+        // Use all=true to get all detections for stats calculation
+        const response = await fetch(`/api/detections?projectId=${selectedProjectId}&all=true`);
         const data = await response.json();
 
-        // Calculate stats from detections - API returns array directly
+        // Calculate stats from detections - API returns array directly when all=true
         const detections = Array.isArray(data) ? data : [];
         const statsData: DetectionStats = {
           total: detections.length,
@@ -277,20 +278,20 @@ export default function ImproveWorkflowPage() {
             </CardContent>
           </Card>
 
-          {/* Target Roboflow Project Card */}
+          {/* Target Training Project Card */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Target className="w-5 h-5" />
-                Target Roboflow Project
+                Target Training Project
               </CardTitle>
               <CardDescription>
-                Select the Roboflow project to push verified/corrected annotations to.
+                Select the training project to upload verified/corrected annotations to.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label>Roboflow Project</Label>
+                <Label>Training Project</Label>
                 <RoboflowProjectSelector
                   value={selectedRoboflowProjectId}
                   onChange={handleRoboflowProjectChange}

@@ -65,10 +65,11 @@ export default function PushCorrectionsPage() {
 
   const fetchReviewSummary = async (projectId: string) => {
     try {
-      const response = await fetch(`/api/detections?projectId=${projectId}`);
+      // Use all=true to get all detections for summary calculation
+      const response = await fetch(`/api/detections?projectId=${projectId}&all=true`);
       const data = await response.json();
 
-      // API returns array directly
+      // API returns array directly when all=true
       const detections = Array.isArray(data) ? data : [];
       setSummary({
         verified: detections.filter(
@@ -207,9 +208,9 @@ export default function PushCorrectionsPage() {
         ) : pushComplete ? (
           <Card className="p-8 text-center">
             <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto mb-4" />
-            <h3 className="text-2xl font-bold text-gray-900 mb-2">Corrections Pushed!</h3>
+            <h3 className="text-2xl font-bold text-gray-900 mb-2">Corrections Uploaded!</h3>
             <p className="text-gray-500 mb-6">
-              Your reviewed detections have been uploaded to Roboflow. The model can now be
+              Your reviewed detections have been uploaded for training. The model can now be
               retrained with the corrections.
             </p>
 
@@ -220,7 +221,7 @@ export default function PushCorrectionsPage() {
                 rel="noopener noreferrer"
               >
                 <Button variant="outline">
-                  Open in Roboflow
+                  View Training Status
                   <ExternalLink className="w-4 h-4 ml-2" />
                 </Button>
               </a>
@@ -241,7 +242,7 @@ export default function PushCorrectionsPage() {
                   Review Summary
                 </CardTitle>
                 <CardDescription>
-                  Summary of reviewed detections ready to push to Roboflow.
+                  Summary of reviewed detections ready to upload for training.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -354,7 +355,7 @@ export default function PushCorrectionsPage() {
                 ) : (
                   <>
                     <Upload className="w-4 h-4 mr-2" />
-                    Push to Roboflow
+                    Upload for Training
                   </>
                 )}
               </Button>

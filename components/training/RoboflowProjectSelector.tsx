@@ -152,7 +152,7 @@ export function RoboflowProjectSelector({
           size="icon"
           onClick={() => fetchProjects(true)}
           disabled={syncing}
-          title="Sync projects from Roboflow"
+          title="Sync training projects"
         >
           <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
         </Button>

@@ -24,10 +24,9 @@ export async function GET(request: NextRequest) {
 
     // Check if service is configured
     if (!roboflowProjectsService.isConfigured()) {
-      const configError = roboflowProjectsService.getConfigError();
-      console.error('[API /roboflow/projects] Service not configured:', configError);
+      console.error('[API /roboflow/projects] Service not configured:', roboflowProjectsService.getConfigError());
       return NextResponse.json(
-        { error: configError, projects: [] },
+        { error: 'Training service is not configured. Please contact support.', projects: [] },
         { status: 503 }
       );
     }
@@ -66,7 +65,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('[API /roboflow/projects] Error:', error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to list projects', projects: [] },
+      { error: 'Failed to load training projects. Please try again.', projects: [] },
       { status: 500 }
     );
   }
@@ -98,8 +97,9 @@ export async function POST(request: NextRequest) {
 
     // Check if service is configured
     if (!roboflowProjectsService.isConfigured()) {
+      console.error('[API /roboflow/projects POST] Service not configured:', roboflowProjectsService.getConfigError());
       return NextResponse.json(
-        { error: roboflowProjectsService.getConfigError() },
+        { error: 'Training service is not configured. Please contact support.' },
         { status: 503 }
       );
     }
@@ -129,9 +129,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(project, { status: 201 });
   } catch (error) {
-    console.error('Error creating Roboflow project:', error);
+    console.error('Error creating training project:', error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to create project' },
+      { error: 'Failed to create training project. Please try again.' },
       { status: 500 }
     );
   }

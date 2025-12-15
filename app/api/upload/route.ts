@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth/config";
+import { checkProjectAccess } from "@/lib/auth/api-auth";
+import { normalizeDetectionType } from "@/lib/utils/detection-types";
 import exifr from "exifr";
 import { z } from "zod";
 import prisma from "@/lib/db";
@@ -53,6 +53,29 @@ interface ExtractedMetadata {
   imageHeight: number | null;
 }
 
+/**
+ * SAFETY CRITICAL: Validates GPS coordinates for spray drone operations
+ * Invalid coordinates could send drones to wrong locations
+ */
+function isValidGPSCoordinate(lat: number | null, lon: number | null): boolean {
+  if (lat === null || lon === null) return false;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+  if (lat < -90 || lat > 90) return false;
+  if (lon < -180 || lon > 180) return false;
+  return true;
+}
+
+/**
+ * SAFETY CRITICAL: Validates altitude values
+ * Ensures altitude is within reasonable range for drone operations
+ */
+function isValidAltitude(alt: number | null): boolean {
+  if (alt === null) return true; // altitude is optional
+  if (!Number.isFinite(alt)) return false;
+  if (alt < -500 || alt > 50000) return false; // reasonable range for drones in meters
+  return true;
+}
+
 const defaultExtractedMetadata = (): ExtractedMetadata => ({
   gpsLatitude: null,
   gpsLongitude: null,
@@ -69,11 +92,6 @@ const defaultExtractedMetadata = (): ExtractedMetadata => ({
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
     const body = await request.json();
     const parsed = requestSchema.safeParse(body);
 
@@ -92,6 +110,20 @@ export async function POST(request: NextRequest) {
       dynamicModels,
       flightSession,
     } = parsed.data;
+
+    // Verify user is authenticated AND has access to the project
+    const projectAuth = await checkProjectAccess(projectId);
+    if (!projectAuth.authenticated) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!projectAuth.hasAccess) {
+      return NextResponse.json(
+        { error: projectAuth.error || "Access denied to this project" },
+        { status: 403 }
+      );
+    }
+
+    const userId = projectAuth.userId!;
 
     // Check if we're using dynamic models (new) or legacy hardcoded models
     const useDynamicModels = dynamicModels && dynamicModels.length > 0;
@@ -171,6 +203,18 @@ export async function POST(request: NextRequest) {
             extractedData.gpsLatitude = gpsData.latitude ?? null;
             extractedData.gpsLongitude = gpsData.longitude ?? null;
             extractedData.altitude = gpsData.altitude ?? null;
+          }
+
+          // SAFETY CRITICAL: Validate GPS coordinates immediately after extraction
+          if (!isValidGPSCoordinate(extractedData.gpsLatitude, extractedData.gpsLongitude)) {
+            console.warn(`[SAFETY] Invalid GPS coordinates for ${file.name}: lat=${extractedData.gpsLatitude}, lon=${extractedData.gpsLongitude}`);
+            extractedData.gpsLatitude = null;
+            extractedData.gpsLongitude = null;
+          }
+
+          if (!isValidAltitude(extractedData.altitude)) {
+            console.warn(`[SAFETY] Invalid altitude for ${file.name}: ${extractedData.altitude}`);
+            extractedData.altitude = null;
           }
 
           const exifData = await exifr.parse(buffer, {
@@ -293,6 +337,28 @@ export async function POST(request: NextRequest) {
               (fullMetadata["drone-dji:LRFTargetLon"] as number | undefined) ??
               extractedData.lrfTargetLon;
           }
+
+          // SAFETY CRITICAL: Re-validate GPS coordinates after XMP extraction
+          // XMP data might override initial GPS values
+          if (!isValidGPSCoordinate(extractedData.gpsLatitude, extractedData.gpsLongitude)) {
+            console.warn(`[SAFETY] Invalid GPS coordinates after XMP parsing for ${file.name}: lat=${extractedData.gpsLatitude}, lon=${extractedData.gpsLongitude}`);
+            extractedData.gpsLatitude = null;
+            extractedData.gpsLongitude = null;
+          }
+
+          if (!isValidAltitude(extractedData.altitude)) {
+            console.warn(`[SAFETY] Invalid altitude after XMP parsing for ${file.name}: ${extractedData.altitude}`);
+            extractedData.altitude = null;
+          }
+
+          // SAFETY CRITICAL: Validate LRF target coordinates if present
+          if (extractedData.lrfTargetLat !== null && extractedData.lrfTargetLon !== null) {
+            if (!isValidGPSCoordinate(extractedData.lrfTargetLat, extractedData.lrfTargetLon)) {
+              console.warn(`[SAFETY] Invalid LRF target coordinates for ${file.name}: lat=${extractedData.lrfTargetLat}, lon=${extractedData.lrfTargetLon}`);
+              extractedData.lrfTargetLat = null;
+              extractedData.lrfTargetLon = null;
+            }
+          }
         } catch (metadataError) {
           console.error("Error parsing EXIF/XMP:", metadataError);
         }
@@ -324,7 +390,7 @@ export async function POST(request: NextRequest) {
             imageHeight: extractedData.imageHeight,
             metadata: fullMetadata,
             projectId,
-            createdById: session.user.id,
+            createdById: userId,
             flightSession: flightSession || null,
           },
         });
@@ -371,12 +437,19 @@ export async function POST(request: NextRequest) {
                   extractedData.gimbalYaw || 0,
                 );
 
+                // SAFETY CRITICAL: Validate detection coordinates before saving
+                // Skip detections with invalid geographic coordinates
+                if (!isValidGPSCoordinate(geoCoords.latitude, geoCoords.longitude)) {
+                  console.warn(`[SAFETY] Skipping detection with invalid coordinates for ${file.name}: lat=${geoCoords.latitude}, lon=${geoCoords.longitude}, class=${detection.class}`);
+                  continue;
+                }
+
                 const savedDetection = await prisma.detection.create({
                   data: {
                     jobId: job.id,
                     assetId: asset.id,
                     type: "AI",
-                    className: detection.class,
+                    className: normalizeDetectionType(detection.class),
                     confidence: detection.confidence,
                     boundingBox: {
                       x: detection.x,
@@ -449,10 +522,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("Upload error:", error);
     return NextResponse.json(
-      {
-        error: "Failed to process uploads",
-        details: error instanceof Error ? error.message : "Unknown error",
-      },
+      { error: "Failed to process uploads. Please try again." },
       { status: 500 },
     );
   }

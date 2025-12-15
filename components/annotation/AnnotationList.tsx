@@ -230,7 +230,7 @@ export function AnnotationList({
             ) : (
               <>
                 <Upload className="h-3 w-3 mr-1" />
-                Push {verifiedCount} to Roboflow
+                Upload {verifiedCount} for Training
                 <ArrowRight className="h-3 w-3 ml-1" />
               </>
             )}
@@ -241,7 +241,7 @@ export function AnnotationList({
         {pushedCount > 0 && unverifiedCount === 0 && verifiedCount === 0 && (
           <div className="bg-purple-50 border border-purple-200 rounded-md p-2">
             <p className="text-[10px] text-purple-700 leading-relaxed">
-              <strong>Done!</strong> All annotations pushed to Roboflow for model training.
+              <strong>Done!</strong> All annotations uploaded for model training.
             </p>
           </div>
         )}

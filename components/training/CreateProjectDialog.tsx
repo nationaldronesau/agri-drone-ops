@@ -87,9 +87,9 @@ export function CreateProjectDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Create New Roboflow Project</DialogTitle>
+          <DialogTitle>Create New Training Project</DialogTitle>
           <DialogDescription>
-            This will create a new project in your Roboflow workspace for training a detection model.
+            This will create a new project for training a detection model.
           </DialogDescription>
         </DialogHeader>
 

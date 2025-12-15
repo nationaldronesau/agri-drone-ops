@@ -52,12 +52,12 @@ export async function GET(request: NextRequest) {
           projectDetails.push({
             id: project.id,
             name: project.name,
-            error: error.message
+            error: 'Failed to fetch project details'
           });
         }
       }
     }
-    
+
     return NextResponse.json({
       success: true,
       workspace: workspace,
@@ -65,12 +65,11 @@ export async function GET(request: NextRequest) {
       projectDetails: projectDetails,
       apiKeyStatus: 'Connected successfully'
     });
-    
+
   } catch (error) {
-    console.error('Roboflow API test failed:', error);
+    console.error('Training API test failed:', error);
     return NextResponse.json({
-      error: 'API test failed',
-      message: error.message
+      error: 'API test failed. Please check your configuration.'
     }, { status: 500 });
   }
 }

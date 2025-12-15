@@ -48,10 +48,7 @@ export async function POST(request: NextRequest) {
 
     console.error("Failed to abort multipart upload:", error);
     return NextResponse.json(
-      {
-        error: "Failed to abort multipart upload",
-        details: error instanceof Error ? error.message : "Unknown error",
-      },
+      { error: "Failed to cancel upload. Please try again." },
       { status: 500 },
     );
   }

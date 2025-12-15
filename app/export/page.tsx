@@ -47,6 +47,63 @@ export default function ExportPage() {
   const [includeManual, setIncludeManual] = useState(true);
   const [loading, setLoading] = useState(false);
 
+  // Helper function to escape CSV fields (RFC 4180 compliant)
+  const escapeCSV = (field: any): string => {
+    const str = String(field ?? '');
+    if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+
+  // Helper function to escape XML special characters
+  const escapeXML = (str: any): string => {
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  };
+
+  // Helper function to validate coordinates
+  const isValidCoordinate = (lat: number | null | undefined, lon: number | null | undefined): boolean => {
+    if (lat == null || lon == null) return false;
+    return Number.isFinite(lat) && Number.isFinite(lon) &&
+           lat >= -90 && lat <= 90 &&
+           lon >= -180 && lon <= 180;
+  };
+
+  // Helper function to validate polygon coordinate arrays
+  // Returns true if all coordinates in the polygon are valid
+  const isValidPolygon = (coords: Array<[number, number]> | undefined): boolean => {
+    if (!coords || !Array.isArray(coords) || coords.length < 3) return false;
+    return coords.every(coord =>
+      Array.isArray(coord) &&
+      coord.length >= 2 &&
+      isValidCoordinate(coord[1], coord[0]) // coords are [lon, lat]
+    );
+  };
+
+  // Helper to filter only valid detections for export
+  const getValidDetectionsForExport = (detections: Detection[]): Detection[] => {
+    return detections.filter(d => {
+      // Must have valid center coordinates for points
+      if (!isValidCoordinate(d.centerLat, d.centerLon)) {
+        console.warn(`Skipping detection ${d.id} - invalid center coordinates`);
+        return false;
+      }
+      // If manual annotation with polygon, validate polygon too
+      if (d.type === 'manual' && d.metadata?.polygonCoordinates) {
+        if (!isValidPolygon(d.metadata.polygonCoordinates)) {
+          console.warn(`Skipping detection ${d.id} - invalid polygon coordinates`);
+          return false;
+        }
+      }
+      return true;
+    });
+  };
+
   useEffect(() => {
     fetchProjects();
     fetchAllDetections();
@@ -71,12 +128,12 @@ export default function ExportPage() {
   const fetchAllDetections = async () => {
     try {
       const allDetections: Detection[] = [];
-      
-      // Fetch AI detections if enabled
+
+      // Fetch AI detections if enabled (use all=true to bypass pagination for export)
       if (includeAI) {
-        const aiUrl = selectedProject !== "all" 
-          ? `/api/detections?projectId=${selectedProject}`
-          : '/api/detections';
+        const aiUrl = selectedProject !== "all"
+          ? `/api/detections?projectId=${selectedProject}&all=true`
+          : '/api/detections?all=true';
         const aiResponse = await fetch(aiUrl);
         if (aiResponse.ok) {
           const aiData = await aiResponse.json();
@@ -84,12 +141,12 @@ export default function ExportPage() {
           allDetections.push(...aiDetections);
         }
       }
-      
-      // Fetch manual annotations if enabled
+
+      // Fetch manual annotations if enabled (use all=true to bypass pagination for export)
       if (includeManual) {
-        const manualUrl = selectedProject !== "all" 
-          ? `/api/annotations/export?projectId=${selectedProject}`
-          : '/api/annotations/export';
+        const manualUrl = selectedProject !== "all"
+          ? `/api/annotations/export?projectId=${selectedProject}&all=true`
+          : '/api/annotations/export?all=true';
         const manualResponse = await fetch(manualUrl);
         if (manualResponse.ok) {
           const manualData = await manualResponse.json();
@@ -111,7 +168,7 @@ export default function ExportPage() {
     if (selectedClasses.length > 0 && !selectedClasses.includes(detection.className)) {
       return false;
     }
-    return detection.centerLat !== null && detection.centerLon !== null;
+    return isValidCoordinate(detection.centerLat, detection.centerLon);
   });
 
   const toggleClass = (className: string) => {
@@ -123,35 +180,38 @@ export default function ExportPage() {
   };
 
   const exportAsCSV = () => {
-    const headers = includeMetadata 
+    // Filter out detections with invalid coordinates
+    const validDetections = getValidDetectionsForExport(filteredDetections);
+
+    const headers = includeMetadata
       ? ['ID', 'Weed Type', 'Latitude', 'Longitude', 'Confidence', 'Type', 'Altitude (m)', 'Image File', 'Project', 'Location', 'Detection Date']
       : ['Weed Type', 'Latitude', 'Longitude'];
-    
-    const rows = filteredDetections.map(d => {
+
+    const rows = validDetections.map(d => {
       const baseData = [
-        d.className,
-        d.centerLat?.toFixed(8),
-        d.centerLon?.toFixed(8)
+        escapeCSV(d.className),
+        escapeCSV(d.centerLat?.toFixed(8)),
+        escapeCSV(d.centerLon?.toFixed(8))
       ];
-      
+
       if (includeMetadata) {
         return [
-          d.id,
+          escapeCSV(d.id),
           ...baseData,
-          (d.confidence * 100).toFixed(1) + '%',
-          d.type === 'manual' ? 'Manual' : 'AI',
-          d.asset.altitude?.toFixed(1) || 'N/A',
-          d.asset.fileName,
-          d.asset.project.name,
-          d.asset.project.location || 'N/A',
-          new Date(d.createdAt).toLocaleDateString()
+          escapeCSV((d.confidence * 100).toFixed(1) + '%'),
+          escapeCSV(d.type === 'manual' ? 'Manual' : 'AI'),
+          escapeCSV(d.asset.altitude?.toFixed(1) || 'N/A'),
+          escapeCSV(d.asset.fileName),
+          escapeCSV(d.asset.project.name),
+          escapeCSV(d.asset.project.location || 'N/A'),
+          escapeCSV(new Date(d.createdAt).toLocaleDateString())
         ];
       }
       return baseData;
     });
-    
-    const csv = [headers, ...rows].map(row => row.join(',')).join('\n');
-    
+
+    const csv = [headers.map(escapeCSV), ...rows].map(row => row.join(',')).join('\n');
+
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -162,15 +222,18 @@ export default function ExportPage() {
   };
 
   const exportAsKML = () => {
+    // Filter out detections with invalid coordinates
+    const validDetections = getValidDetectionsForExport(filteredDetections);
+
     const kml = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
-    <name>Weed Detections - ${new Date().toLocaleDateString()}</name>
-    <description>Exported from AgriDrone Ops</description>
-    ${[...new Set(filteredDetections.map(d => d.className))].map(className => {
-      const color = filteredDetections.find(d => d.className === className)?.metadata?.color || '#FF0000';
+    <name>${escapeXML('Weed Detections - ' + new Date().toLocaleDateString())}</name>
+    <description>${escapeXML('Exported from AgriDrone Ops')}</description>
+    ${[...new Set(validDetections.map(d => d.className))].map(className => {
+      const color = validDetections.find(d => d.className === className)?.metadata?.color || '#FF0000';
       return `
-    <Style id="${className}">
+    <Style id="${escapeXML(className)}">
       <IconStyle>
         <color>${kmlColor(color)}</color>
         <scale>1.0</scale>
@@ -189,18 +252,18 @@ export default function ExportPage() {
       </LineStyle>
     </Style>`;
     }).join('')}
-    ${filteredDetections.map(d => `
+    ${validDetections.map(d => `
     <Placemark>
-      <name>${d.className} (${d.type === 'manual' ? 'Manual' : 'AI'})</name>
+      <name>${escapeXML(d.className + ' (' + (d.type === 'manual' ? 'Manual' : 'AI') + ')')}</name>
       <description>
-        Type: ${d.type === 'manual' ? 'Manual Annotation' : 'AI Detection'}
-        Confidence: ${(d.confidence * 100).toFixed(1)}%
-        Image: ${d.asset.fileName}
-        Project: ${d.asset.project.name}
-        ${d.asset.altitude ? `Altitude: ${d.asset.altitude.toFixed(1)}m` : ''}
-        ${d.metadata?.notes ? `Notes: ${d.metadata.notes}` : ''}
+        ${escapeXML('Type: ' + (d.type === 'manual' ? 'Manual Annotation' : 'AI Detection'))}
+        ${escapeXML('Confidence: ' + (d.confidence * 100).toFixed(1) + '%')}
+        ${escapeXML('Image: ' + d.asset.fileName)}
+        ${escapeXML('Project: ' + d.asset.project.name)}
+        ${d.asset.altitude ? escapeXML('Altitude: ' + d.asset.altitude.toFixed(1) + 'm') : ''}
+        ${d.metadata?.notes ? escapeXML('Notes: ' + d.metadata.notes) : ''}
       </description>
-      <styleUrl>#${d.className}</styleUrl>
+      <styleUrl>#${escapeXML(d.className)}</styleUrl>
       ${d.type === 'manual' && d.metadata?.polygonCoordinates && d.metadata.polygonCoordinates.length > 0 ? `
       <Polygon>
         <outerBoundaryIs>
@@ -218,7 +281,7 @@ export default function ExportPage() {
     </Placemark>`).join('')}
   </Document>
 </kml>`;
-    
+
     const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

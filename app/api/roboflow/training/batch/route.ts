@@ -42,11 +42,11 @@ export async function POST(request: NextRequest) {
       errors: result.errors,
     });
   } catch (error) {
-    console.error("Roboflow batch upload error:", error);
+    console.error("Training batch upload error:", error);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: "Failed to upload batch training data. Please try again.",
       },
       { status: 500 },
     );

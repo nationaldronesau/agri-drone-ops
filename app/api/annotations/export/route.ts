@@ -2,12 +2,24 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { precisionPixelToGeo, extractPrecisionParams } from '@/lib/utils/precision-georeferencing';
 
+// Pagination defaults
+const DEFAULT_PAGE_SIZE = 100;
+const MAX_PAGE_SIZE = 500;
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const projectId = searchParams.get('projectId');
-    
-    const where: any = {};
+
+    // Pagination parameters (set all=true to return all results without pagination)
+    const returnAll = searchParams.get('all') === 'true';
+    const pageParam = searchParams.get('page');
+    const limitParam = searchParams.get('limit');
+    const page = Math.max(1, parseInt(pageParam || '1', 10) || 1);
+    const limit = returnAll ? undefined : Math.min(MAX_PAGE_SIZE, Math.max(1, parseInt(limitParam || String(DEFAULT_PAGE_SIZE), 10) || DEFAULT_PAGE_SIZE));
+    const skip = returnAll ? undefined : (page - 1) * (limit || DEFAULT_PAGE_SIZE);
+
+    const where: Record<string, unknown> = {};
     if (projectId && projectId !== 'all') {
       where.session = {
         asset: {
@@ -15,7 +27,10 @@ export async function GET(request: NextRequest) {
         }
       };
     }
-    
+
+    // Get total count for pagination metadata
+    const totalCount = await prisma.manualAnnotation.count({ where });
+
     const annotations = await prisma.manualAnnotation.findMany({
       where,
       include: {
@@ -48,7 +63,9 @@ export async function GET(request: NextRequest) {
       },
       orderBy: {
         createdAt: 'desc'
-      }
+      },
+      skip,
+      take: limit,
     });
     
     // Convert to format compatible with export page
@@ -147,7 +164,25 @@ export async function GET(request: NextRequest) {
       };
     }));
     
-    return NextResponse.json(exportAnnotations);
+    // Return all results without pagination wrapper if all=true
+    if (returnAll) {
+      return NextResponse.json(exportAnnotations);
+    }
+
+    const effectiveLimit = limit || DEFAULT_PAGE_SIZE;
+    const totalPages = Math.ceil(totalCount / effectiveLimit);
+    const hasMore = page < totalPages;
+
+    return NextResponse.json({
+      data: exportAnnotations,
+      pagination: {
+        page,
+        limit: effectiveLimit,
+        totalCount,
+        totalPages,
+        hasMore,
+      },
+    });
   } catch (error) {
     console.error('Error fetching manual annotations for export:', error);
     return NextResponse.json(

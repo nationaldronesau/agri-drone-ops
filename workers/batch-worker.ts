@@ -16,6 +16,7 @@ import { PrismaClient } from '@prisma/client';
 import { createRedisConnection } from '../lib/queue/redis';
 import { BATCH_QUEUE_NAME, BatchJobData, BatchJobResult } from '../lib/queue/batch-queue';
 import { sam3Orchestrator } from '../lib/services/sam3-orchestrator';
+import { normalizeDetectionType } from '../lib/utils/detection-types';
 import {
   startShutdownScheduler,
   stopShutdownScheduler,
@@ -195,7 +196,7 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
           data: {
             batchJobId,
             assetId: asset.id,
-            weedType,
+            weedType: normalizeDetectionType(weedType),
             confidence: detection.score,
             polygon: detection.polygon,
             bbox: detection.bbox,

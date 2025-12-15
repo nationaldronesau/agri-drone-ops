@@ -41,11 +41,11 @@ export async function POST(request: NextRequest) {
       roboflowId: result.id,
     });
   } catch (error) {
-    console.error("Roboflow upload error:", error);
+    console.error("Training upload error:", error);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: "Failed to upload training data. Please try again.",
       },
       { status: 500 },
     );

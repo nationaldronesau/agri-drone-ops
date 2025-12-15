@@ -98,7 +98,8 @@ export default function MapComponent() {
 
   const fetchDetections = async () => {
     try {
-      const res = await fetch("/api/detections");
+      // Use all=true to get all detections for map display
+      const res = await fetch("/api/detections?all=true");
       if (res.ok) {
         const data = await res.json();
         setDetections(data.filter((d: Detection) => d.centerLat && d.centerLon));
