@@ -65,9 +65,15 @@ export class RoboflowTrainingService {
   }
 
   private buildDatasetPath(projectId: string): string {
+    // Roboflow returns project IDs like "workspace/project-name"
+    // Strip the workspace prefix if present to avoid duplication
+    const projectSlug = projectId.includes('/')
+      ? projectId.split('/').slice(1).join('/')
+      : projectId;
+
     return this.workspace
-      ? `dataset/${this.workspace}/${projectId}`
-      : `dataset/${projectId}`;
+      ? `dataset/${this.workspace}/${projectSlug}`
+      : `dataset/${projectSlug}`;
   }
 
   private buildUploadUrl(split: Split, projectId: string): string {
