@@ -15,6 +15,12 @@ export async function GET(request: NextRequest) {
 
     // Get user's teams to filter accessible orthomosaics
     const userTeams = await getUserTeamIds();
+    if (userTeams.dbError) {
+      return NextResponse.json(
+        { error: 'Database error while fetching team access' },
+        { status: 500 }
+      );
+    }
     if (userTeams.teamIds.length === 0) {
       return NextResponse.json({ orthomosaics: [] });
     }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { precisionPixelToGeo, extractPrecisionParams } from '@/lib/utils/precision-georeferencing';
+import { getAuthenticatedUser, getUserTeamIds, checkProjectAccess } from '@/lib/auth/api-auth';
 
 // Pagination defaults
 const DEFAULT_PAGE_SIZE = 100;
@@ -8,8 +9,40 @@ const MAX_PAGE_SIZE = 500;
 
 export async function GET(request: NextRequest) {
   try {
+    // Authenticate user
+    const auth = await getAuthenticatedUser();
+    if (!auth.authenticated) {
+      return NextResponse.json(
+        { error: auth.error || 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
     const searchParams = request.nextUrl.searchParams;
     const projectId = searchParams.get('projectId');
+
+    // If specific project requested, verify access
+    if (projectId && projectId !== 'all') {
+      const projectAuth = await checkProjectAccess(projectId);
+      if (!projectAuth.hasAccess) {
+        return NextResponse.json(
+          { error: projectAuth.error || 'Access denied' },
+          { status: 403 }
+        );
+      }
+    }
+
+    // Get user's teams to filter accessible annotations
+    const userTeams = await getUserTeamIds();
+    if (userTeams.dbError) {
+      return NextResponse.json(
+        { error: 'Database error while fetching team access' },
+        { status: 500 }
+      );
+    }
+    if (userTeams.teamIds.length === 0) {
+      return NextResponse.json({ data: [], pagination: { page: 1, limit: DEFAULT_PAGE_SIZE, totalCount: 0, totalPages: 0, hasMore: false } });
+    }
 
     // Pagination parameters (set all=true to return all results without pagination)
     const returnAll = searchParams.get('all') === 'true';
@@ -19,13 +52,19 @@ export async function GET(request: NextRequest) {
     const limit = returnAll ? undefined : Math.min(MAX_PAGE_SIZE, Math.max(1, parseInt(limitParam || String(DEFAULT_PAGE_SIZE), 10) || DEFAULT_PAGE_SIZE));
     const skip = returnAll ? undefined : (page - 1) * (limit || DEFAULT_PAGE_SIZE);
 
-    const where: Record<string, unknown> = {};
-    if (projectId && projectId !== 'all') {
-      where.session = {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const where: any = {
+      // Filter by user's teams through session -> asset -> project -> team
+      session: {
         asset: {
-          projectId: projectId
+          project: {
+            teamId: { in: userTeams.teamIds }
+          }
         }
-      };
+      }
+    };
+    if (projectId && projectId !== 'all') {
+      where.session.asset.projectId = projectId;
     }
 
     // Get total count for pagination metadata

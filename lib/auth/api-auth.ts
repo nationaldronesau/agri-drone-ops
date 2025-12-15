@@ -119,7 +119,7 @@ export interface TeamMembership {
  * Get all team IDs that the authenticated user is a member of.
  * Returns empty array if not authenticated.
  */
-export async function getUserTeamIds(): Promise<{ authenticated: boolean; userId?: string; teamIds: string[]; error?: string }> {
+export async function getUserTeamIds(): Promise<{ authenticated: boolean; userId?: string; teamIds: string[]; error?: string; dbError?: boolean }> {
   const auth = await getAuthenticatedUser();
 
   if (!auth.authenticated || !auth.userId) {
@@ -144,6 +144,7 @@ export async function getUserTeamIds(): Promise<{ authenticated: boolean; userId
       userId: auth.userId,
       teamIds: [],
       error: 'Failed to get user teams',
+      dbError: true,
     };
   }
 }
@@ -152,7 +153,7 @@ export async function getUserTeamIds(): Promise<{ authenticated: boolean; userId
  * Get all team memberships with roles for the authenticated user.
  * Useful for checking if user has specific role permissions.
  */
-export async function getUserTeamMemberships(): Promise<{ authenticated: boolean; userId?: string; memberships: TeamMembership[]; error?: string }> {
+export async function getUserTeamMemberships(): Promise<{ authenticated: boolean; userId?: string; memberships: TeamMembership[]; error?: string; dbError?: boolean }> {
   const auth = await getAuthenticatedUser();
 
   if (!auth.authenticated || !auth.userId) {
@@ -177,6 +178,7 @@ export async function getUserTeamMemberships(): Promise<{ authenticated: boolean
       userId: auth.userId,
       memberships: [],
       error: 'Failed to get user team memberships',
+      dbError: true,
     };
   }
 }

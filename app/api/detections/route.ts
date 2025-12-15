@@ -36,6 +36,12 @@ export async function GET(request: NextRequest) {
 
     // Get user's teams to filter accessible detections
     const userTeams = await getUserTeamIds();
+    if (userTeams.dbError) {
+      return NextResponse.json(
+        { error: 'Database error while fetching team access' },
+        { status: 500 }
+      );
+    }
 
     // If assetId specified, verify user has access to the asset's project
     if (assetId && userTeams.teamIds.length > 0) {

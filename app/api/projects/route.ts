@@ -15,6 +15,12 @@ export async function GET(request: NextRequest) {
 
     // Get user's teams
     const userTeams = await getUserTeamIds();
+    if (userTeams.dbError) {
+      return NextResponse.json(
+        { error: 'Database error while fetching team access' },
+        { status: 500 }
+      );
+    }
     if (userTeams.teamIds.length === 0) {
       // User has no teams, return empty list
       return NextResponse.json({ projects: [] });
@@ -67,6 +73,12 @@ export async function POST(request: NextRequest) {
 
     // Get user's teams with roles
     const userMemberships = await getUserTeamMemberships();
+    if (userMemberships.dbError) {
+      return NextResponse.json(
+        { error: 'Database error while fetching team access' },
+        { status: 500 }
+      );
+    }
 
     // If teamId is specified, verify user is OWNER or ADMIN
     let targetTeamId = teamId;
