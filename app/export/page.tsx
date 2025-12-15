@@ -74,6 +74,36 @@ export default function ExportPage() {
            lon >= -180 && lon <= 180;
   };
 
+  // Helper function to validate polygon coordinate arrays
+  // Returns true if all coordinates in the polygon are valid
+  const isValidPolygon = (coords: Array<[number, number]> | undefined): boolean => {
+    if (!coords || !Array.isArray(coords) || coords.length < 3) return false;
+    return coords.every(coord =>
+      Array.isArray(coord) &&
+      coord.length >= 2 &&
+      isValidCoordinate(coord[1], coord[0]) // coords are [lon, lat]
+    );
+  };
+
+  // Helper to filter only valid detections for export
+  const getValidDetectionsForExport = (detections: Detection[]): Detection[] => {
+    return detections.filter(d => {
+      // Must have valid center coordinates for points
+      if (!isValidCoordinate(d.centerLat, d.centerLon)) {
+        console.warn(`Skipping detection ${d.id} - invalid center coordinates`);
+        return false;
+      }
+      // If manual annotation with polygon, validate polygon too
+      if (d.type === 'manual' && d.metadata?.polygonCoordinates) {
+        if (!isValidPolygon(d.metadata.polygonCoordinates)) {
+          console.warn(`Skipping detection ${d.id} - invalid polygon coordinates`);
+          return false;
+        }
+      }
+      return true;
+    });
+  };
+
   useEffect(() => {
     fetchProjects();
     fetchAllDetections();
@@ -98,12 +128,12 @@ export default function ExportPage() {
   const fetchAllDetections = async () => {
     try {
       const allDetections: Detection[] = [];
-      
-      // Fetch AI detections if enabled
+
+      // Fetch AI detections if enabled (use all=true to bypass pagination for export)
       if (includeAI) {
-        const aiUrl = selectedProject !== "all" 
-          ? `/api/detections?projectId=${selectedProject}`
-          : '/api/detections';
+        const aiUrl = selectedProject !== "all"
+          ? `/api/detections?projectId=${selectedProject}&all=true`
+          : '/api/detections?all=true';
         const aiResponse = await fetch(aiUrl);
         if (aiResponse.ok) {
           const aiData = await aiResponse.json();
@@ -111,12 +141,12 @@ export default function ExportPage() {
           allDetections.push(...aiDetections);
         }
       }
-      
-      // Fetch manual annotations if enabled
+
+      // Fetch manual annotations if enabled (use all=true to bypass pagination for export)
       if (includeManual) {
-        const manualUrl = selectedProject !== "all" 
-          ? `/api/annotations/export?projectId=${selectedProject}`
-          : '/api/annotations/export';
+        const manualUrl = selectedProject !== "all"
+          ? `/api/annotations/export?projectId=${selectedProject}&all=true`
+          : '/api/annotations/export?all=true';
         const manualResponse = await fetch(manualUrl);
         if (manualResponse.ok) {
           const manualData = await manualResponse.json();
@@ -150,11 +180,14 @@ export default function ExportPage() {
   };
 
   const exportAsCSV = () => {
+    // Filter out detections with invalid coordinates
+    const validDetections = getValidDetectionsForExport(filteredDetections);
+
     const headers = includeMetadata
       ? ['ID', 'Weed Type', 'Latitude', 'Longitude', 'Confidence', 'Type', 'Altitude (m)', 'Image File', 'Project', 'Location', 'Detection Date']
       : ['Weed Type', 'Latitude', 'Longitude'];
 
-    const rows = filteredDetections.map(d => {
+    const rows = validDetections.map(d => {
       const baseData = [
         escapeCSV(d.className),
         escapeCSV(d.centerLat?.toFixed(8)),
@@ -189,13 +222,16 @@ export default function ExportPage() {
   };
 
   const exportAsKML = () => {
+    // Filter out detections with invalid coordinates
+    const validDetections = getValidDetectionsForExport(filteredDetections);
+
     const kml = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
     <name>${escapeXML('Weed Detections - ' + new Date().toLocaleDateString())}</name>
     <description>${escapeXML('Exported from AgriDrone Ops')}</description>
-    ${[...new Set(filteredDetections.map(d => d.className))].map(className => {
-      const color = filteredDetections.find(d => d.className === className)?.metadata?.color || '#FF0000';
+    ${[...new Set(validDetections.map(d => d.className))].map(className => {
+      const color = validDetections.find(d => d.className === className)?.metadata?.color || '#FF0000';
       return `
     <Style id="${escapeXML(className)}">
       <IconStyle>
@@ -216,7 +252,7 @@ export default function ExportPage() {
       </LineStyle>
     </Style>`;
     }).join('')}
-    ${filteredDetections.map(d => `
+    ${validDetections.map(d => `
     <Placemark>
       <name>${escapeXML(d.className + ' (' + (d.type === 'manual' ? 'Manual' : 'AI') + ')')}</name>
       <description>

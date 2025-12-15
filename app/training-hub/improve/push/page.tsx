@@ -65,10 +65,11 @@ export default function PushCorrectionsPage() {
 
   const fetchReviewSummary = async (projectId: string) => {
     try {
-      const response = await fetch(`/api/detections?projectId=${projectId}`);
+      // Use all=true to get all detections for summary calculation
+      const response = await fetch(`/api/detections?projectId=${projectId}&all=true`);
       const data = await response.json();
 
-      // API returns array directly
+      // API returns array directly when all=true
       const detections = Array.isArray(data) ? data : [];
       setSummary({
         verified: detections.filter(

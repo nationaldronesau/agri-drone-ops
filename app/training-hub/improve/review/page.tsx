@@ -91,11 +91,12 @@ function ReviewPageContent() {
       try {
         setLoading(true);
         // Fetch detections that need review (not yet verified or rejected)
+        // Use all=true to get all detections needing review
         const response = await fetch(
-          `/api/detections?projectId=${projectId}&needsReview=true&maxConfidence=${session.confidenceThreshold || 0.7}`
+          `/api/detections?projectId=${projectId}&needsReview=true&maxConfidence=${session.confidenceThreshold || 0.7}&all=true`
         );
         const data = await response.json();
-        // API returns array directly, not wrapped in { detections: [] }
+        // API returns array directly when all=true, not wrapped in { detections: [] }
         setDetections(Array.isArray(data) ? data : []);
       } catch (err) {
         console.error('Failed to fetch detections:', err);

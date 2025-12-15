@@ -1,11 +1,23 @@
 // Roboflow API Service for Weed Detection
 import { Detection, RoboflowResponse } from '@/types/roboflow';
 
+// Roboflow workspace from environment variable
+const ROBOFLOW_WORKSPACE = process.env.ROBOFLOW_WORKSPACE;
+
+// Helper to build SAHI workflow endpoint
+const getSahiEndpoint = () => {
+  if (!ROBOFLOW_WORKSPACE) {
+    console.warn('ROBOFLOW_WORKSPACE not set - SAHI endpoint will not work');
+    return null;
+  }
+  return `https://serverless.roboflow.com/infer/workflows/${ROBOFLOW_WORKSPACE}/small-object-detection-sahi`;
+};
+
 // Available models for different weed types
 export const ROBOFLOW_MODELS = {
   LANTANA_SAHI: {
     name: 'Lantana Detection (SAHI)',
-    endpoint: 'https://serverless.roboflow.com/infer/workflows/smartdata-ggzkp/small-object-detection-sahi',
+    get endpoint() { return getSahiEndpoint(); },
     color: '#FE0056',
     classes: ['Lantana', 'Wattle'],
     description: 'Small object detection with automatic image slicing',
@@ -74,10 +86,11 @@ class RoboflowService {
       let data;
 
       // Handle SAHI workflow endpoint (new format)
-      if (model.endpoint) {
+      const endpoint = model.endpoint;
+      if (endpoint) {
         console.log(`Using SAHI workflow endpoint for ${modelType}`);
-        
-        response = await fetch(model.endpoint, {
+
+        response = await fetch(endpoint, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -119,6 +132,11 @@ class RoboflowService {
 
       } else {
         // Handle legacy direct model endpoint (old format)
+        if (!model.projectId || !model.version) {
+          throw new Error(
+            `Model ${modelType} requires ROBOFLOW_WORKSPACE environment variable for SAHI endpoint, or projectId/version for legacy endpoint`
+          );
+        }
         const url = `${this.baseUrl}/${model.projectId}/${model.version}`;
         
         response = await fetch(url, {

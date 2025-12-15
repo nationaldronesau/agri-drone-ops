@@ -328,7 +328,8 @@ export default function AnnotatePage() {
     const fetchAiDetections = async () => {
       if (!assetId) return;
       try {
-        const response = await fetch(`/api/detections?assetId=${assetId}`);
+        // Use all=true to get all detections for this asset (typically small number per image)
+        const response = await fetch(`/api/detections?assetId=${assetId}&all=true`);
         if (response.ok) {
           const data = await response.json();
           const mapped: AiSuggestion[] = (data || []).map((det: {

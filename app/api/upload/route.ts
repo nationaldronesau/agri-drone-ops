@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth/config";
+import { checkProjectAccess } from "@/lib/auth/api-auth";
+import { normalizeDetectionType } from "@/lib/utils/detection-types";
 import exifr from "exifr";
 import { z } from "zod";
 import prisma from "@/lib/db";
@@ -92,11 +92,6 @@ const defaultExtractedMetadata = (): ExtractedMetadata => ({
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
     const body = await request.json();
     const parsed = requestSchema.safeParse(body);
 
@@ -115,6 +110,20 @@ export async function POST(request: NextRequest) {
       dynamicModels,
       flightSession,
     } = parsed.data;
+
+    // Verify user is authenticated AND has access to the project
+    const projectAuth = await checkProjectAccess(projectId);
+    if (!projectAuth.authenticated) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!projectAuth.hasAccess) {
+      return NextResponse.json(
+        { error: projectAuth.error || "Access denied to this project" },
+        { status: 403 }
+      );
+    }
+
+    const userId = projectAuth.userId!;
 
     // Check if we're using dynamic models (new) or legacy hardcoded models
     const useDynamicModels = dynamicModels && dynamicModels.length > 0;
@@ -381,7 +390,7 @@ export async function POST(request: NextRequest) {
             imageHeight: extractedData.imageHeight,
             metadata: fullMetadata,
             projectId,
-            createdById: session.user.id,
+            createdById: userId,
             flightSession: flightSession || null,
           },
         });
@@ -440,7 +449,7 @@ export async function POST(request: NextRequest) {
                     jobId: job.id,
                     assetId: asset.id,
                     type: "AI",
-                    className: detection.class,
+                    className: normalizeDetectionType(detection.class),
                     confidence: detection.confidence,
                     boundingBox: {
                       x: detection.x,
