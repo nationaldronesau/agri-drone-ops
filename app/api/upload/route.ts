@@ -197,12 +197,17 @@ export async function POST(request: NextRequest) {
         const extractedData = defaultExtractedMetadata();
         let fullMetadata: Record<string, unknown> | null = null;
 
+        // Track EXIF extraction warnings for this file
+        const fileWarnings: string[] = [];
+
         try {
           const gpsData = await exifr.gps(buffer);
           if (gpsData) {
             extractedData.gpsLatitude = gpsData.latitude ?? null;
             extractedData.gpsLongitude = gpsData.longitude ?? null;
             extractedData.altitude = gpsData.altitude ?? null;
+          } else {
+            fileWarnings.push("No GPS data found in EXIF metadata");
           }
 
           // SAFETY CRITICAL: Validate GPS coordinates immediately after extraction
@@ -361,6 +366,9 @@ export async function POST(request: NextRequest) {
           }
         } catch (metadataError) {
           console.error("Error parsing EXIF/XMP:", metadataError);
+          fileWarnings.push(
+            `EXIF metadata extraction failed: ${metadataError instanceof Error ? metadataError.message : 'Unknown error'}`
+          );
         }
 
         const cloudFrontUrl =
@@ -368,117 +376,141 @@ export async function POST(request: NextRequest) {
             ? `${cloudFrontBase.replace(/\/$/, "")}/${key}`
             : file.url;
 
-        const asset = await prisma.asset.create({
-          data: {
-            fileName: file.name,
-            storageUrl: cloudFrontUrl,
-            mimeType: file.mimeType || "application/octet-stream",
-            fileSize: file.size,
-            s3Key: key,
-            s3Bucket: bucket,
-            storageType: "s3",
-            gpsLatitude: extractedData.gpsLatitude,
-            gpsLongitude: extractedData.gpsLongitude,
-            altitude: extractedData.altitude,
-            gimbalPitch: extractedData.gimbalPitch,
-            gimbalRoll: extractedData.gimbalRoll,
-            gimbalYaw: extractedData.gimbalYaw,
-            lrfDistance: extractedData.lrfDistance,
-            lrfTargetLat: extractedData.lrfTargetLat,
-            lrfTargetLon: extractedData.lrfTargetLon,
-            imageWidth: extractedData.imageWidth,
-            imageHeight: extractedData.imageHeight,
-            metadata: fullMetadata,
-            projectId,
-            createdById: userId,
-            flightSession: flightSession || null,
-          },
-        });
-
-        const detections: any[] = [];
-
+        // Run AI detection before transaction (external API call)
+        let detectionResults: any[] = [];
         if (runDetection && extractedData.gpsLatitude && extractedData.gpsLongitude) {
           try {
             const imageBase64 = buffer.toString("base64");
-
-            // Use dynamic models if provided, otherwise fall back to legacy models
-            const detectionResults = useDynamicModels
+            detectionResults = useDynamicModels
               ? await roboflowService.detectWithDynamicModels(imageBase64, dynamicModels!)
               : await roboflowService.detectMultipleModels(imageBase64, modelsToRun);
+          } catch (detectionError) {
+            console.error("Detection API call failed:", detectionError);
+            fileWarnings.push("AI detection failed - image uploaded without detections");
+          }
+        }
 
-            if (
-              detectionResults.length > 0 &&
-              extractedData.imageWidth &&
-              extractedData.imageHeight
-            ) {
-              const job = await prisma.processingJob.create({
+        // Use transaction for all database operations to ensure data consistency
+        // If any step fails, all changes are rolled back
+        const { asset, detections } = await prisma.$transaction(async (tx) => {
+          // Create asset
+          const asset = await tx.asset.create({
+            data: {
+              fileName: file.name,
+              storageUrl: cloudFrontUrl,
+              mimeType: file.mimeType || "application/octet-stream",
+              fileSize: file.size,
+              s3Key: key,
+              s3Bucket: bucket,
+              storageType: "s3",
+              gpsLatitude: extractedData.gpsLatitude,
+              gpsLongitude: extractedData.gpsLongitude,
+              altitude: extractedData.altitude,
+              gimbalPitch: extractedData.gimbalPitch,
+              gimbalRoll: extractedData.gimbalRoll,
+              gimbalYaw: extractedData.gimbalYaw,
+              lrfDistance: extractedData.lrfDistance,
+              lrfTargetLat: extractedData.lrfTargetLat,
+              lrfTargetLon: extractedData.lrfTargetLon,
+              imageWidth: extractedData.imageWidth,
+              imageHeight: extractedData.imageHeight,
+              metadata: fullMetadata,
+              projectId,
+              createdById: userId,
+              flightSession: flightSession || null,
+            },
+          });
+
+          const detections: any[] = [];
+
+          // Create processing job and detections if we have valid detection results
+          if (
+            detectionResults.length > 0 &&
+            extractedData.imageWidth &&
+            extractedData.imageHeight &&
+            extractedData.gpsLatitude &&
+            extractedData.gpsLongitude
+          ) {
+            const job = await tx.processingJob.create({
+              data: {
+                projectId,
+                type: "AI_DETECTION",
+                status: "COMPLETED",
+                config: useDynamicModels
+                  ? { dynamicModels: dynamicModels!.map((m) => m.projectName) }
+                  : { models: modelsToRun },
+                completedAt: new Date(),
+              },
+            });
+
+            // Prepare all valid detections for batch creation
+            const validDetections: any[] = [];
+            for (const detection of detectionResults) {
+              const geoCoords = pixelToGeo(
+                detection.x,
+                detection.y,
+                extractedData.imageWidth,
+                extractedData.imageHeight,
+                extractedData.gpsLatitude,
+                extractedData.gpsLongitude,
+                extractedData.altitude || 100,
+                extractedData.gimbalPitch || 0,
+                extractedData.gimbalRoll || 0,
+                extractedData.gimbalYaw || 0,
+              );
+
+              // SAFETY CRITICAL: Validate detection coordinates before saving
+              if (!isValidGPSCoordinate(geoCoords.latitude, geoCoords.longitude)) {
+                console.warn(`[SAFETY] Skipping detection with invalid coordinates for ${file.name}: lat=${geoCoords.latitude}, lon=${geoCoords.longitude}, class=${detection.class}`);
+                continue;
+              }
+
+              validDetections.push({ detection, geoCoords });
+            }
+
+            // Create all detections within the transaction
+            for (const { detection, geoCoords } of validDetections) {
+              const savedDetection = await tx.detection.create({
                 data: {
-                  projectId,
-                  type: "AI_DETECTION",
-                  status: "COMPLETED",
-                  config: useDynamicModels
-                    ? { dynamicModels: dynamicModels!.map((m) => m.projectName) }
-                    : { models: modelsToRun },
-                  completedAt: new Date(),
+                  jobId: job.id,
+                  assetId: asset.id,
+                  type: "AI",
+                  className: normalizeDetectionType(detection.class),
+                  confidence: detection.confidence,
+                  boundingBox: {
+                    x: detection.x,
+                    y: detection.y,
+                    width: detection.width,
+                    height: detection.height,
+                  },
+                  geoCoordinates: {
+                    type: "Point",
+                    coordinates: [geoCoords.longitude, geoCoords.latitude],
+                  },
+                  centerLat: geoCoords.latitude,
+                  centerLon: geoCoords.longitude,
+                  metadata: {
+                    modelType: detection.modelType,
+                    color: detection.color,
+                  },
                 },
               });
 
-              for (const detection of detectionResults) {
-                const geoCoords = pixelToGeo(
-                  detection.x,
-                  detection.y,
-                  extractedData.imageWidth,
-                  extractedData.imageHeight,
-                  extractedData.gpsLatitude,
-                  extractedData.gpsLongitude,
-                  extractedData.altitude || 100,
-                  extractedData.gimbalPitch || 0,
-                  extractedData.gimbalRoll || 0,
-                  extractedData.gimbalYaw || 0,
-                );
-
-                // SAFETY CRITICAL: Validate detection coordinates before saving
-                // Skip detections with invalid geographic coordinates
-                if (!isValidGPSCoordinate(geoCoords.latitude, geoCoords.longitude)) {
-                  console.warn(`[SAFETY] Skipping detection with invalid coordinates for ${file.name}: lat=${geoCoords.latitude}, lon=${geoCoords.longitude}, class=${detection.class}`);
-                  continue;
-                }
-
-                const savedDetection = await prisma.detection.create({
-                  data: {
-                    jobId: job.id,
-                    assetId: asset.id,
-                    type: "AI",
-                    className: normalizeDetectionType(detection.class),
-                    confidence: detection.confidence,
-                    boundingBox: {
-                      x: detection.x,
-                      y: detection.y,
-                      width: detection.width,
-                      height: detection.height,
-                    },
-                    geoCoordinates: {
-                      type: "Point",
-                      coordinates: [geoCoords.longitude, geoCoords.latitude],
-                    },
-                    centerLat: geoCoords.latitude,
-                    centerLon: geoCoords.longitude,
-                    metadata: {
-                      modelType: detection.modelType,
-                      color: detection.color,
-                    },
-                  },
-                });
-
-                detections.push({
-                  ...detection,
-                  geoCoordinates: geoCoords,
-                  id: savedDetection.id,
-                });
-              }
+              detections.push({
+                ...detection,
+                geoCoordinates: geoCoords,
+                id: savedDetection.id,
+              });
             }
-          } catch (detectionError) {
-            console.error("Detection failed:", detectionError);
+          }
+
+          return { asset, detections };
+        });
+
+        // Add GPS warning to the list if coordinates are missing
+        if (!extractedData.gpsLatitude || !extractedData.gpsLongitude) {
+          if (!fileWarnings.some(w => w.includes("GPS"))) {
+            fileWarnings.push("Image is missing GPS coordinates - detection positions may be inaccurate");
           }
         }
 
@@ -495,10 +527,7 @@ export async function POST(request: NextRequest) {
           altitude: extractedData.altitude,
           detections,
           success: true,
-          warning:
-            !extractedData.gpsLatitude || !extractedData.gpsLongitude
-              ? "No GPS data found in image"
-              : null,
+          warnings: fileWarnings.length > 0 ? fileWarnings : undefined,
         });
       } catch (fileError) {
         console.error(`Error processing file ${file.name}:`, fileError);
@@ -515,9 +544,22 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Aggregate warnings for the response summary
+    const filesWithWarnings = uploadResults.filter(
+      (file) => file.success && file.warnings && file.warnings.length > 0
+    );
+
     return NextResponse.json({
       message: `Processed ${uploadResults.filter((file) => file.success).length} of ${files.length} files`,
       files: uploadResults,
+      summary: {
+        successful: uploadResults.filter((file) => file.success).length,
+        failed: uploadResults.filter((file) => !file.success).length,
+        withWarnings: filesWithWarnings.length,
+        warningTypes: filesWithWarnings.length > 0
+          ? [...new Set(filesWithWarnings.flatMap((f) => f.warnings || []))]
+          : [],
+      },
     });
   } catch (error) {
     console.error("Upload error:", error);

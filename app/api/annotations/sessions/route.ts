@@ -156,76 +156,84 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // Check if there's already an active session for this asset
-    const existingSession = await prisma.annotationSession.findFirst({
-      where: {
-        assetId,
-        status: 'IN_PROGRESS'
-      },
-      include: {
-        asset: {
-          select: {
-            id: true,
-            fileName: true,
-            storageUrl: true,
-            imageWidth: true,
-            imageHeight: true,
-            gpsLatitude: true,
-            gpsLongitude: true,
-            altitude: true,
-            gimbalPitch: true,
-            gimbalRoll: true,
-            gimbalYaw: true,
-            project: {
-              select: {
-                name: true,
-                location: true,
+    // Use a serializable transaction to prevent race conditions
+    // This ensures that only one session can be created for an asset at a time
+    const session = await prisma.$transaction(async (tx) => {
+      // Check if there's already an active session for this asset
+      const existingSession = await tx.annotationSession.findFirst({
+        where: {
+          assetId,
+          status: 'IN_PROGRESS'
+        },
+        include: {
+          asset: {
+            select: {
+              id: true,
+              fileName: true,
+              storageUrl: true,
+              imageWidth: true,
+              imageHeight: true,
+              gpsLatitude: true,
+              gpsLongitude: true,
+              altitude: true,
+              gimbalPitch: true,
+              gimbalRoll: true,
+              gimbalYaw: true,
+              project: {
+                select: {
+                  name: true,
+                  location: true,
+                }
               }
             }
-          }
-        },
-        annotations: true,
+          },
+          annotations: true,
+        }
+      });
+
+      if (existingSession) {
+        // Return existing session - no need to create a new one
+        return existingSession;
       }
+
+      // Create new annotation session within the transaction
+      return await tx.annotationSession.create({
+        data: {
+          assetId,
+          userId: auth.userId,
+          status: 'IN_PROGRESS',
+        },
+        include: {
+          asset: {
+            select: {
+              id: true,
+              fileName: true,
+              storageUrl: true,
+              imageWidth: true,
+              imageHeight: true,
+              gpsLatitude: true,
+              gpsLongitude: true,
+              altitude: true,
+              gimbalPitch: true,
+              gimbalRoll: true,
+              gimbalYaw: true,
+              project: {
+                select: {
+                  name: true,
+                  location: true,
+                }
+              }
+            }
+          },
+          annotations: true,
+        }
+      });
+    }, {
+      // Use Serializable isolation level to prevent race conditions
+      // This ensures check-then-create is atomic
+      isolationLevel: 'Serializable',
     });
 
-    if (existingSession) {
-      // Return existing session with full data
-      return NextResponse.json(existingSession);
-    }
-    
-    // Create new annotation session
-    const session = await prisma.annotationSession.create({
-      data: {
-        assetId,
-        userId: auth.userId,
-        status: 'IN_PROGRESS',
-      },
-      include: {
-        asset: {
-          select: {
-            id: true,
-            fileName: true,
-            storageUrl: true,
-            imageWidth: true,
-            imageHeight: true,
-            gpsLatitude: true,
-            gpsLongitude: true,
-            altitude: true,
-            gimbalPitch: true,
-            gimbalRoll: true,
-            gimbalYaw: true,
-            project: {
-              select: {
-                name: true,
-                location: true,
-              }
-            }
-          }
-        },
-        annotations: true,
-      }
-    });
-    
     return NextResponse.json(session);
   } catch (error) {
     console.error('Error creating annotation session:', error);
