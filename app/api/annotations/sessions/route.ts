@@ -156,77 +156,100 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // Check if there's already an active session for this asset
-    const existingSession = await prisma.annotationSession.findFirst({
-      where: {
-        assetId,
-        status: 'IN_PROGRESS'
-      },
-      include: {
-        asset: {
-          select: {
-            id: true,
-            fileName: true,
-            storageUrl: true,
-            imageWidth: true,
-            imageHeight: true,
-            gpsLatitude: true,
-            gpsLongitude: true,
-            altitude: true,
-            gimbalPitch: true,
-            gimbalRoll: true,
-            gimbalYaw: true,
-            project: {
-              select: {
-                name: true,
-                location: true,
-              }
-            }
-          }
-        },
-        annotations: true,
-      }
-    });
+    // Use a transaction to prevent race conditions
+    // This ensures that only one session can be created for an asset at a time
+    // Note: SQLite doesn't support Serializable isolation, so we use default isolation
+    // and rely on the transaction's atomicity. For PostgreSQL, we use Serializable.
+    const isPostgres = process.env.DATABASE_URL?.includes('postgresql');
 
-    if (existingSession) {
-      // Return existing session with full data
-      return NextResponse.json(existingSession);
-    }
-    
-    // Create new annotation session
-    const session = await prisma.annotationSession.create({
-      data: {
-        assetId,
-        userId: auth.userId,
-        status: 'IN_PROGRESS',
-      },
-      include: {
-        asset: {
-          select: {
-            id: true,
-            fileName: true,
-            storageUrl: true,
-            imageWidth: true,
-            imageHeight: true,
-            gpsLatitude: true,
-            gpsLongitude: true,
-            altitude: true,
-            gimbalPitch: true,
-            gimbalRoll: true,
-            gimbalYaw: true,
-            project: {
+    const transactionOptions = isPostgres
+      ? { isolationLevel: 'Serializable' as const }
+      : {}; // SQLite uses default DEFERRED transactions
+
+    try {
+      const session = await prisma.$transaction(async (tx) => {
+        // Check if there's already an active session for this asset
+        const existingSession = await tx.annotationSession.findFirst({
+          where: {
+            assetId,
+            status: 'IN_PROGRESS'
+          },
+          include: {
+            asset: {
               select: {
-                name: true,
-                location: true,
+                id: true,
+                fileName: true,
+                storageUrl: true,
+                imageWidth: true,
+                imageHeight: true,
+                gpsLatitude: true,
+                gpsLongitude: true,
+                altitude: true,
+                gimbalPitch: true,
+                gimbalRoll: true,
+                gimbalYaw: true,
+                project: {
+                  select: {
+                    name: true,
+                    location: true,
+                  }
+                }
               }
-            }
+            },
+            annotations: true,
           }
-        },
-        annotations: true,
+        });
+
+        if (existingSession) {
+          // Return existing session - no need to create a new one
+          return existingSession;
+        }
+
+        // Create new annotation session within the transaction
+        return await tx.annotationSession.create({
+          data: {
+            assetId,
+            userId: auth.userId,
+            status: 'IN_PROGRESS',
+          },
+          include: {
+            asset: {
+              select: {
+                id: true,
+                fileName: true,
+                storageUrl: true,
+                imageWidth: true,
+                imageHeight: true,
+                gpsLatitude: true,
+                gpsLongitude: true,
+                altitude: true,
+                gimbalPitch: true,
+                gimbalRoll: true,
+                gimbalYaw: true,
+                project: {
+                  select: {
+                    name: true,
+                    location: true,
+                  }
+                }
+              }
+            },
+            annotations: true,
+          }
+        });
+      }, transactionOptions);
+
+      return NextResponse.json(session);
+    } catch (error: any) {
+      // Handle serialization failures (P2034) - suggest retry
+      if (error?.code === 'P2034') {
+        return NextResponse.json(
+          { error: 'Session creation conflict - please try again', retryable: true },
+          { status: 409 }
+        );
       }
-    });
-    
-    return NextResponse.json(session);
+      throw error; // Re-throw other errors to be caught by outer catch
+    }
   } catch (error) {
     console.error('Error creating annotation session:', error);
     return NextResponse.json(

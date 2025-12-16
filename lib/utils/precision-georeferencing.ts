@@ -11,6 +11,36 @@
 
 import { getTerrainElevation } from '@/lib/services/elevation';
 
+/**
+ * SAFETY CRITICAL: Validates geographic coordinates for spray drone operations
+ * Returns null if coordinates are invalid (NaN, Infinity, out of range)
+ */
+function validateCoordinates(
+  lat: number,
+  lon: number,
+  altitude?: number
+): { latitude: number; longitude: number; altitude?: number } | null {
+  // Check for NaN or Infinity
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    console.error('[SAFETY] Invalid coordinates computed: NaN or Infinity detected', { lat, lon });
+    return null;
+  }
+
+  // Check valid geographic range
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    console.error('[SAFETY] Coordinates out of valid range', { lat, lon });
+    return null;
+  }
+
+  // Validate altitude if provided
+  if (altitude !== undefined && !Number.isFinite(altitude)) {
+    console.warn('[SAFETY] Invalid altitude, setting to undefined', { altitude });
+    altitude = undefined;
+  }
+
+  return { latitude: lat, longitude: lon, altitude };
+}
+
 export interface PrecisionGeoreferenceParams {
   // Image parameters
   imageWidth: number;
@@ -54,22 +84,23 @@ export interface GeographicCoordinate {
 
 /**
  * Convert pixel coordinates to geographic coordinates using precision camera model
+ * Returns null if coordinates cannot be computed or are invalid
  */
 export async function precisionPixelToGeo(
   pixel: PixelCoordinate,
   params: PrecisionGeoreferenceParams
-): Promise<GeographicCoordinate> {
-  
+): Promise<GeographicCoordinate | null> {
+
   // Step 1: Convert pixel coordinates to normalized camera coordinates
   // Account for principal point offset (not assuming image center)
   const normalizedX = (pixel.x - params.opticalCenterX) / params.calibratedFocalLength;
   const normalizedY = (pixel.y - params.opticalCenterY) / params.calibratedFocalLength;
-  
+
   // Step 2: If we have laser rangefinder data, use it for high precision with DSM
   if (params.lrfTargetLatitude && params.lrfTargetLongitude && params.lrfTargetDistance) {
     return await calculateWithLRFAndDSM(normalizedX, normalizedY, params);
   }
-  
+
   // Step 3: Fallback to traditional photogrammetric calculation with DSM
   return await calculateWithPhotogrammetryAndDSM(normalizedX, normalizedY, params);
 }
@@ -100,12 +131,13 @@ function getGeoidHeightCorrection(latitude: number, longitude: number): number {
 
 /**
  * High-precision calculation using laser rangefinder ground target with DSM correction
+ * Returns null if coordinates cannot be computed or are invalid
  */
 async function calculateWithLRFAndDSM(
   normalizedX: number,
   normalizedY: number,
   params: PrecisionGeoreferenceParams
-): Promise<GeographicCoordinate> {
+): Promise<GeographicCoordinate | null> {
   
   // The LRF provides exact ground coordinates for the center pixel
   // We use iterative ray-terrain intersection for sub-meter accuracy
@@ -179,21 +211,19 @@ async function calculateWithLRFAndDSM(
     }
   }
   
-  return {
-    latitude: finalLatitude,
-    longitude: finalLongitude,
-    altitude: terrainElevation
-  };
+  // SAFETY CRITICAL: Validate coordinates before returning
+  return validateCoordinates(finalLatitude, finalLongitude, terrainElevation);
 }
 
 /**
  * Traditional photogrammetric calculation with DSM terrain correction
+ * Returns null if coordinates cannot be computed or are invalid
  */
 async function calculateWithPhotogrammetryAndDSM(
   normalizedX: number,
   normalizedY: number,
   params: PrecisionGeoreferenceParams
-): Promise<GeographicCoordinate> {
+): Promise<GeographicCoordinate | null> {
   
   // Initial calculation using flat terrain assumption
   const geoidCorrection = getGeoidHeightCorrection(params.droneLatitude, params.droneLongitude);
@@ -247,11 +277,8 @@ async function calculateWithPhotogrammetryAndDSM(
     }
   }
   
-  return {
-    latitude: finalLatitude,
-    longitude: finalLongitude,
-    altitude: terrainElevation
-  };
+  // SAFETY CRITICAL: Validate coordinates before returning
+  return validateCoordinates(finalLatitude, finalLongitude, terrainElevation);
 }
 
 
@@ -293,38 +320,41 @@ export function extractPrecisionParams(metadata: any): PrecisionGeoreferencePara
 /**
  * Debug function to compare old vs new georeferencing
  */
-export function debugGeoreferencing(
+export async function debugGeoreferencing(
   pixel: PixelCoordinate,
   metadata: any
-): {
+): Promise<{
   oldMethod: GeographicCoordinate;
-  newMethod: GeographicCoordinate;
+  newMethod: GeographicCoordinate | null;
   lrfReference: GeographicCoordinate | null;
-  distanceError: number;
-} {
+  distanceError: number | null;
+}> {
   const params = extractPrecisionParams(metadata);
-  
+
   // Old method (current implementation)
   const oldResult = {
     latitude: metadata.latitude || 0,
     longitude: metadata.longitude || 0
   };
-  
-  // New precision method
-  const newResult = precisionPixelToGeo(pixel, params);
-  
+
+  // New precision method (now returns null if invalid)
+  const newResult = await precisionPixelToGeo(pixel, params);
+
   // LRF reference point
   const lrfReference = params.lrfTargetLatitude && params.lrfTargetLongitude ? {
     latitude: params.lrfTargetLatitude,
     longitude: params.lrfTargetLongitude,
     altitude: params.lrfTargetAltitude
   } : null;
-  
-  // Calculate distance error (approximate)
-  const latDiff = newResult.latitude - oldResult.latitude;
-  const lonDiff = newResult.longitude - oldResult.longitude;
-  const distanceError = Math.sqrt(latDiff * latDiff + lonDiff * lonDiff) * 111111; // meters
-  
+
+  // Calculate distance error (approximate) - only if newResult is valid
+  let distanceError: number | null = null;
+  if (newResult) {
+    const latDiff = newResult.latitude - oldResult.latitude;
+    const lonDiff = newResult.longitude - oldResult.longitude;
+    distanceError = Math.sqrt(latDiff * latDiff + lonDiff * lonDiff) * 111111; // meters
+  }
+
   return {
     oldMethod: oldResult,
     newMethod: newResult,

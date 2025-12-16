@@ -83,7 +83,7 @@ export async function GET(request: NextRequest) {
       lrfReference.longitude
     ) : null;
     
-    const newToLrf = lrfReference ? calculateDistance(
+    const newToLrf = lrfReference && newResult ? calculateDistance(
       newResult.latitude,
       newResult.longitude,
       lrfReference.latitude,
@@ -133,9 +133,11 @@ export async function GET(request: NextRequest) {
         hasLrfData: !!lrfReference,
         hasCalibratedParams: !!(asset.metadata.CalibratedFocalLength),
         usedLrfForCalculation: !!lrfReference,
-        metadataKeys: Object.keys(asset.metadata).filter(key => 
-          key.includes('LRF') || 
-          key.includes('Calibrated') || 
+        newMethodReturnedNull: newResult === null,
+        nullReason: newResult === null ? 'Coordinates computed as NaN, Infinity, or out of valid range' : null,
+        metadataKeys: Object.keys(asset.metadata).filter(key =>
+          key.includes('LRF') ||
+          key.includes('Calibrated') ||
           key.includes('Optical') ||
           key.includes('Dewarp')
         )
