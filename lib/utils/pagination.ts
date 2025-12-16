@@ -12,6 +12,7 @@
 
 export const DEFAULT_PAGE_SIZE = 50;
 export const MAX_PAGE_SIZE = 200;
+export const MAX_PAGE = 1000000; // Prevent overflow when calculating skip
 
 export interface PaginationParams {
   page: number;
@@ -35,9 +36,10 @@ export function parsePaginationParams(searchParams: URLSearchParams): Pagination
   const pageParam = searchParams.get('page');
   const pageSizeParam = searchParams.get('pageSize');
 
-  // Parse page (default 1, min 1)
+  // Parse page (default 1, min 1, max 1000000 to prevent overflow)
   let page = pageParam ? parseInt(pageParam, 10) : 1;
   if (isNaN(page) || page < 1) page = 1;
+  if (page > MAX_PAGE) page = MAX_PAGE;
 
   // Parse pageSize (default 50, min 1, max 200)
   let pageSize = pageSizeParam ? parseInt(pageSizeParam, 10) : DEFAULT_PAGE_SIZE;

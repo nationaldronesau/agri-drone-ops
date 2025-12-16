@@ -93,10 +93,13 @@ export async function logAudit(params: AuditLogParams): Promise<void> {
 
 /**
  * Batch create audit log entries (for bulk operations)
+ * Falls back to individual inserts if batch fails
  */
 export async function logAuditBatch(
   entries: AuditLogParams[]
 ): Promise<void> {
+  if (entries.length === 0) return;
+
   try {
     await prisma.auditLog.createMany({
       data: entries.map((params) => {
@@ -115,9 +118,26 @@ export async function logAuditBatch(
         };
       }),
     });
-  } catch (error) {
-    console.error('[AUDIT] Failed to create batch audit log entries:', error);
+  } catch (batchError) {
+    console.error('[AUDIT] Batch insert failed, falling back to individual inserts:', batchError);
     console.error('[AUDIT] Entry count:', entries.length);
+
+    // Fallback to individual inserts - capture as many as possible
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const params of entries) {
+      try {
+        await logAudit(params);
+        successCount++;
+      } catch {
+        failCount++;
+      }
+    }
+
+    if (failCount > 0) {
+      console.error(`[AUDIT] Fallback results: ${successCount} succeeded, ${failCount} failed`);
+    }
   }
 }
 

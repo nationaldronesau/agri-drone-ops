@@ -574,6 +574,17 @@ export async function POST(request: NextRequest) {
               warning: "File already exists (detected during concurrent upload), returning existing asset",
             });
             continue;
+          } else {
+            // Edge case: P2002 fired but asset not found (deleted between constraint check and fetch)
+            // S3 object already cleaned up above, return error without double-delete
+            uploadResults.push({
+              name: file.name,
+              url: file.url,
+              size: file.size,
+              success: false,
+              error: "Concurrent upload conflict - please retry",
+            });
+            continue;
           }
         }
 
