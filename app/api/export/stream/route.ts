@@ -3,6 +3,15 @@ import { getAuthenticatedUser, getUserTeamIds } from "@/lib/auth/api-auth";
 import prisma from "@/lib/db";
 
 const BATCH_SIZE = 500; // Process 500 records at a time
+const QUERY_TIMEOUT = 30000; // 30 second timeout for database queries
+
+// Statistics tracking for export
+interface ExportStats {
+  totalProcessed: number;
+  exported: number;
+  skippedInvalidCoords: number;
+  errors: string[];
+}
 
 /**
  * Streaming export endpoint for large datasets
@@ -66,17 +75,44 @@ export async function GET(request: NextRequest) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
+      const stats: ExportStats = {
+        totalProcessed: 0,
+        exported: 0,
+        skippedInvalidCoords: 0,
+        errors: [],
+      };
+
       try {
         if (format === "csv") {
-          await streamCSV(controller, encoder, baseWhere, includeAI, includeManual, classFilter);
+          await streamCSV(controller, encoder, baseWhere, includeAI, includeManual, classFilter, stats);
         } else {
-          await streamKML(controller, encoder, baseWhere, includeAI, includeManual, classFilter);
+          await streamKML(controller, encoder, baseWhere, includeAI, includeManual, classFilter, stats);
         }
-        controller.close();
       } catch (error) {
         console.error("Export stream error:", error);
-        controller.error(error);
+        stats.errors.push(error instanceof Error ? error.message : "Unknown error");
+
+        // Write error marker into stream so users know export failed
+        if (format === "csv") {
+          controller.enqueue(
+            encoder.encode(`\n# ERROR: Export failed - ${stats.errors.join("; ")}\n`)
+          );
+          controller.enqueue(
+            encoder.encode(`# Records exported before failure: ${stats.exported}\n`)
+          );
+        } else {
+          // For KML, write a comment and close the document properly
+          controller.enqueue(
+            encoder.encode(`    <!-- ERROR: Export failed - ${escapeXML(stats.errors.join("; "))} -->\n`)
+          );
+          controller.enqueue(
+            encoder.encode(`    <!-- Records exported before failure: ${stats.exported} -->\n`)
+          );
+          controller.enqueue(encoder.encode(`  </Document>\n</kml>\n`));
+        }
       }
+
+      controller.close();
     },
   });
 
@@ -101,49 +137,53 @@ async function streamCSV(
   baseWhere: any,
   includeAI: boolean,
   includeManual: boolean,
-  classFilter: string[]
+  classFilter: string[],
+  stats: ExportStats
 ) {
   // Write CSV header
   controller.enqueue(
     encoder.encode("ID,Type,Class,Latitude,Longitude,Confidence,Image,Project,Location,Date\n")
   );
 
-  let offset = 0;
-  let hasMore = true;
-
   // Process AI detections in batches
   if (includeAI) {
-    offset = 0;
-    hasMore = true;
+    let offset = 0;
+    let hasMore = true;
 
     while (hasMore) {
-      const detections = await prisma.detection.findMany({
-        where: {
-          ...baseWhere,
-          type: "AI",
-          ...(classFilter.length > 0 ? { className: { in: classFilter } } : {}),
-        },
-        include: {
-          asset: {
-            select: {
-              fileName: true,
-              project: {
-                select: {
-                  name: true,
-                  location: true,
+      const detections = await queryWithTimeout(
+        prisma.detection.findMany({
+          where: {
+            ...baseWhere,
+            type: "AI",
+            ...(classFilter.length > 0 ? { className: { in: classFilter } } : {}),
+          },
+          include: {
+            asset: {
+              select: {
+                fileName: true,
+                project: {
+                  select: {
+                    name: true,
+                    location: true,
+                  },
                 },
               },
             },
           },
-        },
-        skip: offset,
-        take: BATCH_SIZE,
-        orderBy: { createdAt: "desc" },
-      });
+          skip: offset,
+          take: BATCH_SIZE,
+          orderBy: { createdAt: "desc" },
+        }),
+        QUERY_TIMEOUT
+      );
 
       for (const detection of detections) {
+        stats.totalProcessed++;
+
         // Skip invalid coordinates
         if (!isValidCoordinate(detection.centerLat, detection.centerLon)) {
+          stats.skippedInvalidCoords++;
           continue;
         }
 
@@ -161,6 +201,7 @@ async function streamCSV(
         ].join(",");
 
         controller.enqueue(encoder.encode(row + "\n"));
+        stats.exported++;
       }
 
       offset += BATCH_SIZE;
@@ -170,40 +211,45 @@ async function streamCSV(
 
   // Process manual annotations in batches
   if (includeManual) {
-    offset = 0;
-    hasMore = true;
+    let offset = 0;
+    let hasMore = true;
 
     while (hasMore) {
-      const annotations = await prisma.manualAnnotation.findMany({
-        where: {
-          session: {
-            asset: baseWhere.asset,
+      const annotations = await queryWithTimeout(
+        prisma.manualAnnotation.findMany({
+          where: {
+            session: {
+              asset: baseWhere.asset,
+            },
+            ...(classFilter.length > 0 ? { weedType: { in: classFilter } } : {}),
           },
-          ...(classFilter.length > 0 ? { weedType: { in: classFilter } } : {}),
-        },
-        include: {
-          session: {
-            include: {
-              asset: {
-                select: {
-                  fileName: true,
-                  project: {
-                    select: {
-                      name: true,
-                      location: true,
+          include: {
+            session: {
+              include: {
+                asset: {
+                  select: {
+                    fileName: true,
+                    project: {
+                      select: {
+                        name: true,
+                        location: true,
+                      },
                     },
                   },
                 },
               },
             },
           },
-        },
-        skip: offset,
-        take: BATCH_SIZE,
-        orderBy: { createdAt: "desc" },
-      });
+          skip: offset,
+          take: BATCH_SIZE,
+          orderBy: { createdAt: "desc" },
+        }),
+        QUERY_TIMEOUT
+      );
 
       for (const annotation of annotations) {
+        stats.totalProcessed++;
+
         // Get center coordinates from annotation
         const coords = annotation.coordinates as any;
         const centerLat = coords?.center?.lat || coords?.centerLat;
@@ -211,6 +257,7 @@ async function streamCSV(
 
         // Skip invalid coordinates
         if (!isValidCoordinate(centerLat, centerLon)) {
+          stats.skippedInvalidCoords++;
           continue;
         }
 
@@ -228,11 +275,22 @@ async function streamCSV(
         ].join(",");
 
         controller.enqueue(encoder.encode(row + "\n"));
+        stats.exported++;
       }
 
       offset += BATCH_SIZE;
       hasMore = annotations.length === BATCH_SIZE;
     }
+  }
+
+  // Write summary as CSV comment at the end
+  controller.enqueue(encoder.encode(`\n# Export Summary\n`));
+  controller.enqueue(encoder.encode(`# Total records processed: ${stats.totalProcessed}\n`));
+  controller.enqueue(encoder.encode(`# Records exported: ${stats.exported}\n`));
+  if (stats.skippedInvalidCoords > 0) {
+    controller.enqueue(
+      encoder.encode(`# WARNING: ${stats.skippedInvalidCoords} records skipped due to invalid coordinates\n`)
+    );
   }
 }
 
@@ -245,7 +303,8 @@ async function streamKML(
   baseWhere: any,
   includeAI: boolean,
   includeManual: boolean,
-  classFilter: string[]
+  classFilter: string[],
+  stats: ExportStats
 ) {
   // Write KML header
   controller.enqueue(
@@ -271,41 +330,44 @@ async function streamKML(
 `)
   );
 
-  let offset = 0;
-  let hasMore = true;
-
   // Process AI detections in batches
   if (includeAI) {
-    offset = 0;
-    hasMore = true;
+    let offset = 0;
+    let hasMore = true;
 
     while (hasMore) {
-      const detections = await prisma.detection.findMany({
-        where: {
-          ...baseWhere,
-          type: "AI",
-          ...(classFilter.length > 0 ? { className: { in: classFilter } } : {}),
-        },
-        include: {
-          asset: {
-            select: {
-              fileName: true,
-              project: {
-                select: {
-                  name: true,
+      const detections = await queryWithTimeout(
+        prisma.detection.findMany({
+          where: {
+            ...baseWhere,
+            type: "AI",
+            ...(classFilter.length > 0 ? { className: { in: classFilter } } : {}),
+          },
+          include: {
+            asset: {
+              select: {
+                fileName: true,
+                project: {
+                  select: {
+                    name: true,
+                  },
                 },
               },
             },
           },
-        },
-        skip: offset,
-        take: BATCH_SIZE,
-        orderBy: { createdAt: "desc" },
-      });
+          skip: offset,
+          take: BATCH_SIZE,
+          orderBy: { createdAt: "desc" },
+        }),
+        QUERY_TIMEOUT
+      );
 
       for (const detection of detections) {
+        stats.totalProcessed++;
+
         // Skip invalid coordinates
         if (!isValidCoordinate(detection.centerLat, detection.centerLon)) {
+          stats.skippedInvalidCoords++;
           continue;
         }
 
@@ -319,6 +381,7 @@ async function streamKML(
     </Placemark>
 `;
         controller.enqueue(encoder.encode(placemark));
+        stats.exported++;
       }
 
       offset += BATCH_SIZE;
@@ -328,40 +391,46 @@ async function streamKML(
 
   // Process manual annotations in batches
   if (includeManual) {
-    offset = 0;
-    hasMore = true;
+    let offset = 0;
+    let hasMore = true;
 
     while (hasMore) {
-      const annotations = await prisma.manualAnnotation.findMany({
-        where: {
-          session: {
-            asset: baseWhere.asset,
+      const annotations = await queryWithTimeout(
+        prisma.manualAnnotation.findMany({
+          where: {
+            session: {
+              asset: baseWhere.asset,
+            },
+            ...(classFilter.length > 0 ? { weedType: { in: classFilter } } : {}),
           },
-          ...(classFilter.length > 0 ? { weedType: { in: classFilter } } : {}),
-        },
-        include: {
-          session: {
-            include: {
-              asset: {
-                select: {
-                  fileName: true,
+          include: {
+            session: {
+              include: {
+                asset: {
+                  select: {
+                    fileName: true,
+                  },
                 },
               },
             },
           },
-        },
-        skip: offset,
-        take: BATCH_SIZE,
-        orderBy: { createdAt: "desc" },
-      });
+          skip: offset,
+          take: BATCH_SIZE,
+          orderBy: { createdAt: "desc" },
+        }),
+        QUERY_TIMEOUT
+      );
 
       for (const annotation of annotations) {
+        stats.totalProcessed++;
+
         const coords = annotation.coordinates as any;
         const centerLat = coords?.center?.lat || coords?.centerLat;
         const centerLon = coords?.center?.lon || coords?.centerLon;
 
         // Skip invalid coordinates
         if (!isValidCoordinate(centerLat, centerLon)) {
+          stats.skippedInvalidCoords++;
           continue;
         }
 
@@ -375,6 +444,7 @@ async function streamKML(
     </Placemark>
 `;
         controller.enqueue(encoder.encode(placemark));
+        stats.exported++;
       }
 
       offset += BATCH_SIZE;
@@ -382,10 +452,29 @@ async function streamKML(
     }
   }
 
+  // Write summary as KML description/comment before closing
+  let summaryDescription = `Export completed. ${stats.exported} of ${stats.totalProcessed} records exported.`;
+  if (stats.skippedInvalidCoords > 0) {
+    summaryDescription += ` WARNING: ${stats.skippedInvalidCoords} records had invalid coordinates and were skipped.`;
+  }
+
+  controller.enqueue(encoder.encode(`    <!-- ${escapeXML(summaryDescription)} -->\n`));
+
   // Write KML footer
   controller.enqueue(encoder.encode(`  </Document>
 </kml>
 `));
+}
+
+/**
+ * Execute a Prisma query with a timeout
+ */
+async function queryWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error(`Query timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]);
 }
 
 /**

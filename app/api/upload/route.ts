@@ -531,6 +531,19 @@ export async function POST(request: NextRequest) {
         });
       } catch (fileError) {
         console.error(`Error processing file ${file.name}:`, fileError);
+
+        // Clean up orphaned S3 object if transaction failed
+        // This prevents orphaned files in S3 when database operations fail
+        if (key) {
+          try {
+            await S3Service.deleteFile(key);
+            console.log(`Cleaned up orphaned S3 object: ${key}`);
+          } catch (cleanupError) {
+            // Log but don't fail - orphaned files can be cleaned up later
+            console.error(`Failed to clean up S3 object ${key}:`, cleanupError);
+          }
+        }
+
         uploadResults.push({
           name: file.name,
           url: file.url,
