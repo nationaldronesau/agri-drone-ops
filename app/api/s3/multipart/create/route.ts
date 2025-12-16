@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import { S3Service } from "@/lib/services/s3";
+import { checkProjectAccess } from "@/lib/auth/api-auth";
 import { z } from "zod";
 
 const requestSchema = z.object({
@@ -37,6 +38,15 @@ export async function POST(request: NextRequest) {
 
     const { filename, contentType, projectId, flightSession, metadata } =
       parsed.data;
+
+    // Verify user has access to the project
+    const projectAuth = await checkProjectAccess(projectId);
+    if (!projectAuth.hasAccess) {
+      return NextResponse.json(
+        { error: projectAuth.error || "Access denied to this project" },
+        { status: 403 },
+      );
+    }
 
     const multipart = await S3Service.createMultipartUpload({
       userId: session.user.id,

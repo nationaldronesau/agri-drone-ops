@@ -45,7 +45,8 @@ export default function TrainingPage() {
       }
 
       const statsData = (await statsRes.json()) as TrainingStats;
-      const pendingData = (await pendingRes.json()) as PendingAnnotation[];
+      const pendingJson = await pendingRes.json();
+      const pendingData = (pendingJson.annotations || pendingJson) as PendingAnnotation[];
 
       setStats(statsData);
       setPending(pendingData);
