@@ -56,6 +56,8 @@ export async function GET(request: NextRequest) {
       where.pushedToTraining = pushedToTraining === 'true';
     }
 
+    // Use include with nested select for eager loading to avoid N+1 query problems
+    // This generates a single query with JOINs, selecting only needed fields
     const annotations = await prisma.manualAnnotation.findMany({
       where,
       include: {
@@ -76,6 +78,7 @@ export async function GET(request: NextRequest) {
                 imageHeight: true,
                 project: {
                   select: {
+                    id: true,
                     name: true,
                     location: true,
                   }
@@ -190,7 +193,8 @@ export async function POST(request: NextRequest) {
     let geoCoordinates = null;
     let centerLat = null;
     let centerLon = null;
-    
+    let geoConversionWarning: string | null = null;
+
     // Convert pixel coordinates to geographic coordinates if asset has GPS data
     if (session.asset.gpsLatitude && session.asset.gpsLongitude) {
       try {
@@ -211,31 +215,34 @@ export async function POST(request: NextRequest) {
             },
             { x, y }
           );
-          
+
           // Handle both sync and async return types
           if (geoPoint instanceof Promise) {
             throw new Error('Async coordinate conversion not supported in this context');
           }
-          
+
           return [geoPoint.lon, geoPoint.lat];
         });
-        
+
         // Create GeoJSON polygon
         geoCoordinates = {
           type: 'Polygon',
           coordinates: [geoPoints.concat([geoPoints[0]])] // Close the polygon
         };
-        
+
         // Calculate center point for map display
         const sumLat = geoPoints.reduce((sum: number, [lon, lat]: [number, number]) => sum + lat, 0);
         const sumLon = geoPoints.reduce((sum: number, [lon, lat]: [number, number]) => sum + lon, 0);
         centerLat = sumLat / geoPoints.length;
         centerLon = sumLon / geoPoints.length;
-        
+
       } catch (error) {
-        console.warn('Failed to convert pixel to geo coordinates:', error);
-        // Continue without geo coordinates
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        console.warn('Failed to convert pixel to geo coordinates:', errorMessage);
+        geoConversionWarning = `Geographic coordinates could not be calculated: ${errorMessage}. This annotation may not export correctly for spray drone operations.`;
       }
+    } else {
+      geoConversionWarning = 'Asset is missing GPS coordinates. This annotation will not have geographic coordinates and cannot be exported for spray drone operations.';
     }
     
     const annotation = await prisma.manualAnnotation.create({
@@ -268,7 +275,14 @@ export async function POST(request: NextRequest) {
       }
     });
     
-    return NextResponse.json(annotation);
+    // Return annotation with warning if coordinate conversion failed
+    // Maintains backward compatibility by spreading annotation fields at top level
+    // New fields (warning, hasGeoCoordinates) are added without breaking existing consumers
+    return NextResponse.json({
+      ...annotation,  // Backward compatibility: annotation.id still works
+      hasGeoCoordinates: geoCoordinates !== null,
+      ...(geoConversionWarning && { warning: geoConversionWarning }),
+    });
   } catch (error) {
     console.error('Error creating manual annotation:', error);
     return NextResponse.json(

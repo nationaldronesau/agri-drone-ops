@@ -82,13 +82,42 @@ export async function fetchImageSafely(
   return Buffer.from(arrayBuffer);
 }
 
-// Simple in-memory rate limiter
+/**
+ * In-memory rate limiter
+ *
+ * ⚠️ PRODUCTION WARNING: This rate limiter uses an in-memory Map that is
+ * per-instance only. In production deployments with:
+ * - Multiple server instances (load balanced)
+ * - Serverless functions (Vercel, AWS Lambda)
+ * - Container orchestration (Kubernetes, ECS)
+ *
+ * Each instance maintains its own independent rate limit counters, effectively
+ * multiplying the allowed requests by the number of instances.
+ *
+ * For production deployments requiring strict rate limiting:
+ * - Use Redis-based distributed rate limiting (@upstash/redis or ioredis)
+ * - Use a dedicated rate limiting service (AWS WAF, Cloudflare)
+ * - Use database-backed rate limiting with atomic operations
+ *
+ * This implementation is suitable for:
+ * - Single-instance deployments
+ * - Development/testing environments
+ * - Best-effort rate limiting where exact enforcement isn't critical
+ */
 interface RateLimitEntry {
   count: number;
   resetTime: number;
 }
 
 const rateLimitStore = new Map<string, RateLimitEntry>();
+
+// Log warning about in-memory rate limiting at startup in production
+if (typeof process !== 'undefined' && process.env.NODE_ENV === 'production') {
+  console.warn(
+    '[SECURITY] Using in-memory rate limiting which is per-instance only. ' +
+    'For distributed deployments, consider using Redis-based rate limiting.'
+  );
+}
 
 // Clean up old entries periodically (every 5 minutes)
 setInterval(() => {
