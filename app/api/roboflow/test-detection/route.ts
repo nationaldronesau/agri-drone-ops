@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { blockInProduction } from '@/lib/utils/dev-only';
 
 export async function POST(request: NextRequest) {
+  const prodBlock = blockInProduction();
+  if (prodBlock) return prodBlock;
+
   try {
     const apiKey = process.env.ROBOFLOW_API_KEY;
     const workspace = process.env.ROBOFLOW_WORKSPACE;
@@ -35,7 +39,7 @@ export async function POST(request: NextRequest) {
     });
     
     const responseText = await response.text();
-    console.log('Raw response:', responseText);
+    // Note: Avoid logging raw response data that could contain sensitive information
     
     if (!response.ok) {
       return NextResponse.json({

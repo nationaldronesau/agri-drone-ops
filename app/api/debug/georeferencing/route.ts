@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { precisionPixelToGeo, extractPrecisionParams, debugGeoreferencing } from '@/lib/utils/precision-georeferencing';
+import { blockInProduction } from '@/lib/utils/dev-only';
 
 export async function GET(request: NextRequest) {
+  const prodBlock = blockInProduction();
+  if (prodBlock) return prodBlock;
+
   try {
     const searchParams = request.nextUrl.searchParams;
     const assetId = searchParams.get('assetId');

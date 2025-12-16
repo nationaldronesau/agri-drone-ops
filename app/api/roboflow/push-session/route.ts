@@ -3,14 +3,14 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth/config';
 import prisma from '@/lib/db';
 import { roboflowTrainingService } from '@/lib/services/roboflow-training';
+import { isAuthBypassed } from '@/lib/utils/auth-bypass';
 
 export async function POST(request: NextRequest) {
   try {
-    // Auth check - skip in development mode (auth is disabled)
-    const isDev = process.env.NODE_ENV === 'development';
+    // Auth check with explicit bypass for development
     let userId: string | null = null;
 
-    if (!isDev) {
+    if (!isAuthBypassed()) {
       const session = await getServerSession(authOptions);
       if (!session?.user?.id) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Authorization check - verify user has access to this project's team
-    if (!isDev && userId) {
+    if (!isAuthBypassed() && userId) {
       const team = annotationSession.asset.project?.team;
       if (team) {
         const isMember = team.members.some((member) => member.userId === userId);

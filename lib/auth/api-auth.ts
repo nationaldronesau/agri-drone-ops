@@ -108,6 +108,90 @@ export async function checkProjectAccess(projectId: string): Promise<ProjectAuth
 }
 
 /**
+ * Team membership info with role
+ */
+export interface TeamMembership {
+  teamId: string;
+  role: 'OWNER' | 'ADMIN' | 'MEMBER';
+}
+
+/**
+ * Get all team IDs that the authenticated user is a member of.
+ * Returns empty array if not authenticated.
+ */
+export async function getUserTeamIds(): Promise<{ authenticated: boolean; userId?: string; teamIds: string[]; error?: string; dbError?: boolean }> {
+  const auth = await getAuthenticatedUser();
+
+  if (!auth.authenticated || !auth.userId) {
+    return { authenticated: false, teamIds: [], error: auth.error };
+  }
+
+  try {
+    const memberships = await prisma.teamMember.findMany({
+      where: { userId: auth.userId },
+      select: { teamId: true },
+    });
+
+    return {
+      authenticated: true,
+      userId: auth.userId,
+      teamIds: memberships.map((m) => m.teamId),
+    };
+  } catch (error) {
+    console.error('Get user teams error:', error);
+    return {
+      authenticated: true,
+      userId: auth.userId,
+      teamIds: [],
+      error: 'Failed to get user teams',
+      dbError: true,
+    };
+  }
+}
+
+/**
+ * Get all team memberships with roles for the authenticated user.
+ * Useful for checking if user has specific role permissions.
+ */
+export async function getUserTeamMemberships(): Promise<{ authenticated: boolean; userId?: string; memberships: TeamMembership[]; error?: string; dbError?: boolean }> {
+  const auth = await getAuthenticatedUser();
+
+  if (!auth.authenticated || !auth.userId) {
+    return { authenticated: false, memberships: [], error: auth.error };
+  }
+
+  try {
+    const memberships = await prisma.teamMember.findMany({
+      where: { userId: auth.userId },
+      select: { teamId: true, role: true },
+    });
+
+    return {
+      authenticated: true,
+      userId: auth.userId,
+      memberships: memberships.map((m) => ({ teamId: m.teamId, role: m.role as 'OWNER' | 'ADMIN' | 'MEMBER' })),
+    };
+  } catch (error) {
+    console.error('Get user team memberships error:', error);
+    return {
+      authenticated: true,
+      userId: auth.userId,
+      memberships: [],
+      error: 'Failed to get user team memberships',
+      dbError: true,
+    };
+  }
+}
+
+/**
+ * Check if user has OWNER or ADMIN role in a specific team.
+ */
+export function canManageTeam(memberships: TeamMembership[], teamId: string): boolean {
+  const membership = memberships.find(m => m.teamId === teamId);
+  return membership?.role === 'OWNER' || membership?.role === 'ADMIN';
+}
+
+/**
  * Check if the authenticated user has access to an asset through its project.
  */
 export async function checkAssetAccess(assetId: string): Promise<ProjectAuthResult> {

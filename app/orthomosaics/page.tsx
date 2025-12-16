@@ -59,7 +59,7 @@ export default function OrthomosaicsPage() {
       const response = await fetch('/api/orthomosaics');
       if (response.ok) {
         const data = await response.json();
-        setOrthomosaics(data);
+        setOrthomosaics(data.orthomosaics || []);
       }
     } catch (error) {
       console.error('Error fetching orthomosaics:', error);

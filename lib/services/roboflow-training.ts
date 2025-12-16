@@ -277,9 +277,9 @@ export class RoboflowTrainingService {
     const url = `${this.baseUrl}/${this.buildDatasetPath(projectId)}?api_key=${this.apiKey}`;
     const response = await fetch(url);
     if (!response.ok) {
-      const text = await response.text();
+      // Note: Avoid logging response text that could contain sensitive information
       throw new Error(
-        `Roboflow test failed: ${response.status} ${response.statusText} - ${text}`,
+        `Roboflow test failed: ${response.status} ${response.statusText}`,
       );
     }
     return { ok: true, message: "Roboflow API reachable" };

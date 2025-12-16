@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { elevationService } from '@/lib/services/elevation';
+import { blockInProduction } from '@/lib/utils/dev-only';
 
 /**
  * Test endpoint for validating elevation services and DSM accuracy
  */
 export async function GET(request: NextRequest) {
+  const prodBlock = blockInProduction();
+  if (prodBlock) return prodBlock;
+
   try {
     const searchParams = request.nextUrl.searchParams;
     const lat = parseFloat(searchParams.get('lat') || '-27.4698'); // Brisbane default

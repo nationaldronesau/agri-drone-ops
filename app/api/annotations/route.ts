@@ -1,16 +1,48 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { pixelToGeo } from '@/lib/utils/georeferencing';
+import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
 
 export async function GET(request: NextRequest) {
   try {
+    // Authenticate user
+    const auth = await getAuthenticatedUser();
+    if (!auth.authenticated) {
+      return NextResponse.json(
+        { error: auth.error || 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
+    // Get user's teams to filter accessible annotations
+    const userTeams = await getUserTeamIds();
+    if (userTeams.dbError) {
+      return NextResponse.json(
+        { error: 'Database error while fetching team access' },
+        { status: 500 }
+      );
+    }
+    if (userTeams.teamIds.length === 0) {
+      return NextResponse.json({ annotations: [] });
+    }
+
     const searchParams = request.nextUrl.searchParams;
     const sessionId = searchParams.get('sessionId');
     const weedType = searchParams.get('weedType');
     const verified = searchParams.get('verified');
     const pushedToTraining = searchParams.get('pushedToTraining');
-    
-    const where: any = {};
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const where: any = {
+      // Filter by user's teams through session -> asset -> project -> team
+      session: {
+        asset: {
+          project: {
+            teamId: { in: userTeams.teamIds }
+          }
+        }
+      }
+    };
     if (sessionId) {
       where.sessionId = sessionId;
     }
@@ -23,7 +55,7 @@ export async function GET(request: NextRequest) {
     if (pushedToTraining !== null) {
       where.pushedToTraining = pushedToTraining === 'true';
     }
-    
+
     const annotations = await prisma.manualAnnotation.findMany({
       where,
       include: {
@@ -57,8 +89,8 @@ export async function GET(request: NextRequest) {
         createdAt: 'desc'
       }
     });
-    
-    return NextResponse.json(annotations);
+
+    return NextResponse.json({ annotations });
   } catch (error) {
     console.error('Error fetching manual annotations:', error);
     return NextResponse.json(
@@ -70,29 +102,39 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    // Authenticate user
+    const auth = await getAuthenticatedUser();
+    if (!auth.authenticated || !auth.userId) {
+      return NextResponse.json(
+        { error: auth.error || 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
     const body = await request.json();
-    const { 
-      sessionId, 
-      weedType, 
-      confidence, 
+    const {
+      sessionId,
+      weedType,
+      confidence,
       coordinates, // Array of [x, y] pixel coordinates
-      notes 
+      notes
     } = body;
-    
+
     if (!sessionId || !weedType || !coordinates || !Array.isArray(coordinates)) {
       return NextResponse.json(
         { error: 'Session ID, weed type, and coordinates are required' },
         { status: 400 }
       );
     }
-    
-    // Fetch session with asset data for coordinate conversion
+
+    // Fetch session with asset data for coordinate conversion (include project for auth check)
     const session = await prisma.annotationSession.findUnique({
       where: { id: sessionId },
       include: {
         asset: {
           select: {
             id: true,
+            projectId: true,
             gpsLatitude: true,
             gpsLongitude: true,
             altitude: true,
@@ -103,15 +145,45 @@ export async function POST(request: NextRequest) {
             imageHeight: true,
             cameraFov: true,
             lrfDistance: true,
+            project: {
+              select: {
+                teamId: true,
+                team: {
+                  select: {
+                    members: {
+                      where: { userId: auth.userId },
+                      select: { id: true }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
     });
-    
+
     if (!session) {
       return NextResponse.json(
         { error: 'Annotation session not found' },
         { status: 404 }
+      );
+    }
+
+    // Verify session has valid project and team structure
+    if (!session.asset?.project?.team?.members) {
+      return NextResponse.json(
+        { error: 'Session has no associated project or team' },
+        { status: 404 }
+      );
+    }
+
+    // Verify user has access to the session's project
+    const isMember = session.asset.project.team.members.length > 0;
+    if (!isMember) {
+      return NextResponse.json(
+        { error: 'Access denied - not a member of this project\'s team' },
+        { status: 403 }
       );
     }
     
