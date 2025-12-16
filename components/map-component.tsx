@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { MapContainer, TileLayer, Marker, Popup, CircleMarker } from "react-leaflet";
+import { useEffect, useState, useCallback, useMemo } from "react";
+import { MapContainer, TileLayer, Marker, Popup, CircleMarker, useMap, useMapEvents } from "react-leaflet";
+import MarkerClusterGroup from "react-leaflet-cluster";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, MapPin, Camera, Layers, Settings, Download, Brain, AlertTriangle } from "lucide-react";
@@ -173,25 +174,53 @@ export default function MapComponent() {
                   </Popup>
                 </Marker>
               ))}
-            {showDetections &&
-              detections.map(d => (
-                <CircleMarker
-                  key={d.id}
-                  center={[d.centerLat!, d.centerLon!]}
-                  radius={8}
-                  pathOptions={{
-                    fillColor: d.metadata?.color || "#FF6B6B",
-                    color: "#000",
-                    weight: 2,
-                    opacity: 1,
-                    fillOpacity: 0.8,
-                  }}
-                >
-                  <Popup>
-                    <p>{d.className} - {(d.confidence * 100).toFixed(1)}%</p>
-                  </Popup>
-                </CircleMarker>
-              ))}
+            {/* Use MarkerClusterGroup for detection markers to handle 5000+ markers */}
+            {showDetections && detections.length > 0 && (
+              <MarkerClusterGroup
+                chunkedLoading
+                maxClusterRadius={50}
+                spiderfyOnMaxZoom={true}
+                showCoverageOnHover={false}
+                iconCreateFunction={(cluster: any) => {
+                  const count = cluster.getChildCount();
+                  // Color based on cluster size
+                  let size = 'small';
+                  let color = '#22c55e'; // green
+                  if (count > 100) {
+                    size = 'large';
+                    color = '#ef4444'; // red
+                  } else if (count > 10) {
+                    size = 'medium';
+                    color = '#f97316'; // orange
+                  }
+                  const dimension = size === 'large' ? 50 : size === 'medium' ? 40 : 30;
+                  return L.divIcon({
+                    html: `<div style="background:${color};color:white;border-radius:50%;width:${dimension}px;height:${dimension}px;display:flex;align-items:center;justify-content:center;font-weight:bold;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3);">${count}</div>`,
+                    className: 'detection-cluster',
+                    iconSize: L.point(dimension, dimension),
+                  });
+                }}
+              >
+                {detections.map(d => (
+                  <CircleMarker
+                    key={d.id}
+                    center={[d.centerLat!, d.centerLon!]}
+                    radius={8}
+                    pathOptions={{
+                      fillColor: d.metadata?.color || "#FF6B6B",
+                      color: "#000",
+                      weight: 2,
+                      opacity: 1,
+                      fillOpacity: 0.8,
+                    }}
+                  >
+                    <Popup>
+                      <p>{d.className} - {(d.confidence * 100).toFixed(1)}%</p>
+                    </Popup>
+                  </CircleMarker>
+                ))}
+              </MarkerClusterGroup>
+            )}
           </MapContainer>
         )}
       </main>
