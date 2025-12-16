@@ -261,30 +261,49 @@ class RoboflowService {
 
   /**
    * Run detection on multiple models for comprehensive analysis
+   * Uses Promise.allSettled to capture both successes and failures
    */
   async detectMultipleModels(
     imageBase64: string,
     models: ModelType[] = this.getEnabledModels()
-  ): Promise<Detection[]> {
+  ): Promise<{ detections: Detection[]; failures: Array<{ model: string; error: string }> }> {
     // Filter out disabled models
     const enabledModels = models.filter(modelType => !ROBOFLOW_MODELS[modelType].disabled);
-    
+
     if (enabledModels.length === 0) {
       console.warn('No enabled models available for detection');
-      return [];
+      return { detections: [], failures: [] };
     }
 
     console.log(`Running detection on ${enabledModels.length} enabled models:`, enabledModels);
 
-    const detectionPromises = enabledModels.map((modelType) =>
-      this.detectWeeds(imageBase64, modelType).catch((error) => {
-        console.error(`Failed to run ${modelType} detection:`, error);
-        return [] as Detection[];
-      })
+    // Use Promise.allSettled to capture both successes and failures
+    const results = await Promise.allSettled(
+      enabledModels.map((modelType) => this.detectWeeds(imageBase64, modelType))
     );
 
-    const results = await Promise.all(detectionPromises);
-    return results.flat();
+    const detections: Detection[] = [];
+    const failures: Array<{ model: string; error: string }> = [];
+
+    results.forEach((result, index) => {
+      const modelType = enabledModels[index];
+      if (result.status === 'fulfilled') {
+        detections.push(...result.value);
+      } else {
+        const errorMessage = result.reason instanceof Error ? result.reason.message : String(result.reason);
+        console.error(`[DETECTION FAILURE] Model ${modelType} failed:`, errorMessage);
+        failures.push({ model: modelType, error: errorMessage });
+      }
+    });
+
+    if (failures.length > 0) {
+      console.warn(
+        `[WARNING] ${failures.length}/${enabledModels.length} models failed. ` +
+        `Partial results returned. Failed models: ${failures.map(f => f.model).join(', ')}`
+      );
+    }
+
+    return { detections, failures };
   }
 
   /**
@@ -385,6 +404,7 @@ class RoboflowService {
 
   /**
    * Run detection on multiple dynamic models
+   * Uses Promise.allSettled to capture both successes and failures
    */
   async detectWithDynamicModels(
     imageBase64: string,
@@ -397,24 +417,43 @@ class RoboflowService {
       classes: string[];
     }>,
     colors: string[] = ['#22c55e', '#3b82f6', '#f97316', '#ec4899', '#8b5cf6']
-  ): Promise<Detection[]> {
+  ): Promise<{ detections: Detection[]; failures: Array<{ model: string; error: string }> }> {
     if (models.length === 0) {
       console.warn('No models provided for detection');
-      return [];
+      return { detections: [], failures: [] };
     }
 
     console.log(`Running detection on ${models.length} dynamic models`);
 
-    const detectionPromises = models.map((model, index) =>
-      this.detectWithDynamicModel(imageBase64, model, colors[index % colors.length])
-        .catch((error) => {
-          console.error(`Failed to run ${model.projectName} detection:`, error);
-          return [] as Detection[];
-        })
+    // Use Promise.allSettled to capture both successes and failures
+    const results = await Promise.allSettled(
+      models.map((model, index) =>
+        this.detectWithDynamicModel(imageBase64, model, colors[index % colors.length])
+      )
     );
 
-    const results = await Promise.all(detectionPromises);
-    return results.flat();
+    const detections: Detection[] = [];
+    const failures: Array<{ model: string; error: string }> = [];
+
+    results.forEach((result, index) => {
+      const model = models[index];
+      if (result.status === 'fulfilled') {
+        detections.push(...result.value);
+      } else {
+        const errorMessage = result.reason instanceof Error ? result.reason.message : String(result.reason);
+        console.error(`[DETECTION FAILURE] Model ${model.projectName} failed:`, errorMessage);
+        failures.push({ model: model.projectName, error: errorMessage });
+      }
+    });
+
+    if (failures.length > 0) {
+      console.warn(
+        `[WARNING] ${failures.length}/${models.length} models failed. ` +
+        `Partial results returned. Failed models: ${failures.map(f => f.model).join(', ')}`
+      );
+    }
+
+    return { detections, failures };
   }
 }
 

@@ -56,16 +56,33 @@ export async function GET(request: NextRequest) {
       where.pushedToTraining = pushedToTraining === 'true';
     }
 
-    // Use include (not select) for eager loading to avoid N+1 query problems
-    // This generates a single query with JOINs instead of N+1 queries
+    // Use include with nested select for eager loading to avoid N+1 query problems
+    // This generates a single query with JOINs, selecting only needed fields
     const annotations = await prisma.manualAnnotation.findMany({
       where,
       include: {
         session: {
-          include: {
+          select: {
+            id: true,
+            assetId: true,
+            status: true,
             asset: {
-              include: {
-                project: true
+              select: {
+                id: true,
+                fileName: true,
+                storageUrl: true,
+                gpsLatitude: true,
+                gpsLongitude: true,
+                altitude: true,
+                imageWidth: true,
+                imageHeight: true,
+                project: {
+                  select: {
+                    id: true,
+                    name: true,
+                    location: true,
+                  }
+                }
               }
             }
           }
@@ -259,21 +276,13 @@ export async function POST(request: NextRequest) {
     });
     
     // Return annotation with warning if coordinate conversion failed
-    // This ensures users are aware when annotations won't export correctly
-    const response: {
-      annotation: typeof annotation;
-      warning?: string;
-      hasGeoCoordinates: boolean;
-    } = {
-      annotation,
+    // Maintains backward compatibility by spreading annotation fields at top level
+    // New fields (warning, hasGeoCoordinates) are added without breaking existing consumers
+    return NextResponse.json({
+      ...annotation,  // Backward compatibility: annotation.id still works
       hasGeoCoordinates: geoCoordinates !== null,
-    };
-
-    if (geoConversionWarning) {
-      response.warning = geoConversionWarning;
-    }
-
-    return NextResponse.json(response);
+      ...(geoConversionWarning && { warning: geoConversionWarning }),
+    });
   } catch (error) {
     console.error('Error creating manual annotation:', error);
     return NextResponse.json(

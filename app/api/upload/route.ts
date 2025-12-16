@@ -381,9 +381,17 @@ export async function POST(request: NextRequest) {
         if (runDetection && extractedData.gpsLatitude && extractedData.gpsLongitude) {
           try {
             const imageBase64 = buffer.toString("base64");
-            detectionResults = useDynamicModels
+            const result = useDynamicModels
               ? await roboflowService.detectWithDynamicModels(imageBase64, dynamicModels!)
               : await roboflowService.detectMultipleModels(imageBase64, modelsToRun);
+
+            detectionResults = result.detections;
+
+            // Report any model failures as warnings (not silent!)
+            if (result.failures.length > 0) {
+              const failedModels = result.failures.map(f => f.model).join(', ');
+              fileWarnings.push(`Some AI models failed: ${failedModels}. Partial detection results available.`);
+            }
           } catch (detectionError) {
             console.error("Detection API call failed:", detectionError);
             fileWarnings.push("AI detection failed - image uploaded without detections");

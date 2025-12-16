@@ -40,7 +40,12 @@ export class AdvancedRoboflowService {
     if (img.width <= this.maxImageSize && img.height <= this.maxImageSize) {
       console.log('Image small enough, processing directly');
       const base64 = await this.imageToBase64(img);
-      return await roboflowService.detectMultipleModels(base64, modelTypes);
+      const result = await roboflowService.detectMultipleModels(base64, modelTypes);
+      // Log any failures but still return successful detections
+      if (result.failures.length > 0) {
+        console.warn(`Model failures during direct processing: ${result.failures.map(f => f.model).join(', ')}`);
+      }
+      return result.detections;
     }
     
     // Generate tiles for large image
@@ -53,10 +58,15 @@ export class AdvancedRoboflowService {
     for (const tile of tiles) {
       try {
         const tileBase64 = this.canvasToBase64(tile.canvas);
-        const tileDetections = await roboflowService.detectMultipleModels(tileBase64, modelTypes);
-        
+        const result = await roboflowService.detectMultipleModels(tileBase64, modelTypes);
+
+        // Log any failures but continue processing
+        if (result.failures.length > 0) {
+          console.warn(`Model failures for tile at ${tile.x},${tile.y}: ${result.failures.map(f => f.model).join(', ')}`);
+        }
+
         // Convert tile coordinates to full image coordinates
-        const convertedDetections = tileDetections.map(detection => ({
+        const convertedDetections = result.detections.map(detection => ({
           ...detection,
           tileX: detection.x,
           tileY: detection.y,
@@ -65,9 +75,9 @@ export class AdvancedRoboflowService {
           x: tile.x + detection.x,
           y: tile.y + detection.y,
         })) as TileDetection[];
-        
+
         allDetections.push(...convertedDetections);
-        
+
       } catch (error) {
         console.error(`Failed to process tile at ${tile.x},${tile.y}:`, error);
       }

@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
-import { MapContainer, TileLayer, Marker, Popup, CircleMarker, useMap, useMapEvents } from "react-leaflet";
+import { useEffect, useState } from "react";
+import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, MapPin, Camera, Layers, Settings, Download, Brain, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Layers, AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
@@ -58,10 +57,21 @@ interface Detection {
   };
 }
 
+// Create custom detection marker icon
+const createDetectionIcon = (color: string) => {
+  return L.divIcon({
+    html: `<div style="background:${color};width:16px;height:16px;border-radius:50%;border:2px solid #000;box-shadow:0 1px 3px rgba(0,0,0,0.4);"></div>`,
+    className: 'detection-marker',
+    iconSize: L.point(16, 16),
+    iconAnchor: L.point(8, 8),
+  });
+};
+
 export default function MapComponent() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [detections, setDetections] = useState<Detection[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [mapCenter, setMapCenter] = useState<[number, number]>([-27.4698, 153.0251]); // Brisbane default
   const [satelliteLayer, setSatelliteLayer] = useState(true);
   const [showDroneImages, setShowDroneImages] = useState(true);
@@ -80,18 +90,23 @@ export default function MapComponent() {
   const fetchAssets = async () => {
     try {
       const res = await fetch("/api/assets");
-      if (res.ok) {
-        const data = await res.json();
-        const assets = data.assets || [];
-        const withGPS = assets.filter((a: Asset) => a.gpsLatitude && a.gpsLongitude);
-        setAssets(withGPS);
+      if (!res.ok) {
+        throw new Error(`Failed to fetch assets: ${res.status}`);
+      }
+      const data = await res.json();
+      const assets = data.assets || [];
+      const withGPS = assets.filter((a: Asset) =>
+        a.gpsLatitude != null && a.gpsLongitude != null &&
+        Number.isFinite(a.gpsLatitude) && Number.isFinite(a.gpsLongitude)
+      );
+      setAssets(withGPS);
 
-        if (withGPS.length > 0) {
-          setMapCenter([withGPS[0].gpsLatitude!, withGPS[0].gpsLongitude!]);
-        }
+      if (withGPS.length > 0) {
+        setMapCenter([withGPS[0].gpsLatitude!, withGPS[0].gpsLongitude!]);
       }
     } catch (err) {
       console.error("Error fetching assets:", err);
+      setError(err instanceof Error ? err.message : "Failed to load assets");
     } finally {
       setLoading(false);
     }
@@ -101,12 +116,18 @@ export default function MapComponent() {
     try {
       // Use all=true to get all detections for map display
       const res = await fetch("/api/detections?all=true");
-      if (res.ok) {
-        const data = await res.json();
-        setDetections(data.filter((d: Detection) => d.centerLat && d.centerLon));
+      if (!res.ok) {
+        throw new Error(`Failed to fetch detections: ${res.status}`);
       }
+      const data = await res.json();
+      // Filter for valid coordinates (not null and not NaN)
+      setDetections(data.filter((d: Detection) =>
+        d.centerLat != null && d.centerLon != null &&
+        Number.isFinite(d.centerLat) && Number.isFinite(d.centerLon)
+      ));
     } catch (err) {
       console.error("Error fetching detections:", err);
+      // Don't set main error - detections are secondary to assets
     }
   };
 
@@ -153,6 +174,26 @@ export default function MapComponent() {
       <main className="container mx-auto px-4 py-8">
         {loading ? (
           <p>Loading map data...</p>
+        ) : error ? (
+          <div className="flex items-center justify-center h-96 bg-red-50 rounded-lg border border-red-200">
+            <div className="text-center">
+              <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold text-red-800">Failed to Load Map Data</h3>
+              <p className="text-red-600 mt-2">{error}</p>
+              <Button
+                variant="outline"
+                className="mt-4"
+                onClick={() => {
+                  setError(null);
+                  setLoading(true);
+                  fetchAssets();
+                  fetchDetections();
+                }}
+              >
+                Retry
+              </Button>
+            </div>
+          </div>
         ) : (
           <MapContainer center={center} zoom={zoom} style={{ height: "600px", width: "100%" }}>
             <TileLayer
@@ -174,7 +215,7 @@ export default function MapComponent() {
                   </Popup>
                 </Marker>
               ))}
-            {/* Use MarkerClusterGroup for detection markers to handle 5000+ markers */}
+            {/* Use MarkerClusterGroup with Marker (not CircleMarker) for proper clustering */}
             {showDetections && detections.length > 0 && (
               <MarkerClusterGroup
                 chunkedLoading
@@ -202,22 +243,15 @@ export default function MapComponent() {
                 }}
               >
                 {detections.map(d => (
-                  <CircleMarker
+                  <Marker
                     key={d.id}
-                    center={[d.centerLat!, d.centerLon!]}
-                    radius={8}
-                    pathOptions={{
-                      fillColor: d.metadata?.color || "#FF6B6B",
-                      color: "#000",
-                      weight: 2,
-                      opacity: 1,
-                      fillOpacity: 0.8,
-                    }}
+                    position={[d.centerLat!, d.centerLon!]}
+                    icon={createDetectionIcon(d.metadata?.color || "#FF6B6B")}
                   >
                     <Popup>
                       <p>{d.className} - {(d.confidence * 100).toFixed(1)}%</p>
                     </Popup>
-                  </CircleMarker>
+                  </Marker>
                 ))}
               </MarkerClusterGroup>
             )}
