@@ -20,6 +20,7 @@ export async function GET(request: NextRequest) {
 
     const searchParams = request.nextUrl.searchParams;
     const projectId = searchParams.get('projectId');
+    const returnAll = searchParams.get('all') === 'true';
 
     // If specific project requested, verify access
     if (projectId && projectId !== 'all') {
@@ -41,11 +42,13 @@ export async function GET(request: NextRequest) {
       );
     }
     if (userTeams.teamIds.length === 0) {
+      if (returnAll) {
+        return NextResponse.json([]);
+      }
       return NextResponse.json({ data: [], pagination: { page: 1, limit: DEFAULT_PAGE_SIZE, totalCount: 0, totalPages: 0, hasMore: false } });
     }
 
     // Pagination parameters (set all=true to return all results without pagination)
-    const returnAll = searchParams.get('all') === 'true';
     const pageParam = searchParams.get('page');
     const limitParam = searchParams.get('limit');
     const page = Math.max(1, parseInt(pageParam || '1', 10) || 1);

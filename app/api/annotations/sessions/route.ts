@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
       );
     }
     if (userTeams.teamIds.length === 0) {
-      return NextResponse.json({ sessions: [] });
+      return NextResponse.json([]);
     }
 
     const searchParams = request.nextUrl.searchParams;
