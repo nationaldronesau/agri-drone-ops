@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Download, FileText, Map, Filter, CheckCircle } from "lucide-react";
+import { ArrowLeft, Download, FileText, Map, Filter, CheckCircle, AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -46,6 +46,10 @@ export default function ExportPage() {
   const [includeAI, setIncludeAI] = useState(true);
   const [includeManual, setIncludeManual] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [useStreaming, setUseStreaming] = useState(false);
+
+  // Threshold for when to recommend/require streaming export
+  const LARGE_DATASET_THRESHOLD = 1000;
 
   // Helper function to escape CSV fields (RFC 4180 compliant)
   const escapeCSV = (field: any): string => {
@@ -300,11 +304,55 @@ export default function ExportPage() {
     return `ff${b}${g}${r}`;
   };
 
-  const handleExport = () => {
-    if (exportFormat === 'csv') {
+  const handleExport = async () => {
+    // Use streaming for large datasets to avoid memory issues
+    const isLargeDataset = filteredDetections.length > LARGE_DATASET_THRESHOLD;
+
+    if (useStreaming || isLargeDataset) {
+      await exportWithStreaming();
+    } else if (exportFormat === 'csv') {
       exportAsCSV();
     } else {
       exportAsKML();
+    }
+  };
+
+  const exportWithStreaming = async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({
+        format: exportFormat,
+        includeAI: includeAI.toString(),
+        includeManual: includeManual.toString(),
+      });
+
+      if (selectedProject !== "all") {
+        params.set("projectId", selectedProject);
+      }
+
+      if (selectedClasses.length > 0) {
+        params.set("classes", selectedClasses.join(","));
+      }
+
+      const response = await fetch(`/api/export/stream?${params.toString()}`);
+
+      if (!response.ok) {
+        throw new Error("Export failed");
+      }
+
+      // Create blob from stream and download
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `weed-detections-${new Date().toISOString().split("T")[0]}.${exportFormat}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Streaming export failed:", error);
+      alert("Export failed. Please try again.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -486,15 +534,38 @@ export default function ExportPage() {
                 </div>
               </div>
 
+              {/* Large Dataset Warning */}
+              {filteredDetections.length > LARGE_DATASET_THRESHOLD && (
+                <div className="p-4 bg-yellow-50 rounded-lg border border-yellow-200 flex items-start space-x-3">
+                  <AlertTriangle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <h4 className="font-semibold text-yellow-900">Large Dataset Detected</h4>
+                    <p className="text-sm text-yellow-800 mt-1">
+                      With {filteredDetections.length.toLocaleString()} detections, server-side streaming export will be used
+                      automatically to prevent browser memory issues.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* Export Button */}
               <div className="flex justify-end space-x-4">
                 <Button
                   onClick={handleExport}
-                  disabled={filteredDetections.length === 0}
+                  disabled={filteredDetections.length === 0 || loading}
                   className="bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600"
                 >
-                  <Download className="w-4 h-4 mr-2" />
-                  Export {filteredDetections.length} Detections
+                  {loading ? (
+                    <>
+                      <div className="w-4 h-4 mr-2 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Exporting...
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-4 h-4 mr-2" />
+                      Export {filteredDetections.length} Detections
+                    </>
+                  )}
                 </Button>
               </div>
             </CardContent>
