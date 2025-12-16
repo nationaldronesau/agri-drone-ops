@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { z } from "zod";
+import { logAudit } from "@/lib/utils/audit";
 
 const bodySchema = z.object({
   reason: z.string().optional(),
@@ -45,6 +46,23 @@ export async function POST(
         reviewedAt: new Date(),
         metadata: updatedMetadata,
       },
+    });
+
+    // Log rejection action for audit trail
+    await logAudit({
+      action: 'REJECT',
+      entityType: 'Detection',
+      entityId: params.id,
+      beforeState: {
+        verified: existing.verified,
+        rejected: existing.rejected,
+      },
+      afterState: {
+        verified: false,
+        rejected: true,
+        rejectionReason: parsed.data.reason || null,
+      },
+      request,
     });
 
     return NextResponse.json({ success: true });

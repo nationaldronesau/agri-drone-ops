@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { pixelToGeo } from '@/lib/utils/georeferencing';
 import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
+import { parsePaginationParams, paginatedResponse } from '@/lib/utils/pagination';
 
 export async function GET(request: NextRequest) {
   try {
@@ -23,7 +24,10 @@ export async function GET(request: NextRequest) {
       );
     }
     if (userTeams.teamIds.length === 0) {
-      return NextResponse.json({ annotations: [] });
+      return NextResponse.json({
+        annotations: [],
+        pagination: { page: 1, pageSize: 50, total: 0, totalPages: 0, hasMore: false }
+      });
     }
 
     const searchParams = request.nextUrl.searchParams;
@@ -31,6 +35,9 @@ export async function GET(request: NextRequest) {
     const weedType = searchParams.get('weedType');
     const verified = searchParams.get('verified');
     const pushedToTraining = searchParams.get('pushedToTraining');
+
+    // Parse pagination params
+    const paginationParams = parsePaginationParams(searchParams);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const where: any = {
@@ -56,44 +63,49 @@ export async function GET(request: NextRequest) {
       where.pushedToTraining = pushedToTraining === 'true';
     }
 
+    // Get total count and paginated results in parallel
     // Use include with nested select for eager loading to avoid N+1 query problems
-    // This generates a single query with JOINs, selecting only needed fields
-    const annotations = await prisma.manualAnnotation.findMany({
-      where,
-      include: {
-        session: {
-          select: {
-            id: true,
-            assetId: true,
-            status: true,
-            asset: {
-              select: {
-                id: true,
-                fileName: true,
-                storageUrl: true,
-                gpsLatitude: true,
-                gpsLongitude: true,
-                altitude: true,
-                imageWidth: true,
-                imageHeight: true,
-                project: {
-                  select: {
-                    id: true,
-                    name: true,
-                    location: true,
+    const [total, annotations] = await Promise.all([
+      prisma.manualAnnotation.count({ where }),
+      prisma.manualAnnotation.findMany({
+        where,
+        include: {
+          session: {
+            select: {
+              id: true,
+              assetId: true,
+              status: true,
+              asset: {
+                select: {
+                  id: true,
+                  fileName: true,
+                  storageUrl: true,
+                  gpsLatitude: true,
+                  gpsLongitude: true,
+                  altitude: true,
+                  imageWidth: true,
+                  imageHeight: true,
+                  project: {
+                    select: {
+                      id: true,
+                      name: true,
+                      location: true,
+                    }
                   }
                 }
               }
             }
           }
-        }
-      },
-      orderBy: {
-        createdAt: 'desc'
-      }
-    });
+        },
+        orderBy: {
+          createdAt: 'desc'
+        },
+        skip: paginationParams.skip,
+        take: paginationParams.take,
+      })
+    ]);
 
-    return NextResponse.json({ annotations });
+    return NextResponse.json(paginatedResponse(annotations, total, paginationParams, 'annotations'));
   } catch (error) {
     console.error('Error fetching manual annotations:', error);
     return NextResponse.json(

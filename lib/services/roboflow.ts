@@ -26,6 +26,12 @@ const RETRY_CONFIG = {
   maxDelayMs: 10000,
 };
 
+/**
+ * Request timeout in milliseconds (30 seconds)
+ * Prevents requests from hanging indefinitely on network issues
+ */
+const REQUEST_TIMEOUT_MS = 30000;
+
 // Helper to build SAHI workflow endpoint
 const getSahiEndpoint = () => {
   if (!ROBOFLOW_WORKSPACE) {
@@ -93,7 +99,8 @@ class RoboflowService {
   }
 
   /**
-   * Fetch with exponential backoff retry for transient errors (429, 5xx)
+   * Fetch with timeout and exponential backoff retry for transient errors (429, 5xx)
+   * Uses AbortSignal.timeout to prevent requests from hanging indefinitely
    */
   private async fetchWithRetry(
     url: string,
@@ -102,7 +109,11 @@ class RoboflowService {
   ): Promise<Response> {
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        const response = await fetch(url, options);
+        // Add timeout signal to prevent hanging requests
+        const response = await fetch(url, {
+          ...options,
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
 
         // Retry on rate limit (429) or server errors (5xx)
         if ((response.status === 429 || response.status >= 500) && attempt < retries) {
@@ -119,18 +130,31 @@ class RoboflowService {
 
         return response;
       } catch (error) {
-        // Retry on network errors
+        // Check if this was a timeout error
+        const isTimeout = error instanceof Error && error.name === 'TimeoutError';
+        if (isTimeout) {
+          console.warn(
+            `Roboflow API request timed out after ${REQUEST_TIMEOUT_MS}ms (attempt ${attempt + 1}/${retries + 1})`
+          );
+        }
+
+        // Retry on network errors (including timeouts)
         if (attempt < retries) {
           const delay = Math.min(
             RETRY_CONFIG.baseDelayMs * Math.pow(2, attempt),
             RETRY_CONFIG.maxDelayMs
           );
           console.warn(
-            `Roboflow API network error, retrying in ${delay}ms (attempt ${attempt + 1}/${retries}):`,
+            `Roboflow API ${isTimeout ? 'timeout' : 'network error'}, retrying in ${delay}ms:`,
             error
           );
           await new Promise(resolve => setTimeout(resolve, delay));
           continue;
+        }
+
+        // Provide clearer error message for timeouts
+        if (isTimeout) {
+          throw new Error(`Roboflow API request timed out after ${REQUEST_TIMEOUT_MS}ms`);
         }
         throw error;
       }

@@ -4,6 +4,7 @@ import { normalizeDetectionType } from "@/lib/utils/detection-types";
 import exifr from "exifr";
 import { z } from "zod";
 import prisma from "@/lib/db";
+import { Prisma } from "@prisma/client";
 import {
   ModelType,
   ROBOFLOW_MODELS,
@@ -539,6 +540,53 @@ export async function POST(request: NextRequest) {
         });
       } catch (fileError) {
         console.error(`Error processing file ${file.name}:`, fileError);
+
+        // Handle unique constraint violation (P2002) - race condition on s3Key
+        // This happens when two concurrent requests pass the findFirst check
+        if (
+          fileError instanceof Prisma.PrismaClientKnownRequestError &&
+          fileError.code === 'P2002'
+        ) {
+          console.log(`Concurrent duplicate detected for ${file.name}, fetching existing asset`);
+
+          // Clean up the duplicate S3 object
+          if (key) {
+            try {
+              await S3Service.deleteFile(key);
+              console.log(`Cleaned up duplicate S3 object: ${key}`);
+            } catch (cleanupError) {
+              console.error(`Failed to clean up duplicate S3 object ${key}:`, cleanupError);
+            }
+          }
+
+          // Fetch and return the existing asset
+          const existingAsset = await prisma.asset.findFirst({
+            where: { s3Key: key }
+          });
+
+          if (existingAsset) {
+            uploadResults.push({
+              id: existingAsset.id,
+              name: file.name,
+              url: existingAsset.storageUrl,
+              size: file.size,
+              success: true,
+              warning: "File already exists (detected during concurrent upload), returning existing asset",
+            });
+            continue;
+          } else {
+            // Edge case: P2002 fired but asset not found (deleted between constraint check and fetch)
+            // S3 object already cleaned up above, return error without double-delete
+            uploadResults.push({
+              name: file.name,
+              url: file.url,
+              size: file.size,
+              success: false,
+              error: "Concurrent upload conflict - please retry",
+            });
+            continue;
+          }
+        }
 
         // Clean up orphaned S3 object if transaction failed
         // This prevents orphaned files in S3 when database operations fail

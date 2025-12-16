@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { getAuthenticatedUser, getUserTeamIds, getUserTeamMemberships, canManageTeam } from '@/lib/auth/api-auth';
+import { parsePaginationParams, paginatedResponse } from '@/lib/utils/pagination';
 
 export async function GET(request: NextRequest) {
   try {
@@ -22,26 +23,38 @@ export async function GET(request: NextRequest) {
       );
     }
     if (userTeams.teamIds.length === 0) {
-      // User has no teams, return empty list
-      return NextResponse.json({ projects: [] });
+      // User has no teams, return empty list with pagination
+      return NextResponse.json({
+        projects: [],
+        pagination: { page: 1, pageSize: 50, total: 0, totalPages: 0, hasMore: false }
+      });
     }
 
-    // Fetch only projects belonging to user's teams
-    const projects = await prisma.project.findMany({
-      where: {
-        teamId: { in: userTeams.teamIds }
-      },
-      include: {
-        _count: {
-          select: { assets: true }
-        }
-      },
-      orderBy: {
-        createdAt: 'desc'
-      }
-    });
+    // Parse pagination params
+    const paginationParams = parsePaginationParams(request.nextUrl.searchParams);
 
-    return NextResponse.json({ projects });
+    // Build where clause
+    const where = { teamId: { in: userTeams.teamIds } };
+
+    // Get total count and paginated results in parallel
+    const [total, projects] = await Promise.all([
+      prisma.project.count({ where }),
+      prisma.project.findMany({
+        where,
+        include: {
+          _count: {
+            select: { assets: true }
+          }
+        },
+        orderBy: {
+          createdAt: 'desc'
+        },
+        skip: paginationParams.skip,
+        take: paginationParams.take,
+      })
+    ]);
+
+    return NextResponse.json(paginatedResponse(projects, total, paginationParams, 'projects'));
   } catch (error) {
     console.error('Failed to fetch projects:', error);
     return NextResponse.json(

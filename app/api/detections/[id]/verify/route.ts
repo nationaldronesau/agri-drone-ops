@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { z } from "zod";
+import { logAudit } from "@/lib/utils/audit";
 
 const bodySchema = z.object({
   verified: z.boolean().optional().default(true),
@@ -60,6 +61,25 @@ export async function POST(
     const detection = await prisma.detection.update({
       where: { id: params.id },
       data: updates,
+    });
+
+    // Log verification action for audit trail
+    await logAudit({
+      action: parsed.data.verified ? 'VERIFY' : 'UNVERIFY',
+      entityType: 'Detection',
+      entityId: params.id,
+      beforeState: {
+        verified: existing.verified,
+        className: existing.className,
+        boundingBox: existing.boundingBox,
+      },
+      afterState: {
+        verified: detection.verified,
+        className: detection.className,
+        boundingBox: detection.boundingBox,
+        userCorrected: detection.userCorrected,
+      },
+      request,
     });
 
     return NextResponse.json({ success: true, detection });
