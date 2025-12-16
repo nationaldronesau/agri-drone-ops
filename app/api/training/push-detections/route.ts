@@ -63,8 +63,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'roboflowProjectId is required' }, { status: 400 });
     }
 
-    // Verify project exists (skip team membership check in dev mode)
-    const projectWhere = isDev
+    // Verify project exists (skip team membership check if auth bypassed)
+    const projectWhere = isAuthBypassed()
       ? { id: projectId }
       : {
           id: projectId,

@@ -18,6 +18,10 @@
  * }
  * ```
  */
+
+// Module-level flag to ensure warning is only logged once
+let hasLoggedWarning = false;
+
 export function isAuthBypassed(): boolean {
   // Safety net: Never bypass auth in production, regardless of flags
   if (process.env.NODE_ENV === 'production') {
@@ -26,9 +30,10 @@ export function isAuthBypassed(): boolean {
 
   // Require explicit opt-in via environment variable
   if (process.env.DISABLE_AUTH === 'true') {
-    // Only log warning once in development to avoid log spam
-    if (typeof window === 'undefined') {
+    // Log warning only once per server instance to avoid log spam
+    if (!hasLoggedWarning && typeof window === 'undefined') {
       console.warn('⚠️ Authentication is disabled - development mode only');
+      hasLoggedWarning = true;
     }
     return true;
   }

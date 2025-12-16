@@ -54,7 +54,7 @@ export async function POST(
     }
 
     // Authorization check - verify user has access to this project's team
-    if (!isDev && userId) {
+    if (!isAuthBypassed() && userId) {
       const team = annotation.session.asset.project?.team;
       if (team) {
         const isMember = team.members.some((member) => member.userId === userId);
