@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
+import { parsePaginationParams, paginatedResponse } from '@/lib/utils/pagination';
 
 export async function GET(request: NextRequest) {
   try {
@@ -22,30 +23,45 @@ export async function GET(request: NextRequest) {
       );
     }
     if (userTeams.teamIds.length === 0) {
-      return NextResponse.json({ orthomosaics: [] });
+      return NextResponse.json({
+        orthomosaics: [],
+        pagination: { page: 1, pageSize: 50, total: 0, totalPages: 0, hasMore: false }
+      });
     }
 
-    const orthomosaics = await prisma.orthomosaic.findMany({
-      where: {
-        project: {
-          teamId: { in: userTeams.teamIds }
-        }
-      },
-      include: {
-        project: {
-          select: {
-            id: true,
-            name: true,
-            location: true,
-          }
-        }
-      },
-      orderBy: {
-        createdAt: 'desc'
-      }
-    });
+    // Parse pagination params
+    const paginationParams = parsePaginationParams(request.nextUrl.searchParams);
 
-    return NextResponse.json({ orthomosaics });
+    // Build where clause
+    const where = {
+      project: {
+        teamId: { in: userTeams.teamIds }
+      }
+    };
+
+    // Get total count and paginated results in parallel
+    const [total, orthomosaics] = await Promise.all([
+      prisma.orthomosaic.count({ where }),
+      prisma.orthomosaic.findMany({
+        where,
+        include: {
+          project: {
+            select: {
+              id: true,
+              name: true,
+              location: true,
+            }
+          }
+        },
+        orderBy: {
+          createdAt: 'desc'
+        },
+        skip: paginationParams.skip,
+        take: paginationParams.take,
+      })
+    ]);
+
+    return NextResponse.json(paginatedResponse(orthomosaics, total, paginationParams, 'orthomosaics'));
   } catch (error) {
     console.error('Error fetching orthomosaics:', error);
     return NextResponse.json(

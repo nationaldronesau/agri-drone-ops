@@ -164,7 +164,9 @@ model Asset {
   @@index([projectId])
   @@index([flightSession])
   @@index([gpsLatitude, gpsLongitude])
-  @@index([s3Key])
+  @@unique([s3Key])
+  @@index([createdById])
+  @@index([createdAt])
 }
 
 model ProcessingJob {
@@ -184,6 +186,8 @@ model ProcessingJob {
   detections  Detection[]
   
   @@index([projectId, status])
+  @@index([status])
+  @@index([createdAt])
 }
 
 enum JobType {
@@ -234,6 +238,8 @@ model Detection {
   @@index([centerLat, centerLon])
   @@index([verified])
   @@index([rejected])
+  @@index([createdAt])
+  @@index([className])
 }
 
 enum DetectionType {
@@ -494,6 +500,7 @@ model RoboflowClass {
 
   @@unique([projectId, className])
   @@index([projectId])
+  @@index([className])
 }
 
 model TrainingSession {
@@ -531,4 +538,49 @@ enum TrainingSessionStatus {
   PUSHING
   COMPLETED
   FAILED
+}
+
+// ============================================
+// Audit Trail for Data Modifications
+// ============================================
+
+model AuditLog {
+  id          String      @id @default(cuid())
+
+  // Action details
+  action      AuditAction
+  entityType  String      // e.g., "Detection", "ManualAnnotation", "Project"
+  entityId    String      // ID of the affected entity
+
+  // State tracking (JSON blobs for flexibility)
+  beforeState Json?       // State before modification
+  afterState  Json?       // State after modification
+
+  // Actor information
+  userId      String?     // Who performed the action (null for system actions)
+  userEmail   String?     // Cached for when user is deleted
+  ipAddress   String?     // Request origin
+  userAgent   String?     // Browser/client info
+
+  // Request context
+  requestId   String?     // Correlation ID for tracing
+
+  // Timestamps
+  createdAt   DateTime    @default(now())
+
+  // Indexes for efficient querying
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  VERIFY
+  UNVERIFY
+  REJECT
+  PUSH_TO_TRAINING
 }
