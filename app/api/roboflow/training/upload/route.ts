@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import { roboflowTrainingService } from "@/lib/services/roboflow-training";
+import { isAuthBypassed } from "@/lib/utils/auth-bypass";
 import { z } from "zod";
 
 const requestSchema = z.object({
@@ -11,9 +12,8 @@ const requestSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
-    // Skip auth check in development mode (auth is disabled)
-    const isDev = process.env.NODE_ENV === "development";
-    if (!isDev) {
+    // Auth check with explicit bypass for development
+    if (!isAuthBypassed()) {
       const session = await getServerSession(authOptions);
       if (!session?.user?.id) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

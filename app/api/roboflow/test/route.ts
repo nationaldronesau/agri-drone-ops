@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { blockInProduction } from '@/lib/utils/dev-only';
 
 export async function GET(request: NextRequest) {
+  const prodBlock = blockInProduction();
+  if (prodBlock) return prodBlock;
+
   try {
     const apiKey = process.env.ROBOFLOW_API_KEY;
     const workspace = process.env.ROBOFLOW_WORKSPACE;
@@ -14,10 +18,10 @@ export async function GET(request: NextRequest) {
     }
     
     console.log('Testing Roboflow API with workspace:', workspace);
-    
+
     // Test 1: List projects in workspace
     const projectsUrl = `https://api.roboflow.com/${workspace}/projects?api_key=${apiKey}`;
-    console.log('Fetching projects from:', projectsUrl);
+    // Note: Never log URLs containing API keys
     
     const projectsResponse = await fetch(projectsUrl);
     const projectsData = await projectsResponse.json();
@@ -30,7 +34,7 @@ export async function GET(request: NextRequest) {
       }, { status: 500 });
     }
     
-    console.log('Projects found:', projectsData);
+    console.log('Projects found:', projectsData.projects?.length || 0);
     
     // Test 2: Get details for each project
     const projectDetails = [];

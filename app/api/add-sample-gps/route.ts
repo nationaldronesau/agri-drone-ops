@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
+import { blockInProduction } from '@/lib/utils/dev-only';
 
 export async function POST(request: NextRequest) {
+  const prodBlock = blockInProduction();
+  if (prodBlock) return prodBlock;
+
   try {
     // Get assets without GPS
     const assetsWithoutGPS = await prisma.asset.findMany({

@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import exifr from 'exifr';
+import { blockInProduction } from '@/lib/utils/dev-only';
 
 export async function POST(request: NextRequest) {
+  const prodBlock = blockInProduction();
+  if (prodBlock) return prodBlock;
+
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File;
