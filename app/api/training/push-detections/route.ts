@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth/config';
-import { prisma } from '@/lib/db';
+import prisma from '@/lib/db';
 import { roboflowTrainingService } from '@/lib/services/roboflow-training';
 import { S3Service } from '@/lib/services/s3';
 import {
@@ -15,14 +15,14 @@ import {
   isUrlAllowed,
   MAX_IMAGE_SIZE,
 } from '@/lib/utils/security';
+import { isAuthBypassed } from '@/lib/utils/auth-bypass';
 
 export async function POST(request: NextRequest) {
   try {
-    // Skip auth check in development mode (auth is disabled)
-    const isDev = process.env.NODE_ENV === 'development';
+    // Auth check with explicit bypass for development
     let userId = 'dev-user';
 
-    if (!isDev) {
+    if (!isAuthBypassed()) {
       const session = await getServerSession(authOptions);
       if (!session?.user?.id) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -63,8 +63,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'roboflowProjectId is required' }, { status: 400 });
     }
 
-    // Verify project exists (skip team membership check in dev mode)
-    const projectWhere = isDev
+    // Verify project exists (skip team membership check if auth bypassed)
+    const projectWhere = isAuthBypassed()
       ? { id: projectId }
       : {
           id: projectId,

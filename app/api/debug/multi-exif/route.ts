@@ -6,8 +6,12 @@ import ExifParser from 'exif-parser';
 import fastExif from 'fast-exif';
 // @ts-ignore
 import nodeExif from 'node-exif';
+import { blockInProduction } from '@/lib/utils/dev-only';
 
 export async function POST(request: NextRequest) {
+  const prodBlock = blockInProduction();
+  if (prodBlock) return prodBlock;
+
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File;

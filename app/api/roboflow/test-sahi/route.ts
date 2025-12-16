@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { roboflowService } from '@/lib/services/roboflow';
+import { blockInProduction } from '@/lib/utils/dev-only';
 
 export async function POST(request: NextRequest) {
+  const prodBlock = blockInProduction();
+  if (prodBlock) return prodBlock;
+
   try {
     const apiKey = process.env.ROBOFLOW_API_KEY;
     
