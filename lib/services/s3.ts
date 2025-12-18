@@ -31,6 +31,78 @@ const SIGNED_URL_EXPIRY = 3600; // 1 hour
 const DEFAULT_PART_SIZE = 10 * 1024 * 1024; // 10MB chunks for multipart upload
 const MULTIPART_SIGNED_URL_TTL = 900; // 15 minutes
 
+/**
+ * SECURITY: Validates S3 keys to prevent path traversal attacks.
+ * User-controlled S3 keys must be validated before use.
+ *
+ * @param key - The S3 key to validate
+ * @returns true if the key is safe, false otherwise
+ */
+export function validateS3Key(key: string): boolean {
+  // Reject empty keys
+  if (!key || key.length === 0) {
+    return false;
+  }
+
+  // Reject keys that are too long (S3 max is 1024 bytes)
+  if (key.length > 1024) {
+    return false;
+  }
+
+  // Reject path traversal attempts
+  if (key.includes('..')) {
+    return false;
+  }
+
+  // Reject double slashes (could indicate path manipulation)
+  if (key.includes('//')) {
+    return false;
+  }
+
+  // Reject keys starting with slash (S3 keys should be relative)
+  if (key.startsWith('/')) {
+    return false;
+  }
+
+  // Only allow safe characters: alphanumeric, forward slash, underscore, hyphen, dot
+  // This is stricter than S3 allows, but safer for our use case
+  if (!/^[a-zA-Z0-9\/_\-\.]+$/.test(key)) {
+    return false;
+  }
+
+  // Reject keys that could be interpreted as special files
+  const dangerousPatterns = [
+    /^\.\.$/,           // literal ".."
+    /\/\.\.$/,          // ends with "/.."
+    /^\.\.?\//,         // starts with "./" or "../"
+    /\/\.\.?\//,        // contains "/./" or "/../"
+  ];
+
+  for (const pattern of dangerousPatterns) {
+    if (pattern.test(key)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * SECURITY: Validates and sanitizes an S3 key, throwing if invalid.
+ *
+ * @param key - The S3 key to validate
+ * @param context - Context for error messages (e.g., "uploaded file")
+ * @throws Error if the key is invalid
+ */
+export function assertValidS3Key(key: string, context: string = 'S3 key'): void {
+  if (!validateS3Key(key)) {
+    throw new Error(
+      `[SECURITY] Invalid ${context}: "${key.substring(0, 100)}${key.length > 100 ? '...' : ''}". ` +
+      `Keys must not contain path traversal sequences, must use safe characters, and must be relative paths.`
+    );
+  }
+}
+
 export interface S3UploadResult {
   key: string;
   bucket: string;
@@ -77,21 +149,27 @@ export class S3Service {
     const parsed = new URL(url);
     const hostSegments = parsed.hostname.split(".");
 
+    let bucket: string;
+    let key: string;
+
     // Virtual-hosted style: <bucket>.s3.<region>.amazonaws.com
     if (hostSegments.length >= 3 && hostSegments[1] === "s3") {
-      const bucket = hostSegments[0];
-      const key = parsed.pathname.replace(/^\//, "");
-      return { bucket, key };
+      bucket = hostSegments[0];
+      key = parsed.pathname.replace(/^\//, "");
     }
-
     // Path-style: s3.<region>.amazonaws.com/<bucket>/<key>
-    const pathSegments = parsed.pathname.split("/").filter(Boolean);
-    if (hostSegments[0] === "s3" && pathSegments.length >= 1) {
-      const [bucket, ...rest] = pathSegments;
-      return { bucket, key: rest.join("/") };
+    else if (hostSegments[0] === "s3" && parsed.pathname.split("/").filter(Boolean).length >= 1) {
+      const pathSegments = parsed.pathname.split("/").filter(Boolean);
+      bucket = pathSegments[0];
+      key = pathSegments.slice(1).join("/");
+    } else {
+      throw new Error(`Unsupported S3 URL format: ${url}`);
     }
 
-    throw new Error(`Unsupported S3 URL format: ${url}`);
+    // SECURITY: Validate the parsed key to prevent path traversal
+    assertValidS3Key(key, 'parsed S3 URL key');
+
+    return { bucket, key };
   }
 
   static buildPublicUrl(key: string, bucket: string = this.bucketName): string {
