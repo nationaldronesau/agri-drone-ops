@@ -28,7 +28,9 @@ async function fetchRoboflow(
   urlWithoutKey: string,
   options: { timeout?: number } = {}
 ): Promise<Response> {
-  const urlWithKey = `${urlWithoutKey}${urlWithoutKey.includes('?') ? '&' : '?'}api_key=${ROBOFLOW_API_KEY}`;
+  // SECURITY: URL-encode the API key in case it contains special characters (+, &, =)
+  const encodedKey = encodeURIComponent(ROBOFLOW_API_KEY || '');
+  const urlWithKey = `${urlWithoutKey}${urlWithoutKey.includes('?') ? '&' : '?'}api_key=${encodedKey}`;
 
   const response = await fetch(urlWithKey, {
     headers: createRoboflowHeaders(),

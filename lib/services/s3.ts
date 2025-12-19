@@ -35,6 +35,9 @@ const MULTIPART_SIGNED_URL_TTL = 900; // 15 minutes
  * SECURITY: Validates S3 keys to prevent path traversal attacks.
  * User-controlled S3 keys must be validated before use.
  *
+ * Allows: alphanumeric, forward slash, underscore, hyphen, dot, space, plus,
+ * parentheses, and other URL-safe characters commonly found in filenames.
+ *
  * @param key - The S3 key to validate
  * @returns true if the key is safe, false otherwise
  */
@@ -49,24 +52,27 @@ export function validateS3Key(key: string): boolean {
     return false;
   }
 
-  // Reject path traversal attempts
-  if (key.includes('..')) {
+  // CRITICAL: Reject path traversal attempts
+  // Check for ".." anywhere in the key (handles URL-encoded variants too)
+  const decodedKey = decodeURIComponent(key);
+  if (decodedKey.includes('..')) {
     return false;
   }
 
   // Reject double slashes (could indicate path manipulation)
-  if (key.includes('//')) {
+  if (decodedKey.includes('//')) {
     return false;
   }
 
   // Reject keys starting with slash (S3 keys should be relative)
-  if (key.startsWith('/')) {
+  if (decodedKey.startsWith('/')) {
     return false;
   }
 
-  // Only allow safe characters: alphanumeric, forward slash, underscore, hyphen, dot
-  // This is stricter than S3 allows, but safer for our use case
-  if (!/^[a-zA-Z0-9\/_\-\.]+$/.test(key)) {
+  // Allow common filename characters including spaces, parentheses, etc.
+  // S3 allows most characters, but we restrict to safe printable ASCII + common symbols
+  // This regex allows: a-z A-Z 0-9 / _ - . space ( ) + @ = , ! ' # $ & ~
+  if (!/^[\w\s\/\-\.\(\)\+@=,!'#$&~]+$/i.test(decodedKey)) {
     return false;
   }
 
@@ -79,7 +85,7 @@ export function validateS3Key(key: string): boolean {
   ];
 
   for (const pattern of dangerousPatterns) {
-    if (pattern.test(key)) {
+    if (pattern.test(decodedKey)) {
       return false;
     }
   }
@@ -88,7 +94,7 @@ export function validateS3Key(key: string): boolean {
 }
 
 /**
- * SECURITY: Validates and sanitizes an S3 key, throwing if invalid.
+ * SECURITY: Validates an S3 key, throwing if invalid.
  *
  * @param key - The S3 key to validate
  * @param context - Context for error messages (e.g., "uploaded file")
@@ -98,9 +104,46 @@ export function assertValidS3Key(key: string, context: string = 'S3 key'): void 
   if (!validateS3Key(key)) {
     throw new Error(
       `[SECURITY] Invalid ${context}: "${key.substring(0, 100)}${key.length > 100 ? '...' : ''}". ` +
-      `Keys must not contain path traversal sequences, must use safe characters, and must be relative paths.`
+      `Keys must not contain path traversal sequences (..) and must be relative paths.`
     );
   }
+}
+
+/**
+ * SECURITY: Sanitizes a filename for use in S3 keys.
+ * Removes/replaces potentially dangerous characters while preserving readability.
+ *
+ * @param fileName - The original filename
+ * @returns Sanitized filename safe for S3 keys
+ */
+export function sanitizeFileName(fileName: string): string {
+  // Decode any URL encoding first
+  let sanitized = fileName;
+  try {
+    sanitized = decodeURIComponent(fileName);
+  } catch {
+    // If decoding fails, use as-is
+  }
+
+  // Remove path traversal sequences
+  sanitized = sanitized.replace(/\.\./g, '');
+
+  // Remove leading/trailing slashes and dots
+  sanitized = sanitized.replace(/^[\/\.]+|[\/\.]+$/g, '');
+
+  // Replace problematic characters with underscores
+  // Keep: alphanumeric, underscore, hyphen, dot, space, parentheses
+  sanitized = sanitized.replace(/[^\w\s\-\.\(\)]/g, '_');
+
+  // Collapse multiple underscores/spaces
+  sanitized = sanitized.replace(/[_\s]+/g, '_');
+
+  // Ensure non-empty
+  if (!sanitized || sanitized.length === 0) {
+    sanitized = 'unnamed_file';
+  }
+
+  return sanitized;
 }
 
 export interface S3UploadResult {
@@ -201,15 +244,18 @@ export class S3Service {
   static generateKey(options: CreateMultipartUploadOptions): string {
     const { projectId, flightSession, orthomosaicId, fileName } = options;
 
+    // SECURITY: Sanitize filename to prevent path traversal
+    const safeFileName = sanitizeFileName(fileName);
+
     if (orthomosaicId) {
       // Orthomosaic structure
-      return `${NODE_ENV}/${projectId}/orthomosaics/${orthomosaicId}/${fileName}`;
+      return `${NODE_ENV}/${projectId}/orthomosaics/${orthomosaicId}/${safeFileName}`;
     } else if (flightSession) {
       // Drone image structure
-      return `${NODE_ENV}/${projectId}/raw-images/${flightSession}/${fileName}`;
+      return `${NODE_ENV}/${projectId}/raw-images/${flightSession}/${safeFileName}`;
     } else {
       // Fallback (misc)
-      return `${NODE_ENV}/${projectId}/misc/${fileName}`;
+      return `${NODE_ENV}/${projectId}/misc/${safeFileName}`;
     }
   }
 

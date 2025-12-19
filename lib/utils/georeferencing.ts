@@ -51,32 +51,58 @@ export interface GeoCoordinates {
 
 const EARTH_RADIUS = 6371000; // meters
 
+export interface GeoValidationResult {
+  valid: boolean;
+  error?: string;
+}
+
 /**
  * SAFETY CRITICAL: Validates computed GPS coordinates for spray drone operations.
  * Invalid coordinates could send drones to wrong locations.
  *
- * @throws Error if coordinates are NaN, Infinity, or outside valid geographic ranges
+ * Returns a validation result instead of throwing to allow graceful handling
+ * in batch processing pipelines (e.g., skip invalid detections without aborting).
+ *
+ * @returns GeoValidationResult with valid flag and optional error message
  */
-export function validateGeoCoordinates(lat: number, lon: number, context: string = 'computed'): void {
+export function validateGeoCoordinates(lat: number, lon: number, context: string = 'computed'): GeoValidationResult {
   // Check for NaN or Infinity (can occur from division by near-zero)
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-    throw new Error(
-      `[SAFETY] ${context} coordinates are invalid: lat=${lat}, lon=${lon}. ` +
-      `This may indicate extreme gimbal angles or invalid altitude values.`
-    );
+    return {
+      valid: false,
+      error: `[SAFETY] ${context} coordinates are invalid: lat=${lat}, lon=${lon}. ` +
+        `This may indicate extreme gimbal angles or invalid altitude values.`
+    };
   }
 
   // Validate geographic ranges
   if (lat < -90 || lat > 90) {
-    throw new Error(
-      `[SAFETY] ${context} latitude out of range: ${lat}. Valid range is -90 to 90.`
-    );
+    return {
+      valid: false,
+      error: `[SAFETY] ${context} latitude out of range: ${lat}. Valid range is -90 to 90.`
+    };
   }
 
   if (lon < -180 || lon > 180) {
-    throw new Error(
-      `[SAFETY] ${context} longitude out of range: ${lon}. Valid range is -180 to 180.`
-    );
+    return {
+      valid: false,
+      error: `[SAFETY] ${context} longitude out of range: ${lon}. Valid range is -180 to 180.`
+    };
+  }
+
+  return { valid: true };
+}
+
+/**
+ * SAFETY CRITICAL: Validates coordinates and throws if invalid.
+ * Use this when you want to halt processing on invalid coordinates.
+ *
+ * @throws Error if coordinates are invalid
+ */
+export function assertValidGeoCoordinates(lat: number, lon: number, context: string = 'computed'): void {
+  const result = validateGeoCoordinates(lat, lon, context);
+  if (!result.valid) {
+    throw new Error(result.error);
   }
 }
 
@@ -113,8 +139,8 @@ export function pixelToGeo(
     const resultLat = params.lrfTargetLat + offsetNorth / metersPerLat;
     const resultLon = params.lrfTargetLon + offsetEast / metersPerLon;
 
-    // SAFETY: Validate before returning
-    validateGeoCoordinates(resultLat, resultLon, 'LRF-based');
+    // SAFETY: Validate before returning (throws on invalid)
+    assertValidGeoCoordinates(resultLat, resultLon, 'LRF-based');
 
     return { lat: resultLat, lon: resultLon };
   }
@@ -169,15 +195,15 @@ export function pixelToGeo(
       const dtmLat = params.gpsLatitude + adjustedRotatedY / metersPerLat;
       const dtmLon = params.gpsLongitude + adjustedRotatedX / metersPerLon;
 
-      // SAFETY: Validate DTM-adjusted coordinates before returning
-      validateGeoCoordinates(dtmLat, dtmLon, 'DTM-adjusted');
+      // SAFETY: Validate DTM-adjusted coordinates before returning (throws on invalid)
+      assertValidGeoCoordinates(dtmLat, dtmLon, 'DTM-adjusted');
 
       return { lat: dtmLat, lon: dtmLon };
     });
   }
 
-  // SAFETY: Validate standard coordinates before returning
-  validateGeoCoordinates(finalLat, finalLon, 'standard');
+  // SAFETY: Validate standard coordinates before returning (throws on invalid)
+  assertValidGeoCoordinates(finalLat, finalLon, 'standard');
 
   return { lat: finalLat, lon: finalLon };
 }
@@ -219,8 +245,8 @@ export function pixelToGeoSimple(
   const resultLat = dronePosition.lat + latOffset;
   const resultLon = dronePosition.lon + lonOffset;
 
-  // SAFETY: Validate coordinates before returning
-  validateGeoCoordinates(resultLat, resultLon, 'simplified');
+  // SAFETY: Validate coordinates before returning (throws on invalid)
+  assertValidGeoCoordinates(resultLat, resultLon, 'simplified');
 
   return { lat: resultLat, lon: resultLon };
 }

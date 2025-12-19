@@ -5,7 +5,9 @@ import { blockInProduction } from '@/lib/utils/dev-only';
  * SECURITY: Helper to fetch from Roboflow without exposing API key in logs
  */
 async function fetchRoboflowTest(baseUrl: string, apiKey: string): Promise<Response> {
-  const urlWithKey = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}api_key=${apiKey}`;
+  // URL-encode the API key in case it contains special characters (+, &, =)
+  const encodedKey = encodeURIComponent(apiKey);
+  const urlWithKey = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}api_key=${encodedKey}`;
   return fetch(urlWithKey);
 }
 
