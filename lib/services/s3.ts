@@ -54,7 +54,14 @@ export function validateS3Key(key: string): boolean {
 
   // CRITICAL: Reject path traversal attempts
   // Check for ".." anywhere in the key (handles URL-encoded variants too)
-  const decodedKey = decodeURIComponent(key);
+  let decodedKey: string;
+  try {
+    decodedKey = decodeURIComponent(key);
+  } catch {
+    // Malformed percent encoding - reject the key
+    return false;
+  }
+
   if (decodedKey.includes('..')) {
     return false;
   }
@@ -69,10 +76,11 @@ export function validateS3Key(key: string): boolean {
     return false;
   }
 
-  // Allow common filename characters including spaces, parentheses, etc.
+  // Allow common filename characters including literal spaces, parentheses, etc.
   // S3 allows most characters, but we restrict to safe printable ASCII + common symbols
-  // This regex allows: a-z A-Z 0-9 / _ - . space ( ) + @ = , ! ' # $ & ~
-  if (!/^[\w\s\/\-\.\(\)\+@=,!'#$&~]+$/i.test(decodedKey)) {
+  // Uses literal space (not \s which includes tabs/newlines)
+  // Allows: a-z A-Z 0-9 / _ - . space ( ) + @ = , ! ' # $ & ~
+  if (!/^[\w \/\-\.\(\)\+@=,!'#$&~]+$/i.test(decodedKey)) {
     return false;
   }
 
@@ -217,7 +225,9 @@ export class S3Service {
 
   static buildPublicUrl(key: string, bucket: string = this.bucketName): string {
     const region = process.env.AWS_REGION || "ap-southeast-2";
-    return `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
+    // URL-encode each path segment to handle spaces, #, etc.
+    const encodedKey = key.split('/').map(segment => encodeURIComponent(segment)).join('/');
+    return `https://${bucket}.s3.${region}.amazonaws.com/${encodedKey}`;
   }
 
     /**
