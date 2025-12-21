@@ -454,27 +454,44 @@ export async function POST(request: NextRequest) {
 
             // Prepare all valid detections for batch creation
             const validDetections: any[] = [];
-            for (const detection of detectionResults) {
-              const geoCoords = pixelToGeo(
-                detection.x,
-                detection.y,
-                extractedData.imageWidth,
-                extractedData.imageHeight,
-                extractedData.gpsLatitude,
-                extractedData.gpsLongitude,
-                extractedData.altitude || 100,
-                extractedData.gimbalPitch || 0,
-                extractedData.gimbalRoll || 0,
-                extractedData.gimbalYaw || 0,
-              );
 
-              // SAFETY CRITICAL: Validate detection coordinates before saving
-              if (!isValidGPSCoordinate(geoCoords.latitude, geoCoords.longitude)) {
-                console.warn(`[SAFETY] Skipping detection with invalid coordinates for ${file.name}: lat=${geoCoords.latitude}, lon=${geoCoords.longitude}, class=${detection.class}`);
+            // Build georeferencing params once for this image
+            const geoParams = {
+              gpsLatitude: extractedData.gpsLatitude!,
+              gpsLongitude: extractedData.gpsLongitude!,
+              altitude: extractedData.altitude || 100,
+              gimbalRoll: extractedData.gimbalRoll || 0,
+              gimbalPitch: extractedData.gimbalPitch || 0,
+              gimbalYaw: extractedData.gimbalYaw || 0,
+              cameraFov: 84, // Default FOV for DJI drones
+              imageWidth: extractedData.imageWidth!,
+              imageHeight: extractedData.imageHeight!,
+              lrfDistance: extractedData.lrfDistance ?? undefined,
+              lrfTargetLat: extractedData.lrfTargetLat ?? undefined,
+              lrfTargetLon: extractedData.lrfTargetLon ?? undefined,
+            };
+
+            for (const detection of detectionResults) {
+              try {
+                const pixel = { x: detection.x, y: detection.y };
+                const geoResult = pixelToGeo(geoParams, pixel);
+
+                // Handle potential Promise return (when DTM is used)
+                const geoCoords = geoResult instanceof Promise ? await geoResult : geoResult;
+
+                // SAFETY CRITICAL: Validate detection coordinates before saving
+                // pixelToGeo returns { lat, lon } not { latitude, longitude }
+                if (!isValidGPSCoordinate(geoCoords.lat, geoCoords.lon)) {
+                  console.warn(`[SAFETY] Skipping detection with invalid coordinates for ${file.name}: lat=${geoCoords.lat}, lon=${geoCoords.lon}, class=${detection.class}`);
+                  continue;
+                }
+
+                validDetections.push({ detection, geoCoords });
+              } catch (geoError) {
+                // SAFETY: Skip this detection if georeferencing fails, don't abort entire upload
+                console.warn(`[SAFETY] Georeferencing failed for detection in ${file.name}, class=${detection.class}:`, geoError);
                 continue;
               }
-
-              validDetections.push({ detection, geoCoords });
             }
 
             // Create all detections within the transaction
@@ -494,10 +511,10 @@ export async function POST(request: NextRequest) {
                   },
                   geoCoordinates: {
                     type: "Point",
-                    coordinates: [geoCoords.longitude, geoCoords.latitude],
+                    coordinates: [geoCoords.lon, geoCoords.lat],
                   },
-                  centerLat: geoCoords.latitude,
-                  centerLon: geoCoords.longitude,
+                  centerLat: geoCoords.lat,
+                  centerLon: geoCoords.lon,
                   metadata: {
                     modelType: detection.modelType,
                     color: detection.color,

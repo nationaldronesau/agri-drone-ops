@@ -31,6 +31,129 @@ const SIGNED_URL_EXPIRY = 3600; // 1 hour
 const DEFAULT_PART_SIZE = 10 * 1024 * 1024; // 10MB chunks for multipart upload
 const MULTIPART_SIGNED_URL_TTL = 900; // 15 minutes
 
+/**
+ * SECURITY: Validates S3 keys to prevent path traversal attacks.
+ * User-controlled S3 keys must be validated before use.
+ *
+ * Allows: alphanumeric, forward slash, underscore, hyphen, dot, space, plus,
+ * parentheses, and other URL-safe characters commonly found in filenames.
+ *
+ * @param key - The S3 key to validate
+ * @returns true if the key is safe, false otherwise
+ */
+export function validateS3Key(key: string): boolean {
+  // Reject empty keys
+  if (!key || key.length === 0) {
+    return false;
+  }
+
+  // Reject keys that are too long (S3 max is 1024 bytes)
+  if (key.length > 1024) {
+    return false;
+  }
+
+  // CRITICAL: Reject path traversal attempts
+  // Check for ".." anywhere in the key (handles URL-encoded variants too)
+  let decodedKey: string;
+  try {
+    decodedKey = decodeURIComponent(key);
+  } catch {
+    // Malformed percent encoding - reject the key
+    return false;
+  }
+
+  if (decodedKey.includes('..')) {
+    return false;
+  }
+
+  // Reject double slashes (could indicate path manipulation)
+  if (decodedKey.includes('//')) {
+    return false;
+  }
+
+  // Reject keys starting with slash (S3 keys should be relative)
+  if (decodedKey.startsWith('/')) {
+    return false;
+  }
+
+  // Allow common filename characters including literal spaces, parentheses, etc.
+  // S3 allows most characters, but we restrict to safe printable ASCII + common symbols
+  // Uses literal space (not \s which includes tabs/newlines)
+  // Allows: a-z A-Z 0-9 / _ - . space ( ) + @ = , ! ' # $ & ~
+  if (!/^[\w \/\-\.\(\)\+@=,!'#$&~]+$/i.test(decodedKey)) {
+    return false;
+  }
+
+  // Reject keys that could be interpreted as special files
+  const dangerousPatterns = [
+    /^\.\.$/,           // literal ".."
+    /\/\.\.$/,          // ends with "/.."
+    /^\.\.?\//,         // starts with "./" or "../"
+    /\/\.\.?\//,        // contains "/./" or "/../"
+  ];
+
+  for (const pattern of dangerousPatterns) {
+    if (pattern.test(decodedKey)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * SECURITY: Validates an S3 key, throwing if invalid.
+ *
+ * @param key - The S3 key to validate
+ * @param context - Context for error messages (e.g., "uploaded file")
+ * @throws Error if the key is invalid
+ */
+export function assertValidS3Key(key: string, context: string = 'S3 key'): void {
+  if (!validateS3Key(key)) {
+    throw new Error(
+      `[SECURITY] Invalid ${context}: "${key.substring(0, 100)}${key.length > 100 ? '...' : ''}". ` +
+      `Keys must not contain path traversal sequences (..) and must be relative paths.`
+    );
+  }
+}
+
+/**
+ * SECURITY: Sanitizes a filename for use in S3 keys.
+ * Removes/replaces potentially dangerous characters while preserving readability.
+ *
+ * @param fileName - The original filename
+ * @returns Sanitized filename safe for S3 keys
+ */
+export function sanitizeFileName(fileName: string): string {
+  // Decode any URL encoding first
+  let sanitized = fileName;
+  try {
+    sanitized = decodeURIComponent(fileName);
+  } catch {
+    // If decoding fails, use as-is
+  }
+
+  // Remove path traversal sequences
+  sanitized = sanitized.replace(/\.\./g, '');
+
+  // Remove leading/trailing slashes and dots
+  sanitized = sanitized.replace(/^[\/\.]+|[\/\.]+$/g, '');
+
+  // Replace problematic characters with underscores
+  // Keep: alphanumeric, underscore, hyphen, dot, space, parentheses
+  sanitized = sanitized.replace(/[^\w\s\-\.\(\)]/g, '_');
+
+  // Collapse multiple underscores/spaces
+  sanitized = sanitized.replace(/[_\s]+/g, '_');
+
+  // Ensure non-empty
+  if (!sanitized || sanitized.length === 0) {
+    sanitized = 'unnamed_file';
+  }
+
+  return sanitized;
+}
+
 export interface S3UploadResult {
   key: string;
   bucket: string;
@@ -77,26 +200,46 @@ export class S3Service {
     const parsed = new URL(url);
     const hostSegments = parsed.hostname.split(".");
 
+    let bucket: string;
+    let encodedKey: string;
+
     // Virtual-hosted style: <bucket>.s3.<region>.amazonaws.com
     if (hostSegments.length >= 3 && hostSegments[1] === "s3") {
-      const bucket = hostSegments[0];
-      const key = parsed.pathname.replace(/^\//, "");
-      return { bucket, key };
+      bucket = hostSegments[0];
+      encodedKey = parsed.pathname.replace(/^\//, "");
     }
-
     // Path-style: s3.<region>.amazonaws.com/<bucket>/<key>
-    const pathSegments = parsed.pathname.split("/").filter(Boolean);
-    if (hostSegments[0] === "s3" && pathSegments.length >= 1) {
-      const [bucket, ...rest] = pathSegments;
-      return { bucket, key: rest.join("/") };
+    else if (hostSegments[0] === "s3" && parsed.pathname.split("/").filter(Boolean).length >= 1) {
+      const pathSegments = parsed.pathname.split("/").filter(Boolean);
+      bucket = pathSegments[0];
+      encodedKey = pathSegments.slice(1).join("/");
+    } else {
+      throw new Error(`Unsupported S3 URL format: ${url}`);
     }
 
-    throw new Error(`Unsupported S3 URL format: ${url}`);
+    // Decode the key since URL.pathname returns percent-encoded values
+    // This ensures round-trip consistency: parseS3Url returns decoded key,
+    // buildPublicUrl encodes it when constructing the URL
+    let key: string;
+    try {
+      key = decodeURIComponent(encodedKey);
+    } catch {
+      // If decoding fails (malformed %), use the encoded key as-is
+      // validateS3Key will catch any invalid characters
+      key = encodedKey;
+    }
+
+    // SECURITY: Validate the parsed key to prevent path traversal
+    assertValidS3Key(key, 'parsed S3 URL key');
+
+    return { bucket, key };
   }
 
   static buildPublicUrl(key: string, bucket: string = this.bucketName): string {
     const region = process.env.AWS_REGION || "ap-southeast-2";
-    return `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
+    // URL-encode each path segment to handle spaces, #, etc.
+    const encodedKey = key.split('/').map(segment => encodeURIComponent(segment)).join('/');
+    return `https://${bucket}.s3.${region}.amazonaws.com/${encodedKey}`;
   }
 
     /**
@@ -123,15 +266,18 @@ export class S3Service {
   static generateKey(options: CreateMultipartUploadOptions): string {
     const { projectId, flightSession, orthomosaicId, fileName } = options;
 
+    // SECURITY: Sanitize filename to prevent path traversal
+    const safeFileName = sanitizeFileName(fileName);
+
     if (orthomosaicId) {
       // Orthomosaic structure
-      return `${NODE_ENV}/${projectId}/orthomosaics/${orthomosaicId}/${fileName}`;
+      return `${NODE_ENV}/${projectId}/orthomosaics/${orthomosaicId}/${safeFileName}`;
     } else if (flightSession) {
       // Drone image structure
-      return `${NODE_ENV}/${projectId}/raw-images/${flightSession}/${fileName}`;
+      return `${NODE_ENV}/${projectId}/raw-images/${flightSession}/${safeFileName}`;
     } else {
       // Fallback (misc)
-      return `${NODE_ENV}/${projectId}/misc/${fileName}`;
+      return `${NODE_ENV}/${projectId}/misc/${safeFileName}`;
     }
   }
 

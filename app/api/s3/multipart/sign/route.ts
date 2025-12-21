@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
-import { S3Service } from "@/lib/services/s3";
+import { S3Service, validateS3Key } from "@/lib/services/s3";
 import { z } from "zod";
 
 const requestSchema = z.object({
@@ -32,7 +32,14 @@ export async function POST(request: NextRequest) {
     }
 
     const { key, uploadId, partNumber, contentLength } = parsed.data;
-    
+
+    // SECURITY: Validate S3 key to prevent path traversal attacks
+    if (!validateS3Key(key)) {
+      return NextResponse.json(
+        { error: "Invalid S3 key format" },
+        { status: 400 },
+      );
+    }
 
     const presign = await S3Service.signMultipartUploadPart({
       key,

@@ -81,3 +81,4 @@ infrastructure/terraform/.terraform.lock.hcl
 infrastructure/terraform/lambda_trigger.zip
 *.tfvars
 !*.tfvars.example
+test-assets/
