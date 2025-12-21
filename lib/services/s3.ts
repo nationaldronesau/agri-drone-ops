@@ -201,20 +201,32 @@ export class S3Service {
     const hostSegments = parsed.hostname.split(".");
 
     let bucket: string;
-    let key: string;
+    let encodedKey: string;
 
     // Virtual-hosted style: <bucket>.s3.<region>.amazonaws.com
     if (hostSegments.length >= 3 && hostSegments[1] === "s3") {
       bucket = hostSegments[0];
-      key = parsed.pathname.replace(/^\//, "");
+      encodedKey = parsed.pathname.replace(/^\//, "");
     }
     // Path-style: s3.<region>.amazonaws.com/<bucket>/<key>
     else if (hostSegments[0] === "s3" && parsed.pathname.split("/").filter(Boolean).length >= 1) {
       const pathSegments = parsed.pathname.split("/").filter(Boolean);
       bucket = pathSegments[0];
-      key = pathSegments.slice(1).join("/");
+      encodedKey = pathSegments.slice(1).join("/");
     } else {
       throw new Error(`Unsupported S3 URL format: ${url}`);
+    }
+
+    // Decode the key since URL.pathname returns percent-encoded values
+    // This ensures round-trip consistency: parseS3Url returns decoded key,
+    // buildPublicUrl encodes it when constructing the URL
+    let key: string;
+    try {
+      key = decodeURIComponent(encodedKey);
+    } catch {
+      // If decoding fails (malformed %), use the encoded key as-is
+      // validateS3Key will catch any invalid characters
+      key = encodedKey;
     }
 
     // SECURITY: Validate the parsed key to prevent path traversal
