@@ -1,20 +1,29 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
-  typescript: {
-    ignoreBuildErrors: true,
-  },
-  allowedDevOrigins: ['localhost', 'localhost'],
+  // ESLint and TypeScript errors are now enforced during builds
+  // Run `npm run lint` and `npx tsc --noEmit` locally before pushing
+  allowedDevOrigins: ['localhost'],
   output: 'standalone',
   images: {
     domains: ['localhost'],
+    // Add production domains as needed
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: '*.amazonaws.com',
+      },
+      {
+        protocol: 'https',
+        hostname: '*.cloudfront.net',
+      },
+    ],
   },
   experimental: {
     serverActions: {
-      bodySizeLimit: '500mb',
+      // Large body size needed for drone image uploads
+      // Rate limiting and auth protect against abuse
+      bodySizeLimit: '100mb',
     },
   },
 };
