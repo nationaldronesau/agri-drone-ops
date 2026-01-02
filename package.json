@@ -7,6 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:debug": "playwright test --debug",
     "worker": "tsx --env-file=.env workers/batch-worker.ts",
     "worker:watch": "tsx --watch --env-file=.env workers/batch-worker.ts",
     "docker:build": "docker build -t agridrone-ops .",
@@ -74,6 +78,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
+    "@playwright/test": "^1.57.0",
     "@types/leaflet": "^1.9.20",
     "@types/mapbox-gl": "^3.4.1",
     "@types/node": "^20",
