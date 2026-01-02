@@ -20,7 +20,7 @@ test.describe('Smoke Tests', () => {
 
   test('export page loads', async ({ page }) => {
     await page.goto('/export');
-    await expect(page.locator('text=Export Data')).toBeVisible();
+    await expect(page.locator('text=Export Detection Data')).toBeVisible();
   });
 
   test('upload page loads', async ({ page }) => {
@@ -42,6 +42,6 @@ test.describe('Smoke Tests', () => {
 
     // Should be on export page
     await expect(page).toHaveURL(/\/export/);
-    await expect(page.locator('text=Export Data')).toBeVisible();
+    await expect(page.locator('text=Export Detection Data')).toBeVisible();
   });
 });
