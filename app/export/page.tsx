@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Download, FileText, Map, Filter, CheckCircle, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Download, FileText, Map, Filter, CheckCircle, AlertTriangle, Database } from "lucide-react";
 import Link from "next/link";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -41,7 +41,7 @@ export default function ExportPage() {
   const [detections, setDetections] = useState<Detection[]>([]);
   const [selectedProject, setSelectedProject] = useState<string>("all");
   const [selectedClasses, setSelectedClasses] = useState<string[]>([]);
-  const [exportFormat, setExportFormat] = useState<"csv" | "kml">("csv");
+  const [exportFormat, setExportFormat] = useState<"csv" | "kml" | "shapefile">("csv");
   const [includeMetadata, setIncludeMetadata] = useState(true);
   const [includeAI, setIncludeAI] = useState(true);
   const [includeManual, setIncludeManual] = useState(true);
@@ -308,7 +308,8 @@ export default function ExportPage() {
     // Use streaming for large datasets to avoid memory issues
     const isLargeDataset = filteredDetections.length > LARGE_DATASET_THRESHOLD;
 
-    if (useStreaming || isLargeDataset) {
+    // Shapefile always requires server-side generation
+    if (exportFormat === 'shapefile' || useStreaming || isLargeDataset) {
       await exportWithStreaming();
     } else if (exportFormat === 'csv') {
       exportAsCSV();
@@ -345,7 +346,9 @@ export default function ExportPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `weed-detections-${new Date().toISOString().split("T")[0]}.${exportFormat}`;
+      // Shapefile exports as ZIP, other formats use their extension
+      const fileExtension = exportFormat === 'shapefile' ? 'zip' : exportFormat;
+      a.download = `weed-detections-${new Date().toISOString().split("T")[0]}.${fileExtension}`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (error) {
@@ -437,11 +440,11 @@ export default function ExportPage() {
               {/* Export Format */}
               <div className="space-y-2">
                 <Label>Export Format</Label>
-                <div className="grid grid-cols-2 gap-4">
-                  <div 
+                <div className="grid grid-cols-3 gap-4">
+                  <div
                     className={`p-4 border-2 rounded-lg cursor-pointer transition-colors ${
-                      exportFormat === 'csv' 
-                        ? 'border-green-500 bg-green-50' 
+                      exportFormat === 'csv'
+                        ? 'border-green-500 bg-green-50'
                         : 'border-gray-200 hover:border-gray-300'
                     }`}
                     onClick={() => setExportFormat('csv')}
@@ -456,10 +459,10 @@ export default function ExportPage() {
                       </div>
                     </div>
                   </div>
-                  <div 
+                  <div
                     className={`p-4 border-2 rounded-lg cursor-pointer transition-colors ${
-                      exportFormat === 'kml' 
-                        ? 'border-blue-500 bg-blue-50' 
+                      exportFormat === 'kml'
+                        ? 'border-blue-500 bg-blue-50'
                         : 'border-gray-200 hover:border-gray-300'
                     }`}
                     onClick={() => setExportFormat('kml')}
@@ -470,6 +473,24 @@ export default function ExportPage() {
                         <h4 className="font-semibold">KML Format</h4>
                         <p className="text-sm text-gray-600">
                           Map visualization, works with Google Earth
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  <div
+                    className={`p-4 border-2 rounded-lg cursor-pointer transition-colors ${
+                      exportFormat === 'shapefile'
+                        ? 'border-purple-500 bg-purple-50'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                    onClick={() => setExportFormat('shapefile')}
+                  >
+                    <div className="flex items-center space-x-3">
+                      <Database className="w-8 h-8 text-purple-600" />
+                      <div>
+                        <h4 className="font-semibold">Shapefile</h4>
+                        <p className="text-sm text-gray-600">
+                          GIS compatible, for DJI spray drones
                         </p>
                       </div>
                     </div>
@@ -593,6 +614,15 @@ export default function ExportPage() {
                   <li>Import into GIS software (QGIS, ArcGIS)</li>
                   <li>Visualize detection patterns and distribution</li>
                   <li>Share visual reports with stakeholders</li>
+                </ul>
+              </div>
+              <div>
+                <h4 className="font-semibold text-gray-900 mb-1">Shapefile Format:</h4>
+                <ul className="space-y-1 list-disc list-inside">
+                  <li>Direct import into DJI Terra and spray drone mission planners</li>
+                  <li>Compatible with QGIS, ArcGIS, and professional GIS software</li>
+                  <li>Includes WGS84 projection (.prj) for accurate positioning</li>
+                  <li>Industry standard format for agricultural operations</li>
                 </ul>
               </div>
             </CardContent>
