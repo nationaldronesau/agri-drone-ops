@@ -32,12 +32,34 @@ export interface DetectionRecord {
 }
 
 /**
+ * Confidence level enum values from Prisma schema
+ */
+type ConfidenceLevel = 'CERTAIN' | 'LIKELY' | 'UNCERTAIN';
+
+/**
+ * Convert confidence level enum to numeric percentage
+ * Maps string enum values to meaningful numeric confidence scores
+ */
+function confidenceLevelToNumber(level: ConfidenceLevel | string | null): number {
+  switch (level) {
+    case 'CERTAIN':
+      return 100;
+    case 'LIKELY':
+      return 75;
+    case 'UNCERTAIN':
+      return 50;
+    default:
+      return 0;
+  }
+}
+
+/**
  * Annotation record from database
  */
 export interface AnnotationRecord {
   id: string;
   weedType: string;
-  confidence: number | null;
+  confidence: ConfidenceLevel | string | null;
   centerLat?: number | null;
   centerLon?: number | null;
   coordinates: unknown; // Pixel coordinates or coordinate object
@@ -199,7 +221,7 @@ export function transformAnnotationsToFeatures(
       properties: {
         ID: truncate(annotation.id, 50),
         CLASS: truncate(annotation.weedType, 50),
-        CONFIDENCE: Math.round((annotation.confidence ?? 0) * 100),
+        CONFIDENCE: confidenceLevelToNumber(annotation.confidence),
         TYPE: 'Manual',
         ASSET: truncate(annotation.session.asset.fileName, 100),
         PROJECT: truncate(annotation.session.asset.project?.name ?? '', 50),
