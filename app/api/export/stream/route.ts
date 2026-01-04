@@ -1,6 +1,11 @@
 import { NextRequest } from "next/server";
 import { getAuthenticatedUser, getUserTeamIds } from "@/lib/auth/api-auth";
 import prisma from "@/lib/db";
+import {
+  generateShapefileExport,
+  type DetectionRecord,
+  type AnnotationRecord,
+} from "@/lib/services/shapefile";
 
 const BATCH_SIZE = 500; // Process 500 records at a time
 const QUERY_TIMEOUT = 30000; // 30 second timeout for database queries
@@ -51,8 +56,8 @@ export async function GET(request: NextRequest) {
   const classFilter = searchParams.get("classes")?.split(",").filter(Boolean) || [];
 
   // Validate format
-  if (format !== "csv" && format !== "kml") {
-    return new Response(JSON.stringify({ error: "Invalid format. Use 'csv' or 'kml'" }), {
+  if (format !== "csv" && format !== "kml" && format !== "shapefile") {
+    return new Response(JSON.stringify({ error: "Invalid format. Use 'csv', 'kml', or 'shapefile'" }), {
       status: 400,
       headers: { "Content-Type": "application/json" },
     });
@@ -69,6 +74,11 @@ export async function GET(request: NextRequest) {
 
   if (projectId && projectId !== "all") {
     baseWhere.asset.projectId = projectId;
+  }
+
+  // Shapefile export uses a different approach (generates ZIP, not streaming text)
+  if (format === "shapefile") {
+    return handleShapefileExport(baseWhere, includeAI, includeManual, classFilter);
   }
 
   // Create streaming response
@@ -513,4 +523,159 @@ function escapeXML(str: any): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+/**
+ * Handle shapefile export
+ * Generates a ZIP file containing .shp, .shx, .dbf, and .prj files
+ */
+async function handleShapefileExport(
+  baseWhere: any,
+  includeAI: boolean,
+  includeManual: boolean,
+  classFilter: string[]
+): Promise<Response> {
+  try {
+    const allDetections: DetectionRecord[] = [];
+    const allAnnotations: AnnotationRecord[] = [];
+
+    // Fetch all AI detections in batches
+    if (includeAI) {
+      let offset = 0;
+      let hasMore = true;
+
+      while (hasMore) {
+        const detections = await queryWithTimeout(
+          prisma.detection.findMany({
+            where: {
+              ...baseWhere,
+              type: "AI",
+              ...(classFilter.length > 0 ? { className: { in: classFilter } } : {}),
+            },
+            select: {
+              id: true,
+              className: true,
+              confidence: true,
+              centerLat: true,
+              centerLon: true,
+              createdAt: true,
+              asset: {
+                select: {
+                  fileName: true,
+                  project: {
+                    select: {
+                      name: true,
+                      location: true,
+                    },
+                  },
+                },
+              },
+            },
+            skip: offset,
+            take: BATCH_SIZE,
+            orderBy: { createdAt: "desc" },
+          }),
+          QUERY_TIMEOUT
+        );
+
+        allDetections.push(...(detections as DetectionRecord[]));
+        offset += BATCH_SIZE;
+        hasMore = detections.length === BATCH_SIZE;
+      }
+    }
+
+    // Fetch all manual annotations in batches
+    if (includeManual) {
+      let offset = 0;
+      let hasMore = true;
+
+      while (hasMore) {
+        const annotations = await queryWithTimeout(
+          prisma.manualAnnotation.findMany({
+            where: {
+              session: {
+                asset: baseWhere.asset,
+              },
+              ...(classFilter.length > 0 ? { weedType: { in: classFilter } } : {}),
+            },
+            select: {
+              id: true,
+              weedType: true,
+              confidence: true,
+              centerLat: true,
+              centerLon: true,
+              coordinates: true,
+              notes: true,
+              createdAt: true,
+              session: {
+                select: {
+                  asset: {
+                    select: {
+                      fileName: true,
+                      project: {
+                        select: {
+                          name: true,
+                          location: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            skip: offset,
+            take: BATCH_SIZE,
+            orderBy: { createdAt: "desc" },
+          }),
+          QUERY_TIMEOUT
+        );
+
+        allAnnotations.push(...(annotations as AnnotationRecord[]));
+        offset += BATCH_SIZE;
+        hasMore = annotations.length === BATCH_SIZE;
+      }
+    }
+
+    // Check if we have any data to export
+    if (allDetections.length === 0 && allAnnotations.length === 0) {
+      return new Response(
+        JSON.stringify({ error: "No records found matching the selected filters" }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    // Generate shapefile
+    const { buffer, stats } = await generateShapefileExport(allDetections, allAnnotations);
+
+    // Log export stats
+    console.log(`Shapefile export: ${stats.exported} records exported, ${stats.skippedInvalidCoords} skipped`);
+
+    // Return ZIP file
+    const filename = `weed-detections-${new Date().toISOString().split("T")[0]}.zip`;
+
+    return new Response(buffer, {
+      headers: {
+        "Content-Type": "application/zip",
+        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Content-Length": buffer.length.toString(),
+        "X-Export-Total": stats.exported.toString(),
+        "X-Export-Skipped": stats.skippedInvalidCoords.toString(),
+      },
+    });
+  } catch (error) {
+    console.error("Shapefile export error:", error);
+    return new Response(
+      JSON.stringify({
+        error: "Failed to generate shapefile",
+        details: error instanceof Error ? error.message : "Unknown error",
+      }),
+      {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+  }
 }
