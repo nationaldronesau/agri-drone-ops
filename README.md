@@ -11,7 +11,7 @@ An AI-powered platform for agricultural drone operations. Upload drone imagery, 
 - 👥 **Team Collaboration** - Create teams, manage permissions, and work together
 - 📊 **Historical Analysis** - Compare farm data over time
 - 💊 **Chemical Recommendations** - Get species-specific treatment suggestions
-- 📥 **Export Options** - Generate CSV/KML files for spray drones
+- 📥 **Export Options** - Generate CSV/KML/Shapefile files for spray drones and GIS software
 
 ## Tech Stack
 
@@ -98,13 +98,18 @@ agri-drone-ops/
 ✅ Authentication system with NextAuth
 ✅ Database schema design
 ✅ Georeferencing utilities integrated
+✅ Image upload with EXIF metadata extraction
+✅ Roboflow AI detection integration
+✅ Manual annotation interface (polygon drawing)
+✅ Interactive map visualization with filtering
+✅ CSV/KML export for spray drones
+✅ **Shapefile export** for DJI Terra & GIS software
+✅ E2E testing framework (Playwright)
 
 🚧 Next steps:
-- Image upload functionality
-- Roboflow API integration
-- Manual annotation interface
-- Map visualization
-- Batch processing system
+- User management & organizations
+- AWS production deployment
+- Orthomosaic tile processing
 
 ## Contributing
 
@@ -112,4 +117,4 @@ This is a private project for National Drones. Please contact the development te
 
 ## License
 
-Proprietary - National Drones © 2024
+Proprietary - National Drones © 2024-2026

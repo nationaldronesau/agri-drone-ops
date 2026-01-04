@@ -4,6 +4,23 @@ All notable changes to the AgriDrone Ops platform are documented here.
 
 ## [Unreleased]
 
+### Added
+- **Shapefile Export** - ESRI-compatible shapefile generation for DJI Terra and GIS software
+  - Generates `.shp`, `.dbf`, `.prj` files in a ZIP archive
+  - WGS84 projection (EPSG:4326) for universal compatibility
+  - Includes detection class, confidence scores, project metadata
+  - Confidence level enum conversion (CERTAIN→100, LIKELY→75, UNCERTAIN→50)
+  - Coordinate validation to prevent invalid spray drone waypoints
+  - Location: `lib/services/shapefile.ts`, `app/api/export/stream/route.ts`
+
+- **E2E Testing Framework** - Playwright-based end-to-end testing suite
+  - Smoke tests for all core pages (dashboard, export, upload, map)
+  - Export page tests (format selection, data source toggles, downloads)
+  - API endpoint tests with authentication handling
+  - Radix UI component compatibility (checkbox state assertions)
+  - Run with: `npx playwright test`
+  - Location: `e2e/smoke.spec.ts`, `e2e/export.spec.ts`
+
 ### Fixed
 - **Training Hub Source Images Dropdown** - Projects now load correctly in the dropdown
   - Standardized `/api/projects` to return `{ projects: [...] }` format
