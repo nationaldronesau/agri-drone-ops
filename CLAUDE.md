@@ -464,10 +464,19 @@ The AgriDrone Ops platform is now **production-ready** with:
 - **Export Capabilities**:
   - CSV export for spray drone mission planning
   - KML export for Google Earth visualization with polygon geometry
+  - **Shapefile export** for DJI Terra and GIS software (ESRI-compatible .shp/.dbf/.prj)
   - Filter by project and weed type before export
   - Optional metadata inclusion
   - Ready for direct import into spray drone systems
   - Manual annotations with sub-meter accuracy
+  - Confidence level mapping (CERTAIN→100%, LIKELY→75%, UNCERTAIN→50%)
+
+- **E2E Testing Framework** (NEW):
+  - Playwright-based end-to-end testing suite
+  - Smoke tests for core page functionality
+  - Export workflow tests (CSV, KML, Shapefile)
+  - API endpoint validation with auth handling
+  - Run with `npx playwright test`
 
 - **Precision Georeferencing** (NEW):
   - Sub-meter accuracy achieved with DSM terrain correction
@@ -574,15 +583,18 @@ agridrone-ops-production/
 - `/docs/S3_MIGRATION_GUIDE.md` - Complete migration documentation
 - `/EXAMPLE_S3_USAGE.md` - Quick start examples
 
+### ✅ **Recently Completed**
+- **Shapefile Export** - Complete ESRI shapefile generation for DJI Terra and GIS software
+- **E2E Testing Framework** - Playwright-based testing suite for export workflows
+
 ### 🎯 **Next Session Priorities**
 1. **Update Frontend Components** - Replace all `<img>` tags with `S3Image` component
 2. **User Management & Organizations** - Implement team accounts with member invitations
 3. **AWS Production Deployment** - Deploy with S3 enabled
 4. **GeoTIFF Tile Processing** - Implement actual tile generation with gdal2tiles.py
-5. **Shapefile Export** - Complete GIS integration for manual annotations
-6. **Display Manual Annotations on Map** - Show user-created polygons on interactive map
-7. **Main Map Integration** - Add orthomosaics as base layers on main map
-8. **Measurement Tools** - Distance/area measurement on orthomosaic viewer
+5. **Display Manual Annotations on Map** - Show user-created polygons on interactive map
+6. **Main Map Integration** - Add orthomosaics as base layers on main map
+7. **Measurement Tools** - Distance/area measurement on orthomosaic viewer
 
 ## 🖥️ **Electron Desktop Application (NEW INITIATIVE)**
 
