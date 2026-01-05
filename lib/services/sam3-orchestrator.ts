@@ -132,15 +132,20 @@ class SAM3Orchestrator {
         const { ready, message, starting } = await this.ensureAWSReady();
 
         if (!ready) {
-          // If starting, return a "starting" response or fall back
+          // If starting, wait for AWS to be ready instead of falling back to Roboflow
           if (starting) {
-            // For batch processing, we might want to wait
-            // For real-time, fall back to Roboflow with a message
-            console.log('[Orchestrator] AWS starting, falling back to Roboflow');
-            return this.fallbackToRoboflow(request, startTime, message);
+            console.log('[Orchestrator] AWS starting, waiting for it to be ready...');
+            const awsReady = await this.waitForAWSReady(180000); // Wait up to 3 minutes
+            if (!awsReady) {
+              console.log('[Orchestrator] AWS failed to start, falling back to Roboflow');
+              return this.fallbackToRoboflow(request, startTime, message);
+            }
+            console.log('[Orchestrator] AWS is now ready, proceeding with prediction');
+            // Continue to prediction below
+          } else {
+            // Not starting, not ready - fall back
+            return this.fallbackToRoboflow(request, startTime);
           }
-          // Not starting, not ready - fall back
-          return this.fallbackToRoboflow(request, startTime);
         }
       }
 
