@@ -372,6 +372,7 @@ class SAM3Orchestrator {
     startupMessage?: string
   ): Promise<PredictionResult> {
     if (!ROBOFLOW_API_KEY) {
+      console.log('[Orchestrator] Roboflow fallback failed: ROBOFLOW_API_KEY not set');
       return {
         success: false,
         backend: 'roboflow',
@@ -379,12 +380,12 @@ class SAM3Orchestrator {
         count: 0,
         processingTimeMs: Date.now() - startTime,
         startupMessage,
-        error: 'No SAM3 backend available (AWS not ready, Roboflow not configured)',
+        error: 'No SAM3 backend available. Please configure ROBOFLOW_API_KEY or enable AWS SAM3.',
       };
     }
 
     try {
-      console.log('[Orchestrator] Using Roboflow fallback');
+      console.log('[Orchestrator] Using Roboflow fallback (API key configured)');
 
       // Resize image for parity with AWS path (reduces cost/improves performance)
       const { buffer: resizedBuffer, scaleFactor } = await this.resizeImageForRoboflow(
@@ -435,6 +436,14 @@ class SAM3Orchestrator {
       });
 
       if (!response.ok) {
+        // Provide more helpful error messages for common issues
+        if (response.status === 401) {
+          throw new Error('Roboflow API key invalid or missing. Please check ROBOFLOW_API_KEY in your environment variables.');
+        } else if (response.status === 403) {
+          throw new Error('Roboflow API key does not have access to SAM3. You may need a higher subscription tier.');
+        } else if (response.status === 429) {
+          throw new Error('Roboflow rate limit exceeded. Please wait a moment and try again.');
+        }
         throw new Error(`Roboflow API error: ${response.status}`);
       }
 
