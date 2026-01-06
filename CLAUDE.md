@@ -802,7 +802,39 @@ This session focused on fixing critical bugs in the Training Hub workflow and SA
 
 ---
 
-**Last Updated**: 2025-12-05
-**Updated By**: Claude Code Assistant - Training Hub & SAM3 Integration Fixes
+## 🎉 **Session Summary - 2025-01-07**
+
+### ✅ **SAM3 Zero-Shot Mode Fix**
+
+Fixed critical issue where zero-shot "Apply to This Image" was calling Roboflow API instead of the AWS SAM3 instance.
+
+**Root Cause Analysis:**
+1. EBS environment was reinstated after breaking, but IAM permissions were not properly configured
+2. The `aws.state` was showing "error" because the IAM user lacked `ec2:DescribeInstances` permission
+3. The app couldn't discover the SAM3 EC2 instance IP, so it fell back to Roboflow
+4. Roboflow API returned 401 (invalid/expired API key)
+
+**Fixes Applied:**
+1. **IAM Permissions** - Added required EC2 permissions to the IAM user:
+   - `ec2:DescribeInstances`
+   - `ec2:StartInstances`
+   - `ec2:StopInstances`
+
+2. **Code Improvement** - Updated `lib/services/sam3-orchestrator.ts` to wait for AWS SAM3 instead of immediately falling back to Roboflow when instance is starting:
+   ```
+   Before: AWS starting → Immediately fall back to Roboflow
+   After:  AWS starting → Wait up to 3 minutes → Use AWS SAM3
+   ```
+
+3. **Documentation** - Updated `.env.example` to document IAM permission requirements
+
+**Verification:**
+- `/api/sam3/status` now returns `aws.state: "ready"` and `aws.ready: true`
+- Zero-shot detection successfully uses Tesla T4 GPU on AWS EC2
+
+---
+
+**Last Updated**: 2025-01-07
+**Updated By**: Claude Code Assistant - SAM3 Zero-Shot Mode Fix
 
 Remember: This is an agricultural platform where accuracy matters - coordinates generated here will be used by actual spray drones in the field!
