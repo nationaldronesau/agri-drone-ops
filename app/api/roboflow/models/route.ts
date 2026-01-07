@@ -132,9 +132,8 @@ export async function GET(request: NextRequest) {
 
         // Find versions that have a trained model
         for (const version of versions) {
-          const hasVersion = typeof version.version === 'number';
-          const hasModel = Boolean(version.model?.endpoint || version.model?.id || hasVersion);
-          if (!hasModel) {
+          const hasTrainedModel = Boolean(version.model?.endpoint || version.model?.id);
+          if (!hasTrainedModel) {
             continue;
           }
 

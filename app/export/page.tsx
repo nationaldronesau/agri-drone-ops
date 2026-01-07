@@ -22,7 +22,7 @@ interface Detection {
   confidence: number;
   centerLat: number | null;
   centerLon: number | null;
-  type?: 'ai' | 'manual';
+  type?: 'ai' | 'manual' | 'sam3';
   metadata: any;
   createdAt: string;
   asset: {
@@ -98,8 +98,8 @@ export default function ExportPage() {
         console.warn(`Skipping detection ${d.id} - invalid center coordinates`);
         return false;
       }
-      // If manual annotation with polygon, validate polygon too
-      if (d.type === 'manual' && d.metadata?.polygonCoordinates) {
+      // If manual/SAM3 annotation with polygon, validate polygon too
+      if ((d.type === 'manual' || d.type === 'sam3') && d.metadata?.polygonCoordinates) {
         if (!isValidPolygon(d.metadata.polygonCoordinates)) {
           console.warn(`Skipping detection ${d.id} - invalid polygon coordinates`);
           return false;
@@ -212,7 +212,7 @@ export default function ExportPage() {
           escapeCSV(d.id),
           ...baseData,
           escapeCSV((d.confidence * 100).toFixed(1) + '%'),
-          escapeCSV(d.type === 'manual' ? 'Manual' : 'AI'),
+          escapeCSV(d.type === 'manual' ? 'Manual' : d.type === 'sam3' ? 'SAM3' : 'AI'),
           escapeCSV(d.asset.altitude?.toFixed(1) || 'N/A'),
           escapeCSV(d.asset.fileName),
           escapeCSV(d.asset.project.name),
@@ -267,9 +267,9 @@ export default function ExportPage() {
     }).join('')}
     ${validDetections.map(d => `
     <Placemark>
-      <name>${escapeXML(d.className + ' (' + (d.type === 'manual' ? 'Manual' : 'AI') + ')')}</name>
+      <name>${escapeXML(d.className + ' (' + (d.type === 'manual' ? 'Manual' : d.type === 'sam3' ? 'SAM3' : 'AI') + ')')}</name>
       <description>
-        ${escapeXML('Type: ' + (d.type === 'manual' ? 'Manual Annotation' : 'AI Detection'))}
+        ${escapeXML('Type: ' + (d.type === 'manual' ? 'Manual Annotation' : d.type === 'sam3' ? 'SAM3 Pending' : 'AI Detection'))}
         ${escapeXML('Confidence: ' + (d.confidence * 100).toFixed(1) + '%')}
         ${escapeXML('Image: ' + d.asset.fileName)}
         ${escapeXML('Project: ' + d.asset.project.name)}
@@ -277,7 +277,7 @@ export default function ExportPage() {
         ${d.metadata?.notes ? escapeXML('Notes: ' + d.metadata.notes) : ''}
       </description>
       <styleUrl>#${escapeXML(d.className)}</styleUrl>
-      ${d.type === 'manual' && d.metadata?.polygonCoordinates && d.metadata.polygonCoordinates.length > 0 ? `
+      ${(d.type === 'manual' || d.type === 'sam3') && d.metadata?.polygonCoordinates && d.metadata.polygonCoordinates.length > 0 ? `
       <Polygon>
         <outerBoundaryIs>
           <LinearRing>
@@ -369,7 +369,7 @@ export default function ExportPage() {
   };
 
   const uniqueClasses = [...new Set(detections.map(d => d.className))];
-  const sam3Count = filteredDetections.filter(d => d.metadata?.source === 'sam3').length;
+  const sam3Count = filteredDetections.filter(d => d.type === 'sam3').length;
 
   return (
     <div className="min-h-screen bg-gray-50">
