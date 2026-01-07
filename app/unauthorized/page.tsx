@@ -16,7 +16,7 @@ export default function UnauthorizedPage() {
           You don&apos;t have permission to access this resource. Please contact your team administrator if you believe this is an error.
         </p>
         <div className="flex gap-3 justify-center">
-          <Link href="/test-dashboard">
+          <Link href="/dashboard">
             <Button>Go to Dashboard</Button>
           </Link>
           <Link href="/projects">

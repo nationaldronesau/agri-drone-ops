@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, Suspense } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   Card,
   CardContent,
@@ -31,7 +32,9 @@ interface Project {
   purpose: string;
 }
 
-export default function UploadPage() {
+function UploadPageContent() {
+  const searchParams = useSearchParams();
+  const projectParam = searchParams.get("project");
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<string>("");
   const [flightSession, setFlightSession] = useState<string>("");
@@ -64,15 +67,17 @@ export default function UploadPage() {
       .then((data) => {
         const projectList = data.projects || [];
         setProjects(projectList);
-        if (projectList.length > 0) {
-          setSelectedProject(projectList[0].id);
+        if (projectParam && projectList.some((project: Project) => project.id === projectParam)) {
+          setSelectedProject(projectParam);
+        } else if (projectList.length > 0) {
+          setSelectedProject((current) => current || projectList[0].id);
         }
       })
       .catch((error) => {
         console.error("Failed to load projects:", error);
         setProcessingError("Unable to load projects. Please try again later.");
       });
-  }, []);
+  }, [projectParam]);
 
   // Get selected models data for the UppyUploader
   const selectedModelsData = availableModels.filter((m) =>
@@ -82,6 +87,7 @@ export default function UploadPage() {
   const handleProcessingStart = useCallback(() => {
     setProcessing(true);
     setProcessingError(null);
+    setUploadResponse(null);
   }, []);
 
   const handleProcessingComplete = useCallback((response: UploadApiResponse) => {
@@ -106,6 +112,7 @@ export default function UploadPage() {
   const handleProcessingError = useCallback((error: Error) => {
     setProcessing(false);
     setProcessingError(error.message);
+    setUploadResponse(null);
   }, []);
 
   return (
@@ -114,7 +121,7 @@ export default function UploadPage() {
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
-              <Link href="/test-dashboard">
+              <Link href="/dashboard">
                 <Button variant="ghost" size="sm">
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back to Dashboard
@@ -164,6 +171,20 @@ export default function UploadPage() {
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {projects.length === 0 && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                      <p className="mb-2 font-medium">No projects found</p>
+                      <p className="mb-3 text-xs text-amber-800">
+                        Create a project first so we can organize your uploads.
+                      </p>
+                      <Link href="/projects">
+                        <Button size="sm" variant="outline">
+                          Create Project
+                        </Button>
+                      </Link>
+                    </div>
+                  )}
 
                   <div className="space-y-2">
                     <Label htmlFor="flightSession">
@@ -227,6 +248,9 @@ export default function UploadPage() {
                       Files are sent straight to S3 using multipart uploads, then
                       processed server-side.
                     </p>
+                    <p className="text-xs text-gray-400">
+                      Step 1 uploads to S3; Step 2 runs EXIF + detection after the upload finishes.
+                    </p>
                   </div>
                 </div>
                 <UppyUploader
@@ -243,7 +267,7 @@ export default function UploadPage() {
 
               {processing && (
                 <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
-                  Processing uploaded files… EXIF parsing and detection may take a
+                  Step 2 of 2: Processing uploaded files… EXIF parsing and detection may take a
                   moment.
                 </div>
               )}
@@ -386,5 +410,13 @@ export default function UploadPage() {
         </div>
       </main>
     </div>
+  );
+}
+
+export default function UploadPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center">Loading...</div>}>
+      <UploadPageContent />
+    </Suspense>
   );
 }

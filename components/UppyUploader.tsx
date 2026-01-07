@@ -134,6 +134,7 @@ export function UppyUploader({
       inline: true,
       showProgressDetails: true,
       proudlyDisplayPoweredByUppy: false,
+      hideProgressAfterFinish: true,
       note: "Images up to 500MB each. GPS metadata recommended for detections.",
     });
 
@@ -285,35 +286,32 @@ export function UppyUploader({
       }
 
       const filesPayload = result.successful
-        .filter((file) => {
-          // Filter out files without valid upload URLs
-          if (!file.uploadURL) {
-            console.warn(`[Uppy] Skipping file ${file.name} - no upload URL`);
-            return false;
-          }
-          return true;
-        })
         .map((file) => {
           const awsMeta = (file.meta?.awsMultipart || {}) as {
             key?: string;
             bucket?: string;
           };
           const responseBody = file.response?.body as
-            | { key?: string; bucket?: string; url?: string }
+            | { key?: string; bucket?: string; url?: string; location?: string }
             | undefined;
+          const uploadUrl = file.uploadURL || responseBody?.location || responseBody?.url;
+          if (!uploadUrl) {
+            console.warn(`[Uppy] Skipping file ${file.name} - no upload URL`);
+            return null;
+          }
           const resolvedKey =
             responseBody?.key ||
             awsMeta.key ||
             (() => {
               try {
-                return new URL(file.uploadURL ?? "").pathname.replace(/^\//, "");
+                return new URL(uploadUrl).pathname.replace(/^\//, "");
               } catch {
                 return undefined;
               }
             })();
 
           return {
-            url: file.uploadURL,
+            url: uploadUrl,
             name: file.name,
             size: file.size,
             mimeType:
@@ -323,7 +321,8 @@ export function UppyUploader({
             key: resolvedKey,
             bucket: responseBody?.bucket || awsMeta.bucket,
           };
-        });
+        })
+        .filter((file): file is NonNullable<typeof file> => Boolean(file));
 
       if (filesPayload.length === 0) {
         uppy.info("No files with valid upload URLs to process.", "error", 5000);
@@ -358,7 +357,7 @@ export function UppyUploader({
 
         const payload = (await response.json()) as UploadApiResponse;
         callbacksRef.current.onProcessingComplete?.(payload);
-        uppy.resetProgress()
+        uppy.reset();
       } catch (error) {
         console.error("Post-upload processing failed:", error);
         if (error instanceof Error) {
@@ -377,9 +376,7 @@ export function UppyUploader({
     uppyRef.current = uppy;
 
     return () => {
-      uppy.cancelAll()
-      uppy.resetProgress()
-      uppy.getFiles().forEach(file => uppy.removeFile(file.id))
+      uppy.close();
       uppyRef.current = null;
     };
   // We intentionally initialize Uppy once and rely on refs for latest props.

@@ -219,21 +219,125 @@ export class RoboflowTrainingService {
     let success = 0;
     const errors: { id: string; error: string }[] = [];
 
+    if (annotationIds.length === 0) {
+      return { success: 0, failed: 0, errors: [] };
+    }
+
+    // Fetch all annotations + assets in a single query to avoid N+1 uploads
+    const annotations = await prisma.manualAnnotation.findMany({
+      where: { id: { in: annotationIds } },
+      include: {
+        session: {
+          include: {
+            asset: {
+              select: {
+                id: true,
+                fileName: true,
+                storageUrl: true,
+                storageType: true,
+                s3Key: true,
+                s3Bucket: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const foundIds = new Set(annotations.map((annotation) => annotation.id));
     for (const id of annotationIds) {
-      try {
-        await this.uploadFromAnnotation(id, split, overrideProjectId);
-        success += 1;
-      } catch (error) {
+      if (!foundIds.has(id)) {
+        errors.push({ id, error: "Annotation not found" });
+      }
+    }
+
+    const grouped = new Map<
+      string,
+      {
+        asset: AssetData;
+        annotations: typeof annotations;
+      }
+    >();
+
+    for (const annotation of annotations) {
+      if (!annotation.verified) {
         errors.push({
-          id,
-          error: error instanceof Error ? error.message : "Unknown error",
+          id: annotation.id,
+          error: "Annotation must be verified before pushing to training",
         });
+        continue;
+      }
+
+      const coords = annotation.coordinates as [number, number][];
+      if (!coords || coords.length < 3) {
+        errors.push({
+          id: annotation.id,
+          error: "Annotation coordinates are incomplete",
+        });
+        continue;
+      }
+
+      const asset = annotation.session.asset;
+      if (!asset) {
+        errors.push({
+          id: annotation.id,
+          error: "Annotation asset not found",
+        });
+        continue;
+      }
+
+      const existing = grouped.get(asset.id);
+      if (existing) {
+        existing.annotations = [...existing.annotations, annotation];
+      } else {
+        grouped.set(asset.id, {
+          asset,
+          annotations: [annotation],
+        });
+      }
+    }
+
+    for (const group of grouped.values()) {
+      const annotationIdsForAsset = group.annotations.map((annotation) => annotation.id);
+      try {
+        const buffer = await this.getImageBuffer(group.asset);
+        const imageBase64 = buffer.toString("base64");
+
+        const boxes = group.annotations.map((annotation) => {
+          const box = polygonToBoundingBox(annotation.coordinates as [number, number][]);
+          box.class = annotation.weedType || "Unknown";
+          return box;
+        });
+
+        const uploadResult = await this.uploadTrainingData(
+          imageBase64,
+          group.asset.fileName,
+          boxes,
+          split,
+          overrideProjectId,
+        );
+
+        await prisma.manualAnnotation.updateMany({
+          where: { id: { in: annotationIdsForAsset } },
+          data: {
+            pushedToTraining: true,
+            pushedAt: new Date(),
+            roboflowImageId: uploadResult.id,
+          },
+        });
+
+        success += group.annotations.length;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown error";
+        for (const id of annotationIdsForAsset) {
+          errors.push({ id, error: message });
+        }
       }
     }
 
     return {
       success,
-      failed: annotationIds.length - success,
+      failed: Math.max(annotationIds.length - success, 0),
       errors,
     };
   }

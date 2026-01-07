@@ -25,6 +25,7 @@ interface Asset {
   storageUrl: string;
   fileSize: number;
   mimeType: string;
+  annotationCount?: number;
   gpsLatitude: number | null;
   gpsLongitude: number | null;
   altitude: number | null;
@@ -110,7 +111,7 @@ export default function ImagesPage() {
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
-              <Link href="/test-dashboard">
+              <Link href="/dashboard">
                 <Button variant="ghost" size="sm">
                   <ArrowLeft className="w-4 h-4 mr-2" />
                   Back to Dashboard
@@ -191,6 +192,17 @@ export default function ImagesPage() {
                       e.currentTarget.src = '/placeholder-image.png';
                     }}
                   />
+                  <div
+                    className={`absolute top-2 left-2 rounded-full px-2 py-0.5 text-xs font-medium shadow ${
+                      asset.annotationCount && asset.annotationCount > 0
+                        ? 'bg-green-600 text-white'
+                        : 'bg-gray-500 text-white'
+                    }`}
+                  >
+                    {asset.annotationCount && asset.annotationCount > 0
+                      ? `Labeled (${asset.annotationCount})`
+                      : 'Unlabeled'}
+                  </div>
                   <div className="absolute top-2 right-2 flex gap-2">
                     <Link href={`/annotate/${asset.id}`}>
                       <Button
