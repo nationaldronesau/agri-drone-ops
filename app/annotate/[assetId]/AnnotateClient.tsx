@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Check, ZoomIn, ZoomOut, RotateCcw, Loader2, ChevronLeft, ChevronRight, Sparkles, Images } from "lucide-react";
+import { ArrowLeft, Check, ZoomIn, ZoomOut, RotateCcw, Loader2, ChevronLeft, ChevronRight, Sparkles, Images, Upload } from "lucide-react";
 import Link from "next/link";
 import { Filmstrip } from "@/components/annotation/Filmstrip";
 import { Toolbar } from "@/components/annotation/Toolbar";
@@ -677,6 +677,8 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const applyToCurrentImage = useCallback(async () => {
     if (!session?.asset?.id || boxExemplars.length === 0) return;
 
+    const exemplarsToProcess = [...boxExemplars];
+
     setBatchProcessing(true);
     setSam3Error(null);
     try {
@@ -686,7 +688,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           assetId: session.asset.id,
-          boxes: boxExemplars.map(e => e.box),
+          boxes: exemplarsToProcess.map(e => e.box),
           textPrompt: selectedClass,
         }),
       });
@@ -1174,6 +1176,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     (annotationMode === 'box-exemplar' && boxExemplars.length > 0);
   const canUndo = annotationMode === 'sam3' && sam3Points.length > 0;
   const canDelete = !!selectedAnnotation;
+  const readyToPushCount = annotations.filter(a => a.verified && !a.pushedToTraining).length;
 
   if (loading) {
     return (
@@ -1225,13 +1228,30 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
             </Badge>
           )}
 
+          {readyToPushCount > 0 && (
+            <Button
+              size="sm"
+              onClick={pushToRoboflow}
+              disabled={isPushing}
+              className="h-8 bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600"
+            >
+              {isPushing ? (
+                <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+              ) : (
+                <Upload className="w-4 h-4 mr-1" />
+              )}
+              Upload {readyToPushCount}
+            </Button>
+          )}
+
           <Button
             size="sm"
             onClick={completeSession}
-            className="h-8 bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600"
+            variant="outline"
+            className="h-8"
           >
             <Check className="w-4 h-4 mr-1" />
-            Done
+            Finish & Exit
           </Button>
         </div>
       </header>

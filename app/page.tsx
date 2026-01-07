@@ -44,7 +44,7 @@ export default function Home() {
               </div>
             </div>
             <div className="flex items-center gap-3">
-              <Link href="/test-dashboard">
+              <Link href="/dashboard">
                 <Button variant="ghost" className="text-slate-300 hover:text-white hover:bg-white/5">
                   Dashboard
                 </Button>
@@ -96,7 +96,7 @@ export default function Home() {
                   <ArrowRight className="ml-2 w-4 h-4" />
                 </Button>
               </Link>
-              <Link href="/test-dashboard">
+              <Link href="/dashboard">
                 <Button size="lg" variant="outline" className="border-slate-700 text-slate-300 hover:bg-white/5 hover:border-slate-600 px-8 h-12 text-base">
                   View Demo
                 </Button>
@@ -331,7 +331,7 @@ export default function Home() {
                       Start Your Free Trial
                     </Button>
                   </Link>
-                  <Link href="/test-dashboard">
+                  <Link href="/dashboard">
                     <Button size="lg" variant="outline" className="border-slate-600 text-slate-300 hover:bg-white/5">
                       Explore Platform
                     </Button>

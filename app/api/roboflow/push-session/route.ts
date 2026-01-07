@@ -91,6 +91,19 @@ export async function POST(request: NextRequest) {
     const annotationIds = annotations.map((a) => a.id);
     const result = await roboflowTrainingService.uploadBatch(annotationIds);
 
+    // If all uploads failed, return an error with details
+    if (result.success === 0 && result.failed > 0) {
+      const firstError = result.errors[0]?.error || 'Unknown error';
+      console.error('All training uploads failed:', result.errors);
+      return NextResponse.json(
+        {
+          error: `Failed to upload annotations: ${firstError}`,
+          details: result.errors.slice(0, 3), // First 3 errors for debugging
+        },
+        { status: 500 }
+      );
+    }
+
     return NextResponse.json({
       success: true,
       pushed: result.success,
@@ -99,8 +112,10 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error('Error pushing to training service:', error);
+    // Provide more helpful error messages
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json(
-      { error: 'Failed to upload for training. Please try again.' },
+      { error: `Failed to upload for training: ${errorMessage}` },
       { status: 500 }
     );
   }

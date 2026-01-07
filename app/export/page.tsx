@@ -22,7 +22,7 @@ interface Detection {
   confidence: number;
   centerLat: number | null;
   centerLon: number | null;
-  type?: 'ai' | 'manual';
+  type?: 'ai' | 'manual' | 'sam3';
   metadata: any;
   createdAt: string;
   asset: {
@@ -45,6 +45,7 @@ export default function ExportPage() {
   const [includeMetadata, setIncludeMetadata] = useState(true);
   const [includeAI, setIncludeAI] = useState(true);
   const [includeManual, setIncludeManual] = useState(true);
+  const [includeSam3, setIncludeSam3] = useState(true);
   const [loading, setLoading] = useState(false);
   const [useStreaming, setUseStreaming] = useState(false);
 
@@ -97,8 +98,8 @@ export default function ExportPage() {
         console.warn(`Skipping detection ${d.id} - invalid center coordinates`);
         return false;
       }
-      // If manual annotation with polygon, validate polygon too
-      if (d.type === 'manual' && d.metadata?.polygonCoordinates) {
+      // If manual/SAM3 annotation with polygon, validate polygon too
+      if ((d.type === 'manual' || d.type === 'sam3') && d.metadata?.polygonCoordinates) {
         if (!isValidPolygon(d.metadata.polygonCoordinates)) {
           console.warn(`Skipping detection ${d.id} - invalid polygon coordinates`);
           return false;
@@ -115,7 +116,7 @@ export default function ExportPage() {
 
   useEffect(() => {
     fetchAllDetections();
-  }, [selectedProject, includeAI, includeManual]);
+  }, [selectedProject, includeAI, includeManual, includeSam3]);
 
   const fetchProjects = async () => {
     try {
@@ -146,12 +147,20 @@ export default function ExportPage() {
         }
       }
 
-      // Fetch manual annotations if enabled (use all=true to bypass pagination for export)
-      if (includeManual) {
-        const manualUrl = selectedProject !== "all"
-          ? `/api/annotations/export?projectId=${selectedProject}&all=true`
-          : '/api/annotations/export?all=true';
-        const manualResponse = await fetch(manualUrl);
+      // Fetch manual + optional SAM3 annotations (use all=true to bypass pagination for export)
+      if (includeManual || includeSam3) {
+        const params = new URLSearchParams({ all: 'true' });
+        if (selectedProject !== "all") {
+          params.set('projectId', selectedProject);
+        }
+        if (!includeManual) {
+          params.set('includeManual', 'false');
+        }
+        if (includeSam3) {
+          params.set('includePending', 'true');
+        }
+
+        const manualResponse = await fetch(`/api/annotations/export?${params.toString()}`);
         if (manualResponse.ok) {
           const manualData = await manualResponse.json();
           allDetections.push(...manualData);
@@ -203,7 +212,7 @@ export default function ExportPage() {
           escapeCSV(d.id),
           ...baseData,
           escapeCSV((d.confidence * 100).toFixed(1) + '%'),
-          escapeCSV(d.type === 'manual' ? 'Manual' : 'AI'),
+          escapeCSV(d.type === 'manual' ? 'Manual' : d.type === 'sam3' ? 'SAM3' : 'AI'),
           escapeCSV(d.asset.altitude?.toFixed(1) || 'N/A'),
           escapeCSV(d.asset.fileName),
           escapeCSV(d.asset.project.name),
@@ -258,9 +267,9 @@ export default function ExportPage() {
     }).join('')}
     ${validDetections.map(d => `
     <Placemark>
-      <name>${escapeXML(d.className + ' (' + (d.type === 'manual' ? 'Manual' : 'AI') + ')')}</name>
+      <name>${escapeXML(d.className + ' (' + (d.type === 'manual' ? 'Manual' : d.type === 'sam3' ? 'SAM3' : 'AI') + ')')}</name>
       <description>
-        ${escapeXML('Type: ' + (d.type === 'manual' ? 'Manual Annotation' : 'AI Detection'))}
+        ${escapeXML('Type: ' + (d.type === 'manual' ? 'Manual Annotation' : d.type === 'sam3' ? 'SAM3 Pending' : 'AI Detection'))}
         ${escapeXML('Confidence: ' + (d.confidence * 100).toFixed(1) + '%')}
         ${escapeXML('Image: ' + d.asset.fileName)}
         ${escapeXML('Project: ' + d.asset.project.name)}
@@ -268,7 +277,7 @@ export default function ExportPage() {
         ${d.metadata?.notes ? escapeXML('Notes: ' + d.metadata.notes) : ''}
       </description>
       <styleUrl>#${escapeXML(d.className)}</styleUrl>
-      ${d.type === 'manual' && d.metadata?.polygonCoordinates && d.metadata.polygonCoordinates.length > 0 ? `
+      ${(d.type === 'manual' || d.type === 'sam3') && d.metadata?.polygonCoordinates && d.metadata.polygonCoordinates.length > 0 ? `
       <Polygon>
         <outerBoundaryIs>
           <LinearRing>
@@ -326,6 +335,9 @@ export default function ExportPage() {
         includeAI: includeAI.toString(),
         includeManual: includeManual.toString(),
       });
+      if (includeSam3) {
+        params.set("includePending", "true");
+      }
 
       if (selectedProject !== "all") {
         params.set("projectId", selectedProject);
@@ -360,6 +372,7 @@ export default function ExportPage() {
   };
 
   const uniqueClasses = [...new Set(detections.map(d => d.className))];
+  const sam3Count = filteredDetections.filter(d => d.type === 'sam3').length;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -368,7 +381,7 @@ export default function ExportPage() {
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
-              <Link href="/test-dashboard">
+              <Link href="/dashboard">
                 <Button variant="ghost" size="sm">
                   <ArrowLeft className="w-4 h-4 mr-2" />
                   Back to Dashboard
@@ -522,6 +535,16 @@ export default function ExportPage() {
                       Include Manual Annotations
                     </Label>
                   </div>
+                  <div className="flex items-center space-x-2">
+                    <Checkbox 
+                      id="includeSam3"
+                      checked={includeSam3}
+                      onCheckedChange={(checked) => setIncludeSam3(checked as boolean)}
+                    />
+                    <Label htmlFor="includeSam3" className="cursor-pointer">
+                      Include SAM3 Pending Annotations
+                    </Label>
+                  </div>
                 </div>
               </div>
 
@@ -549,6 +572,7 @@ export default function ExportPage() {
                   <p>• {filteredDetections.length} detections will be exported</p>
                   <p>• AI Detections: {filteredDetections.filter(d => d.type === 'ai').length}</p>
                   <p>• Manual Annotations: {filteredDetections.filter(d => d.type === 'manual').length}</p>
+                  {sam3Count > 0 && <p>• SAM3 Pending: {sam3Count}</p>}
                   <p>• Format: {exportFormat.toUpperCase()}</p>
                   <p>• Weed types: {selectedClasses.join(', ') || 'None selected'}</p>
                   {includeMetadata && <p>• Metadata included</p>}
