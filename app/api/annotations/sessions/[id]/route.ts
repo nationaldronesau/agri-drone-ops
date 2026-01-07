@@ -24,6 +24,7 @@ export async function GET(
             gimbalYaw: true,
             project: {
               select: {
+                id: true,
                 name: true,
                 location: true,
               }
@@ -92,6 +93,7 @@ export async function PUT(
             storageUrl: true,
             project: {
               select: {
+                id: true,
                 name: true,
                 location: true,
               }

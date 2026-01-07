@@ -45,6 +45,7 @@ export default function ExportPage() {
   const [includeMetadata, setIncludeMetadata] = useState(true);
   const [includeAI, setIncludeAI] = useState(true);
   const [includeManual, setIncludeManual] = useState(true);
+  const [includeSam3, setIncludeSam3] = useState(true);
   const [loading, setLoading] = useState(false);
   const [useStreaming, setUseStreaming] = useState(false);
 
@@ -115,7 +116,7 @@ export default function ExportPage() {
 
   useEffect(() => {
     fetchAllDetections();
-  }, [selectedProject, includeAI, includeManual]);
+  }, [selectedProject, includeAI, includeManual, includeSam3]);
 
   const fetchProjects = async () => {
     try {
@@ -146,12 +147,20 @@ export default function ExportPage() {
         }
       }
 
-      // Fetch manual annotations if enabled (use all=true to bypass pagination for export)
-      if (includeManual) {
-        const manualUrl = selectedProject !== "all"
-          ? `/api/annotations/export?projectId=${selectedProject}&all=true`
-          : '/api/annotations/export?all=true';
-        const manualResponse = await fetch(manualUrl);
+      // Fetch manual + optional SAM3 annotations (use all=true to bypass pagination for export)
+      if (includeManual || includeSam3) {
+        const params = new URLSearchParams({ all: 'true' });
+        if (selectedProject !== "all") {
+          params.set('projectId', selectedProject);
+        }
+        if (!includeManual) {
+          params.set('includeManual', 'false');
+        }
+        if (includeSam3) {
+          params.set('includePending', 'true');
+        }
+
+        const manualResponse = await fetch(`/api/annotations/export?${params.toString()}`);
         if (manualResponse.ok) {
           const manualData = await manualResponse.json();
           allDetections.push(...manualData);
@@ -325,6 +334,9 @@ export default function ExportPage() {
         includeAI: includeAI.toString(),
         includeManual: includeManual.toString(),
       });
+      if (includeSam3) {
+        params.set("includePending", "true");
+      }
 
       if (selectedProject !== "all") {
         params.set("projectId", selectedProject);
@@ -357,6 +369,7 @@ export default function ExportPage() {
   };
 
   const uniqueClasses = [...new Set(detections.map(d => d.className))];
+  const sam3Count = filteredDetections.filter(d => d.metadata?.source === 'sam3').length;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -365,7 +378,7 @@ export default function ExportPage() {
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
-              <Link href="/test-dashboard">
+              <Link href="/dashboard">
                 <Button variant="ghost" size="sm">
                   <ArrowLeft className="w-4 h-4 mr-2" />
                   Back to Dashboard
@@ -501,6 +514,16 @@ export default function ExportPage() {
                       Include Manual Annotations
                     </Label>
                   </div>
+                  <div className="flex items-center space-x-2">
+                    <Checkbox 
+                      id="includeSam3"
+                      checked={includeSam3}
+                      onCheckedChange={(checked) => setIncludeSam3(checked as boolean)}
+                    />
+                    <Label htmlFor="includeSam3" className="cursor-pointer">
+                      Include SAM3 Pending Annotations
+                    </Label>
+                  </div>
                 </div>
               </div>
 
@@ -528,6 +551,7 @@ export default function ExportPage() {
                   <p>• {filteredDetections.length} detections will be exported</p>
                   <p>• AI Detections: {filteredDetections.filter(d => d.type === 'ai').length}</p>
                   <p>• Manual Annotations: {filteredDetections.filter(d => d.type === 'manual').length}</p>
+                  {sam3Count > 0 && <p>• SAM3 Pending: {sam3Count}</p>}
                   <p>• Format: {exportFormat.toUpperCase()}</p>
                   <p>• Weed types: {selectedClasses.join(', ') || 'None selected'}</p>
                   {includeMetadata && <p>• Metadata included</p>}

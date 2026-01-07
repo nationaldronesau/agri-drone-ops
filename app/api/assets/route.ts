@@ -70,7 +70,28 @@ export async function GET(request: NextRequest) {
       }
     });
 
-    return NextResponse.json({ assets });
+    const assetIds = assets.map((asset) => asset.id);
+    const sessionCounts = assetIds.length > 0
+      ? await prisma.annotationSession.findMany({
+          where: { assetId: { in: assetIds } },
+          select: {
+            assetId: true,
+            _count: { select: { annotations: true } },
+          },
+        })
+      : [];
+
+    const annotationCounts = sessionCounts.reduce<Record<string, number>>((acc, session) => {
+      acc[session.assetId] = (acc[session.assetId] || 0) + session._count.annotations;
+      return acc;
+    }, {});
+
+    const assetsWithCounts = assets.map((asset) => ({
+      ...asset,
+      annotationCount: annotationCounts[asset.id] || 0,
+    }));
+
+    return NextResponse.json({ assets: assetsWithCounts });
   } catch (error) {
     console.error('Failed to fetch assets:', error);
     return NextResponse.json(

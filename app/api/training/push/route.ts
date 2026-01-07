@@ -118,6 +118,19 @@ export async function POST(request: NextRequest) {
       errors.push(...validResult.errors);
     }
 
+    // If all uploads failed, return an error with details
+    if (successCount === 0 && errors.length > 0) {
+      const firstError = errors[0]?.error || 'Unknown error';
+      console.error('All training uploads failed:', errors);
+      return NextResponse.json(
+        {
+          error: `Failed to upload annotations: ${firstError}`,
+          details: errors.slice(0, 3),
+        },
+        { status: 500 }
+      );
+    }
+
     return NextResponse.json({
       success: true,
       pushed: successCount,
@@ -128,8 +141,9 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error('Error pushing annotations:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json(
-      { error: 'Failed to upload annotations for training. Please try again.' },
+      { error: `Failed to upload annotations for training: ${errorMessage}` },
       { status: 500 }
     );
   }

@@ -48,6 +48,7 @@ export async function GET(request: NextRequest) {
   const projectId = searchParams.get("projectId");
   const includeAI = searchParams.get("includeAI") !== "false";
   const includeManual = searchParams.get("includeManual") !== "false";
+  const includePending = searchParams.get("includePending") === "true";
   const classFilter = searchParams.get("classes")?.split(",").filter(Boolean) || [];
 
   // Validate format
@@ -84,9 +85,9 @@ export async function GET(request: NextRequest) {
 
       try {
         if (format === "csv") {
-          await streamCSV(controller, encoder, baseWhere, includeAI, includeManual, classFilter, stats);
+          await streamCSV(controller, encoder, baseWhere, includeAI, includeManual, includePending, classFilter, stats);
         } else {
-          await streamKML(controller, encoder, baseWhere, includeAI, includeManual, classFilter, stats);
+          await streamKML(controller, encoder, baseWhere, includeAI, includeManual, includePending, classFilter, stats);
         }
       } catch (error) {
         console.error("Export stream error:", error);
@@ -137,6 +138,7 @@ async function streamCSV(
   baseWhere: any,
   includeAI: boolean,
   includeManual: boolean,
+  includePending: boolean,
   classFilter: string[],
   stats: ExportStats
 ) {
@@ -223,9 +225,15 @@ async function streamCSV(
             },
             ...(classFilter.length > 0 ? { weedType: { in: classFilter } } : {}),
           },
-          include: {
+          select: {
+            id: true,
+            weedType: true,
+            confidence: true,
+            centerLat: true,
+            centerLon: true,
+            createdAt: true,
             session: {
-              include: {
+              select: {
                 asset: {
                   select: {
                     fileName: true,
@@ -251,9 +259,8 @@ async function streamCSV(
         stats.totalProcessed++;
 
         // Get center coordinates from annotation
-        const coords = annotation.coordinates as any;
-        const centerLat = coords?.center?.lat || coords?.centerLat;
-        const centerLon = coords?.center?.lon || coords?.centerLon;
+        const centerLat = annotation.centerLat;
+        const centerLon = annotation.centerLon;
 
         // Skip invalid coordinates
         if (!isValidCoordinate(centerLat, centerLon)) {
@@ -261,13 +268,20 @@ async function streamCSV(
           continue;
         }
 
+        const confidenceValue =
+          annotation.confidence === "CERTAIN"
+            ? 0.95
+            : annotation.confidence === "LIKELY"
+              ? 0.75
+              : 0.5;
+
         const row = [
           escapeCSV(annotation.id),
           "Manual",
           escapeCSV(annotation.weedType),
           centerLat?.toFixed(8) || "",
           centerLon?.toFixed(8) || "",
-          ((annotation.confidence || 0) * 100).toFixed(1) + "%",
+          (confidenceValue * 100).toFixed(1) + "%",
           escapeCSV(annotation.session.asset.fileName),
           escapeCSV(annotation.session.asset.project?.name || ""),
           escapeCSV(annotation.session.asset.project?.location || ""),
@@ -292,6 +306,78 @@ async function streamCSV(
       encoder.encode(`# WARNING: ${stats.skippedInvalidCoords} records skipped due to invalid coordinates\n`)
     );
   }
+
+  // Process SAM3 pending annotations in batches
+  if (includePending) {
+    let offset = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      const pending = await queryWithTimeout(
+        prisma.pendingAnnotation.findMany({
+          where: {
+            status: "PENDING",
+            asset: baseWhere.asset,
+            ...(classFilter.length > 0 ? { weedType: { in: classFilter } } : {}),
+          },
+          select: {
+            id: true,
+            weedType: true,
+            confidence: true,
+            centerLat: true,
+            centerLon: true,
+            createdAt: true,
+            asset: {
+              select: {
+                fileName: true,
+                project: {
+                  select: {
+                    name: true,
+                    location: true,
+                  },
+                },
+              },
+            },
+          },
+          skip: offset,
+          take: BATCH_SIZE,
+          orderBy: { createdAt: "desc" },
+        }),
+        QUERY_TIMEOUT
+      );
+
+      for (const annotation of pending) {
+        stats.totalProcessed++;
+
+        const centerLat = annotation.centerLat;
+        const centerLon = annotation.centerLon;
+
+        if (!isValidCoordinate(centerLat, centerLon)) {
+          stats.skippedInvalidCoords++;
+          continue;
+        }
+
+        const row = [
+          escapeCSV(annotation.id),
+          "SAM3",
+          escapeCSV(annotation.weedType),
+          centerLat?.toFixed(8) || "",
+          centerLon?.toFixed(8) || "",
+          ((annotation.confidence || 0) * 100).toFixed(1) + "%",
+          escapeCSV(annotation.asset.fileName),
+          escapeCSV(annotation.asset.project?.name || ""),
+          escapeCSV(annotation.asset.project?.location || ""),
+          annotation.createdAt.toISOString().split("T")[0],
+        ].join(",");
+
+        controller.enqueue(encoder.encode(row + "\n"));
+        stats.exported++;
+      }
+
+      offset += BATCH_SIZE;
+      hasMore = pending.length === BATCH_SIZE;
+    }
+  }
 }
 
 /**
@@ -303,6 +389,7 @@ async function streamKML(
   baseWhere: any,
   includeAI: boolean,
   includeManual: boolean,
+  includePending: boolean,
   classFilter: string[],
   stats: ExportStats
 ) {
@@ -403,9 +490,15 @@ async function streamKML(
             },
             ...(classFilter.length > 0 ? { weedType: { in: classFilter } } : {}),
           },
-          include: {
+          select: {
+            id: true,
+            weedType: true,
+            confidence: true,
+            centerLat: true,
+            centerLon: true,
+            createdAt: true,
             session: {
-              include: {
+              select: {
                 asset: {
                   select: {
                     fileName: true,
@@ -424,9 +517,8 @@ async function streamKML(
       for (const annotation of annotations) {
         stats.totalProcessed++;
 
-        const coords = annotation.coordinates as any;
-        const centerLat = coords?.center?.lat || coords?.centerLat;
-        const centerLon = coords?.center?.lon || coords?.centerLon;
+        const centerLat = annotation.centerLat;
+        const centerLon = annotation.centerLon;
 
         // Skip invalid coordinates
         if (!isValidCoordinate(centerLat, centerLon)) {
@@ -434,9 +526,16 @@ async function streamKML(
           continue;
         }
 
+        const confidenceValue =
+          annotation.confidence === "CERTAIN"
+            ? 0.95
+            : annotation.confidence === "LIKELY"
+              ? 0.75
+              : 0.5;
+
         const placemark = `    <Placemark>
       <name>${escapeXML(annotation.weedType)} (Manual)</name>
-      <description>${escapeXML(`Confidence: ${((annotation.confidence || 0) * 100).toFixed(1)}%\nImage: ${annotation.session.asset.fileName}`)}</description>
+      <description>${escapeXML(`Confidence: ${(confidenceValue * 100).toFixed(1)}%\nImage: ${annotation.session.asset.fileName}`)}</description>
       <styleUrl>#manual-annotation</styleUrl>
       <Point>
         <coordinates>${centerLon},${centerLat},0</coordinates>
@@ -449,6 +548,68 @@ async function streamKML(
 
       offset += BATCH_SIZE;
       hasMore = annotations.length === BATCH_SIZE;
+    }
+  }
+
+  // Process SAM3 pending annotations in batches
+  if (includePending) {
+    let offset = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      const pending = await queryWithTimeout(
+        prisma.pendingAnnotation.findMany({
+          where: {
+            status: "PENDING",
+            asset: baseWhere.asset,
+            ...(classFilter.length > 0 ? { weedType: { in: classFilter } } : {}),
+          },
+          select: {
+            id: true,
+            weedType: true,
+            confidence: true,
+            centerLat: true,
+            centerLon: true,
+            createdAt: true,
+            asset: {
+              select: {
+                fileName: true,
+              },
+            },
+          },
+          skip: offset,
+          take: BATCH_SIZE,
+          orderBy: { createdAt: "desc" },
+        }),
+        QUERY_TIMEOUT
+      );
+
+      for (const annotation of pending) {
+        stats.totalProcessed++;
+
+        const centerLat = annotation.centerLat;
+        const centerLon = annotation.centerLon;
+
+        if (!isValidCoordinate(centerLat, centerLon)) {
+          stats.skippedInvalidCoords++;
+          continue;
+        }
+
+        const placemark = `    <Placemark>
+      <name>${escapeXML(annotation.weedType)} (SAM3)</name>
+      <description>${escapeXML(`Confidence: ${((annotation.confidence || 0) * 100).toFixed(1)}%\nImage: ${annotation.asset.fileName}`)}</description>
+      <styleUrl>#manual-annotation</styleUrl>
+      <Point>
+        <coordinates>${centerLon},${centerLat},0</coordinates>
+      </Point>
+    </Placemark>
+`;
+        controller.enqueue(encoder.encode(placemark));
+        stats.exported++;
+      }
+
+      offset += BATCH_SIZE;
+      hasMore = pending.length === BATCH_SIZE;
     }
   }
 

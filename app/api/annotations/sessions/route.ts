@@ -59,6 +59,7 @@ export async function GET(request: NextRequest) {
             gpsLongitude: true,
             project: {
               select: {
+                id: true,
                 name: true,
                 location: true,
               }
@@ -190,6 +191,7 @@ export async function POST(request: NextRequest) {
                 gimbalYaw: true,
                 project: {
                   select: {
+                    id: true,
                     name: true,
                     location: true,
                   }
@@ -228,6 +230,7 @@ export async function POST(request: NextRequest) {
                 gimbalYaw: true,
                 project: {
                   select: {
+                    id: true,
                     name: true,
                     location: true,
                   }

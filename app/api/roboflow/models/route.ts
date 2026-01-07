@@ -132,23 +132,30 @@ export async function GET(request: NextRequest) {
 
         // Find versions that have a trained model
         for (const version of versions) {
-          if (version.model?.endpoint) {
-            const classes = version.classes
-              ? Object.keys(version.classes)
-              : (projectData.classes ? Object.keys(projectData.classes) : []);
-
-            models.push({
-              id: `${project.id}-v${version.version}`,
-              projectId: project.id,
-              projectName: projectData.name || project.id,
-              version: version.version,
-              type: projectData.type || 'object-detection',
-              endpoint: version.model.endpoint,
-              classes,
-              map: version.model.map,
-              createdAt: new Date(version.created * 1000).toISOString(),
-            });
+          const hasVersion = typeof version.version === 'number';
+          const hasModel = Boolean(version.model?.endpoint || version.model?.id || hasVersion);
+          if (!hasModel) {
+            continue;
           }
+
+          const classes = version.classes
+            ? Object.keys(version.classes)
+            : (projectData.classes ? Object.keys(projectData.classes) : []);
+
+          const endpoint = version.model?.endpoint ||
+            `https://detect.roboflow.com/${project.id}/${version.version}`;
+
+          models.push({
+            id: `${project.id}-v${version.version}`,
+            projectId: project.id,
+            projectName: projectData.name || project.id,
+            version: version.version,
+            type: projectData.type || 'object-detection',
+            endpoint,
+            classes,
+            map: version.model?.map,
+            createdAt: new Date(version.created * 1000).toISOString(),
+          });
         }
       } catch (err) {
         console.warn(`Error fetching project ${project.id}:`, err);
