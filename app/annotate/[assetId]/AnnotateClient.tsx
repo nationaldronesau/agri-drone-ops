@@ -1012,24 +1012,33 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   useEffect(() => { redrawCanvas(); }, [redrawCanvas]);
 
   // Mouse handlers
-  const getImageCoords = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  const getCanvasCoords = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
-    const canvasX = e.clientX - rect.left;
-    const canvasY = e.clientY - rect.top;
+    if (rect.width === 0 || rect.height === 0) return { x: 0, y: 0 };
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY,
+    };
+  }, []);
+
+  const getImageCoords = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const { x: canvasX, y: canvasY } = getCanvasCoords(e);
     return {
       x: (canvasX - panOffset.x) / (scale * zoomLevel),
       y: (canvasY - panOffset.y) / (scale * zoomLevel),
     };
-  }, [panOffset, scale, zoomLevel]);
+  }, [getCanvasCoords, panOffset, scale, zoomLevel]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (e.button === 1 || e.shiftKey) {
       e.preventDefault();
       setIsPanning(true);
-      const rect = e.currentTarget.getBoundingClientRect();
-      setLastPanPoint({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+      const { x, y } = getCanvasCoords(e);
+      setLastPanPoint({ x, y });
       return;
     }
 
@@ -1038,13 +1047,11 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       setCurrentBox({ startX: x, startY: y, endX: x, endY: y });
       setIsDrawingBox(true);
     }
-  }, [annotationMode, getImageCoords]);
+  }, [annotationMode, getCanvasCoords, getImageCoords]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (isPanning) {
-      const rect = e.currentTarget.getBoundingClientRect();
-      const currentX = e.clientX - rect.left;
-      const currentY = e.clientY - rect.top;
+      const { x: currentX, y: currentY } = getCanvasCoords(e);
       setPanOffset(prev => ({
         x: prev.x + (currentX - lastPanPoint.x),
         y: prev.y + (currentY - lastPanPoint.y),
@@ -1070,7 +1077,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       }
     }
     setHoveredAnnotation(foundHovered);
-  }, [isPanning, lastPanPoint, isDrawingBox, annotationMode, getImageCoords, annotations]);
+  }, [isPanning, lastPanPoint, isDrawingBox, annotationMode, getCanvasCoords, getImageCoords, annotations]);
 
   const handleMouseUp = useCallback(() => {
     if (isPanning) { setIsPanning(false); return; }
