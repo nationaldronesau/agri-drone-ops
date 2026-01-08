@@ -460,6 +460,20 @@ export default function BatchReviewPage() {
           </Card>
         )}
 
+        {batchJob.errorMessage && (
+          <Card className="mb-6 border-amber-200 bg-amber-50">
+            <CardContent className="py-4">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5" />
+                <div className="flex-1">
+                  <p className="font-medium text-amber-900">Some images were not processed</p>
+                  <p className="text-sm text-amber-700">{batchJob.errorMessage}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Summary Bar */}
         <div className="grid grid-cols-5 gap-3 mb-6">
           <Card className="bg-white">
