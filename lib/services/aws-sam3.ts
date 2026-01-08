@@ -634,7 +634,8 @@ class AWSSAM3Service {
       // This prevents the box from being too large for big drone images,
       // which would cause SAM3 to segment neighboring objects.
       const BOX_HALF_SIZE_ORIGINAL = 50; // 50px radius in original image coordinates
-      const BOX_HALF_SIZE_RESIZED = Math.round(BOX_HALF_SIZE_ORIGINAL * scaling.scaleFactor);
+      // Clamp to minimum of 1 to avoid zero-area boxes on extremely large images
+      const BOX_HALF_SIZE_RESIZED = Math.max(1, Math.round(BOX_HALF_SIZE_ORIGINAL * scaling.scaleFactor));
       const boxes = request.points
         .filter(p => p.label === 1) // Only foreground points
         .map(p => ({

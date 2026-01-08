@@ -39,12 +39,17 @@ const MAX_SYNC_IMAGES = 20;
 const MAX_IMAGE_SIZE = 100 * 1024 * 1024; // 100MB per image
 const IMAGE_TIMEOUT = 30000; // 30 seconds per image fetch
 
+// Maximum wall-clock time for synchronous processing to avoid HTTP 504 timeouts
+// Most serverless platforms timeout at 60s, Vercel Pro at 300s
+const MAX_SYNC_PROCESSING_MS = 240000; // 4 minutes - leave buffer for response
+
 // Base URL for internal API calls
 const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
-// SSRF protection patterns
+// SSRF protection patterns - include CloudFront for S3 CDN delivery
 const ALLOWED_URL_PATTERNS = [
   /^https:\/\/[^/]+\.amazonaws\.com\//,
+  /^https:\/\/[^/]+\.cloudfront\.net\//,  // CloudFront CDN for S3
   /^https:\/\/storage\.googleapis\.com\//,
   /^https:\/\/[^/]+\.blob\.core\.windows\.net\//,
   /^http:\/\/localhost(:\d+)?\//,
@@ -121,6 +126,7 @@ async function processSynchronously(
   let processedCount = 0;
   let totalDetections = 0;
   const errors: string[] = [];
+  const startTime = Date.now();
 
   // Update job status to PROCESSING
   await prisma.batchJob.update({
@@ -132,13 +138,22 @@ async function processSynchronously(
   });
 
   for (let i = 0; i < assets.length; i++) {
+    // Check timeout to avoid HTTP 504 errors
+    const elapsed = Date.now() - startTime;
+    if (elapsed > MAX_SYNC_PROCESSING_MS) {
+      console.warn(`[Sync] Job ${batchJobId}: Timeout after ${Math.round(elapsed / 1000)}s, processed ${processedCount}/${assets.length}`);
+      errors.push(`Processing timeout - completed ${processedCount} of ${assets.length} images`);
+      break;
+    }
+
     const asset = assets[i];
 
     try {
       // Build and validate image URL
       let imageUrl: string;
 
-      if (asset.storageType === 'S3' && asset.s3Key && asset.s3Bucket) {
+      // Note: storageType is stored as lowercase 's3' in the database
+      if (asset.storageType?.toLowerCase() === 's3' && asset.s3Key && asset.s3Bucket) {
         // Get signed URL for S3 assets
         const signedUrlResponse = await fetch(`${BASE_URL}/api/assets/${asset.id}/signed-url`, {
           headers: { 'X-Internal-Request': 'true' },
