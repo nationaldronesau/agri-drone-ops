@@ -1,0 +1,211 @@
+// ===========================================
+// TRAINING PIPELINE SCHEMA ADDITIONS
+// ===========================================
+// Add these models to your existing prisma/schema.prisma
+// Then run: npx prisma migrate dev --name add_training_pipeline
+
+// Training Dataset - prepared from annotations for YOLO training
+model TrainingDataset {
+  id                  String   @id @default(cuid())
+  name                String   // "Wattle January 2025"
+  description         String?
+  
+  // S3 location
+  s3Path              String   // s3://nd-agridrone/datasets/wattle-jan-2025/
+  s3Bucket            String   @default("nd-agridrone")
+  
+  // Source project (optional - can create from multiple projects)
+  projectId           String?
+  project             Project? @relation(fields: [projectId], references: [id])
+  
+  // Dataset statistics
+  imageCount          Int
+  labelCount          Int      // Total annotations across all images
+  classes             String   // JSON: ["wattle", "lantana", "bellyache_bush"]
+  
+  // Train/val/test split
+  trainCount          Int
+  valCount            Int
+  testCount           Int
+  
+  // Augmentation settings applied
+  augmentationPreset  String?  // "light", "medium", "heavy", "agricultural"
+  augmentationConfig  String?  // JSON: full config if custom
+  augmentedImageCount Int?     // Total after augmentation
+  
+  // Relations
+  trainingJobs        TrainingJob[]
+  
+  // Ownership
+  teamId              String
+  team                Team     @relation(fields: [teamId], references: [id])
+  createdById         String?
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([teamId])
+  @@index([projectId])
+}
+
+// Training Job - tracks a single training run
+model TrainingJob {
+  id                  String         @id @default(cuid())
+  
+  // What we're training
+  datasetId           String
+  dataset             TrainingDataset @relation(fields: [datasetId], references: [id])
+  
+  // Training configuration
+  baseModel           String         // "yolo11n", "yolo11m", "yolo11l", "yolo11x"
+  epochs              Int            @default(100)
+  batchSize           Int            @default(16)
+  imageSize           Int            @default(640)
+  learningRate        Float          @default(0.01)
+  
+  // Advanced config (optional)
+  trainingConfig      String?        // JSON: additional ultralytics params
+  
+  // Status tracking
+  status              TrainingStatus @default(QUEUED)
+  currentEpoch        Int            @default(0)
+  progress            Float          @default(0)  // 0-100 percentage
+  
+  // Reference to EC2 job
+  ec2JobId            String?        // Job ID returned by YOLO service
+  
+  // Metrics - updated during training
+  currentMetrics      String?        // JSON: latest epoch metrics
+  metricsHistory      String?        // JSON: all epochs for charts
+  
+  // Final metrics (populated on completion)
+  finalMAP50          Float?
+  finalMAP5095        Float?
+  finalPrecision      Float?
+  finalRecall         Float?
+  finalF1             Float?
+  
+  // Timing
+  startedAt           DateTime?
+  completedAt         DateTime?
+  estimatedMinutes    Int?           // Estimated total time
+  
+  // Error handling
+  errorMessage        String?
+  errorDetails        String?        // JSON: stack trace, logs
+  
+  // Output model (created on successful completion)
+  trainedModelId      String?        @unique
+  trainedModel        TrainedModel?  @relation(fields: [trainedModelId], references: [id])
+  
+  // Ownership
+  teamId              String
+  team                Team           @relation(fields: [teamId], references: [id])
+  createdById         String?
+  
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  @@index([teamId])
+  @@index([status])
+  @@index([datasetId])
+}
+
+// Trained Model - a successfully trained model ready for inference
+model TrainedModel {
+  id                  String       @id @default(cuid())
+  
+  // Naming
+  name                String       // "wattle-detector"
+  version             Int          // Auto-incremented per name within team
+  displayName         String?      // "Wattle Detector v3 (January 2025)"
+  description         String?
+  
+  // S3 storage
+  s3Path              String       // s3://nd-agridrone/models/wattle-detector/v3/
+  s3Bucket            String       @default("nd-agridrone")
+  weightsFile         String       @default("best.pt")
+  fileSizeBytes       Int?
+  
+  // What this model detects
+  classes             String       // JSON: ["wattle", "lantana"]
+  classCount          Int
+  
+  // Performance metrics
+  mAP50               Float?
+  mAP5095             Float?
+  precision           Float?
+  recall              Float?
+  f1Score             Float?
+  
+  // Per-class metrics
+  classMetrics        String?      // JSON: {"wattle": {"precision": 0.94, ...}}
+  
+  // Training lineage
+  trainingJob         TrainingJob?
+  baseModel           String       // "yolo11m"
+  trainedOnImages     Int?         // Number of training images
+  trainedEpochs       Int?
+  
+  // Status
+  status              ModelStatus  @default(READY)
+  isActive            Boolean      @default(false)  // Currently used for inference
+  
+  // Usage tracking
+  inferenceCount      Int          @default(0)
+  lastUsedAt          DateTime?
+  
+  // Ownership
+  teamId              String
+  team                Team         @relation(fields: [teamId], references: [id])
+  createdById         String?
+  
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  @@unique([name, version, teamId])
+  @@index([teamId])
+  @@index([status])
+  @@index([isActive])
+}
+
+// Enums
+enum TrainingStatus {
+  QUEUED              // Waiting to start
+  PREPARING           // Downloading dataset from S3
+  RUNNING             // Training in progress
+  UPLOADING           // Uploading results to S3
+  COMPLETED           // Successfully finished
+  FAILED              // Error occurred
+  CANCELLED           // User cancelled
+}
+
+enum ModelStatus {
+  TRAINING            // Still being trained
+  READY               // Available for use
+  ACTIVE              // Currently deployed for inference
+  ARCHIVED            // Hidden from default views
+  FAILED              // Training failed, no usable weights
+}
+
+
+// ===========================================
+// UPDATES TO EXISTING MODELS
+// ===========================================
+// Add these relations to your existing Team model:
+
+// model Team {
+//   ... existing fields ...
+//   
+//   // Add these relations:
+//   trainingDatasets  TrainingDataset[]
+//   trainingJobs      TrainingJob[]
+//   trainedModels     TrainedModel[]
+// }
+
+// model Project {
+//   ... existing fields ...
+//   
+//   // Add this relation:
+//   trainingDatasets  TrainingDataset[]
+// }
