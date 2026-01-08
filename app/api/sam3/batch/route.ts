@@ -4,6 +4,9 @@
  * Enqueues batch detection jobs for background processing.
  * Jobs are processed by the BullMQ worker (workers/batch-worker.ts).
  *
+ * FALLBACK: If Redis is unavailable, processes synchronously for small batches.
+ * This ensures "Apply to All Images" works even without the background worker.
+ *
  * Security:
  * - Authentication required (team membership verified)
  * - Rate limiting per IP
@@ -18,6 +21,8 @@ import prisma from '@/lib/db';
 import { checkProjectAccess } from '@/lib/auth/api-auth';
 import { enqueueBatchJob, getQueueStats } from '@/lib/queue/batch-queue';
 import { checkRedisConnection } from '@/lib/queue/redis';
+import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
+import { normalizeDetectionType } from '@/lib/utils/detection-types';
 
 // Rate limiting (per-instance; use Redis for production multi-instance)
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
@@ -26,6 +31,30 @@ const RATE_LIMIT_MAX_REQUESTS = 10; // 10 batch jobs per minute
 
 // Maximum images per batch (reasonable limit for queue)
 const MAX_IMAGES_PER_BATCH = 500;
+
+// Maximum images for synchronous processing (when Redis unavailable)
+const MAX_SYNC_IMAGES = 20;
+
+// Image processing limits
+const MAX_IMAGE_SIZE = 100 * 1024 * 1024; // 100MB per image
+const IMAGE_TIMEOUT = 30000; // 30 seconds per image fetch
+
+// Base URL for internal API calls
+const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+
+// SSRF protection patterns
+const ALLOWED_URL_PATTERNS = [
+  /^https:\/\/[^/]+\.amazonaws\.com\//,
+  /^https:\/\/storage\.googleapis\.com\//,
+  /^https:\/\/[^/]+\.blob\.core\.windows\.net\//,
+  /^http:\/\/localhost(:\d+)?\//,
+  /^http:\/\/127\.0\.0\.1(:\d+)?\//,
+];
+
+function isUrlAllowed(url: string): boolean {
+  if (url.startsWith('/')) return true;
+  return ALLOWED_URL_PATTERNS.some(pattern => pattern.test(url));
+}
 
 function getClientIp(request: NextRequest): string {
   return request.headers.get('x-forwarded-for')?.split(',')[0].trim()
@@ -66,6 +95,190 @@ interface BatchRequest {
   textPrompt?: string;
 }
 
+interface AssetForProcessing {
+  id: string;
+  storageUrl: string | null;
+  s3Key: string | null;
+  s3Bucket: string | null;
+  storageType: string;
+  imageWidth: number | null;
+  imageHeight: number | null;
+}
+
+/**
+ * Process batch synchronously when Redis is unavailable.
+ * This is a fallback for small batches to ensure "Apply to All Images" works
+ * even without the background worker running.
+ */
+async function processSynchronously(
+  batchJobId: string,
+  projectId: string,
+  weedType: string,
+  exemplars: BoxExemplar[],
+  textPrompt: string | undefined,
+  assets: AssetForProcessing[]
+): Promise<{ processedImages: number; detectionsFound: number; errors: string[] }> {
+  let processedCount = 0;
+  let totalDetections = 0;
+  const errors: string[] = [];
+
+  // Update job status to PROCESSING
+  await prisma.batchJob.update({
+    where: { id: batchJobId },
+    data: {
+      status: 'PROCESSING',
+      startedAt: new Date(),
+    },
+  });
+
+  for (let i = 0; i < assets.length; i++) {
+    const asset = assets[i];
+
+    try {
+      // Build and validate image URL
+      let imageUrl: string;
+
+      if (asset.storageType === 'S3' && asset.s3Key && asset.s3Bucket) {
+        // Get signed URL for S3 assets
+        const signedUrlResponse = await fetch(`${BASE_URL}/api/assets/${asset.id}/signed-url`, {
+          headers: { 'X-Internal-Request': 'true' },
+        });
+        if (!signedUrlResponse.ok) {
+          errors.push(`Asset ${asset.id}: Failed to get signed URL`);
+          continue;
+        }
+        const signedUrlData = await signedUrlResponse.json();
+        imageUrl = signedUrlData.url;
+
+        if (!isUrlAllowed(imageUrl)) {
+          errors.push(`Asset ${asset.id}: Invalid signed URL domain`);
+          continue;
+        }
+      } else if (asset.storageUrl) {
+        if (!asset.storageUrl.startsWith('/') && !isUrlAllowed(asset.storageUrl)) {
+          errors.push(`Asset ${asset.id}: Invalid storage URL`);
+          continue;
+        }
+        imageUrl = asset.storageUrl.startsWith('/') ? `${BASE_URL}${asset.storageUrl}` : asset.storageUrl;
+      } else {
+        errors.push(`Asset ${asset.id}: No image URL available`);
+        continue;
+      }
+
+      // Fetch image with timeout
+      const imageResponse = await fetch(imageUrl, {
+        signal: AbortSignal.timeout(IMAGE_TIMEOUT),
+      });
+
+      if (!imageResponse.ok) {
+        errors.push(`Asset ${asset.id}: Failed to fetch image (${imageResponse.status})`);
+        continue;
+      }
+
+      // Validate content type
+      const contentType = imageResponse.headers.get('content-type') || '';
+      if (!contentType.startsWith('image/')) {
+        errors.push(`Asset ${asset.id}: Invalid content type`);
+        continue;
+      }
+
+      // Check content length
+      const contentLength = imageResponse.headers.get('content-length');
+      if (contentLength && parseInt(contentLength) > MAX_IMAGE_SIZE) {
+        errors.push(`Asset ${asset.id}: Image too large`);
+        continue;
+      }
+
+      const imageBuffer = await imageResponse.arrayBuffer();
+      if (imageBuffer.byteLength > MAX_IMAGE_SIZE) {
+        errors.push(`Asset ${asset.id}: Image too large`);
+        continue;
+      }
+
+      // Build boxes for orchestrator (limit to 10)
+      const boxes = exemplars.slice(0, 10).map((box) => ({
+        x1: Math.max(0, Math.round(box.x1)),
+        y1: Math.max(0, Math.round(box.y1)),
+        x2: Math.max(0, Math.round(box.x2)),
+        y2: Math.max(0, Math.round(box.y2)),
+      }));
+
+      // Sanitize text prompt if provided
+      const sanitizedPrompt = textPrompt
+        ? textPrompt.trim().substring(0, 100).replace(/[^\w\s-]/g, '')
+        : undefined;
+
+      // Call SAM3 via orchestrator
+      const result = await sam3Orchestrator.predict({
+        imageBuffer: Buffer.from(imageBuffer),
+        boxes: boxes.length > 0 ? boxes : undefined,
+        textPrompt: sanitizedPrompt,
+        className: weedType,
+      });
+
+      if (!result.success) {
+        errors.push(`Asset ${asset.id}: SAM3 error - ${result.error || 'Unknown error'}`);
+        continue;
+      }
+
+      // Create pending annotations from detections
+      for (const detection of result.detections) {
+        await prisma.pendingAnnotation.create({
+          data: {
+            batchJobId,
+            assetId: asset.id,
+            weedType: normalizeDetectionType(weedType),
+            confidence: detection.score,
+            polygon: detection.polygon,
+            bbox: detection.bbox,
+            status: 'PENDING',
+          },
+        });
+        totalDetections++;
+      }
+
+      processedCount++;
+
+      // Update progress
+      await prisma.batchJob.update({
+        where: { id: batchJobId },
+        data: {
+          processedImages: processedCount,
+          detectionsFound: totalDetections,
+        },
+      });
+
+      console.log(`[Sync] Job ${batchJobId}: Processed ${processedCount}/${assets.length} images, ${totalDetections} detections`);
+
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      errors.push(`Asset ${asset.id}: ${errorMessage}`);
+      console.error(`[Sync] Error processing asset ${asset.id}:`, errorMessage);
+    }
+  }
+
+  // Mark job complete
+  const finalStatus = errors.length > 0 && processedCount === 0 ? 'FAILED' : 'COMPLETED';
+  await prisma.batchJob.update({
+    where: { id: batchJobId },
+    data: {
+      status: finalStatus,
+      processedImages: processedCount,
+      detectionsFound: totalDetections,
+      completedAt: new Date(),
+      errorMessage: errors.length > 0 ? errors.slice(0, 10).join('; ') : null,
+    },
+  });
+
+  console.log(`[Sync] Job ${batchJobId} completed: ${processedCount} images, ${totalDetections} detections, ${errors.length} errors`);
+
+  return {
+    processedImages: processedCount,
+    detectionsFound: totalDetections,
+    errors: errors.slice(0, 10),
+  };
+}
+
 export async function POST(request: NextRequest): Promise<NextResponse> {
   // Rate limiting
   const clientIp = getClientIp(request);
@@ -82,15 +295,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   try {
-    // Check if Redis is available
-    const redisAvailable = await checkRedisConnection();
-    if (!redisAvailable) {
-      return NextResponse.json(
-        { error: 'Queue service unavailable. Please ensure Redis is running.', success: false },
-        { status: 503 }
-      );
-    }
-
     const body: BatchRequest = await request.json();
 
     // Validate required fields
@@ -183,6 +387,22 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
+    // Check if Redis is available for queue-based processing
+    const redisAvailable = await checkRedisConnection();
+    const useSyncProcessing = !redisAvailable && assetIds.length <= MAX_SYNC_IMAGES;
+
+    // If Redis unavailable and batch too large, return error with guidance
+    if (!redisAvailable && assetIds.length > MAX_SYNC_IMAGES) {
+      return NextResponse.json(
+        {
+          error: `Queue service unavailable. For batches larger than ${MAX_SYNC_IMAGES} images, please ensure the background worker is running. Try with fewer images or contact support.`,
+          success: false,
+          suggestion: `Select up to ${MAX_SYNC_IMAGES} images to process without the queue service.`,
+        },
+        { status: 503 }
+      );
+    }
+
     // Create batch job record
     const batchJob = await prisma.batchJob.create({
       data: {
@@ -191,10 +411,72 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         exemplars: body.exemplars,
         textPrompt: body.textPrompt?.substring(0, 100) || body.weedType.replace('Suspected ', ''),
         totalImages: assetIds.length,
-        status: 'QUEUED',
+        status: useSyncProcessing ? 'PROCESSING' : 'QUEUED',
       },
     });
 
+    // SYNCHRONOUS PROCESSING PATH
+    // When Redis is unavailable but batch is small enough, process inline
+    if (useSyncProcessing) {
+      console.log(`[Sync] Processing ${assetIds.length} images synchronously (Redis unavailable)`);
+
+      // Fetch full asset data for synchronous processing
+      const assetsForProcessing = await prisma.asset.findMany({
+        where: {
+          id: { in: assetIds },
+          projectId: body.projectId,
+        },
+        select: {
+          id: true,
+          storageUrl: true,
+          s3Key: true,
+          s3Bucket: true,
+          storageType: true,
+          imageWidth: true,
+          imageHeight: true,
+        },
+      });
+
+      try {
+        const result = await processSynchronously(
+          batchJob.id,
+          body.projectId,
+          body.weedType,
+          body.exemplars,
+          body.textPrompt,
+          assetsForProcessing
+        );
+
+        return NextResponse.json({
+          success: true,
+          batchJobId: batchJob.id,
+          totalImages: assetIds.length,
+          processedImages: result.processedImages,
+          detectionsFound: result.detectionsFound,
+          status: result.errors.length > 0 && result.processedImages === 0 ? 'FAILED' : 'COMPLETED',
+          message: `Processed ${result.processedImages} of ${assetIds.length} images with ${result.detectionsFound} detections.`,
+          errors: result.errors.length > 0 ? result.errors : undefined,
+          pollUrl: `/api/sam3/batch/${batchJob.id}`,
+          processedSynchronously: true,
+        });
+      } catch (syncError) {
+        console.error('Synchronous processing failed:', syncError);
+        await prisma.batchJob.update({
+          where: { id: batchJob.id },
+          data: {
+            status: 'FAILED',
+            errorMessage: syncError instanceof Error ? syncError.message : 'Synchronous processing failed',
+            completedAt: new Date(),
+          },
+        });
+        return NextResponse.json(
+          { error: 'Failed to process images', success: false },
+          { status: 500 }
+        );
+      }
+    }
+
+    // QUEUE-BASED PROCESSING PATH
     // Enqueue job for background processing
     // If enqueue fails, mark the job as FAILED to avoid stuck jobs
     try {
@@ -234,6 +516,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       message: `Batch job queued for processing. ${assetIds.length} images will be processed in the background.`,
       queuePosition: queueStats.waiting + 1,
       pollUrl: `/api/sam3/batch/${batchJob.id}`,
+      processedSynchronously: false,
     });
 
   } catch (error) {

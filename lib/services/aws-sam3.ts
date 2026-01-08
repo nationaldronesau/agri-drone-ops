@@ -627,14 +627,21 @@ class AWSSAM3Service {
       // Convert points to boxes for /segment endpoint
       // Create a small box around each foreground point (label=1)
       // Use a box size that's reasonable for typical weed detection
-      const BOX_HALF_SIZE = 50; // 50px radius around the click point
+      //
+      // IMPORTANT: Scale the box size proportionally with the image scaling.
+      // We want a consistent 50px box in ORIGINAL image coordinates.
+      // In resized coordinates, this should be 50 * scaleFactor.
+      // This prevents the box from being too large for big drone images,
+      // which would cause SAM3 to segment neighboring objects.
+      const BOX_HALF_SIZE_ORIGINAL = 50; // 50px radius in original image coordinates
+      const BOX_HALF_SIZE_RESIZED = Math.round(BOX_HALF_SIZE_ORIGINAL * scaling.scaleFactor);
       const boxes = request.points
         .filter(p => p.label === 1) // Only foreground points
         .map(p => ({
-          x1: Math.max(0, Math.round(p.x * scaling.scaleFactor) - BOX_HALF_SIZE),
-          y1: Math.max(0, Math.round(p.y * scaling.scaleFactor) - BOX_HALF_SIZE),
-          x2: Math.round(p.x * scaling.scaleFactor) + BOX_HALF_SIZE,
-          y2: Math.round(p.y * scaling.scaleFactor) + BOX_HALF_SIZE,
+          x1: Math.max(0, Math.round(p.x * scaling.scaleFactor) - BOX_HALF_SIZE_RESIZED),
+          y1: Math.max(0, Math.round(p.y * scaling.scaleFactor) - BOX_HALF_SIZE_RESIZED),
+          x2: Math.round(p.x * scaling.scaleFactor) + BOX_HALF_SIZE_RESIZED,
+          y2: Math.round(p.y * scaling.scaleFactor) + BOX_HALF_SIZE_RESIZED,
         }));
 
       if (boxes.length === 0) {
