@@ -35,6 +35,8 @@ const IMAGE_TIMEOUT = 30000; // 30 seconds per image fetch
 // SSRF protection patterns
 const ALLOWED_URL_PATTERNS = [
   /^https:\/\/[^/]+\.amazonaws\.com\//,
+  /^https:\/\/[^/]+\.cloudfront\.net\//,
+  /^https:\/\/staticagridrone\.ndsmartdata\.com\//,
   /^https:\/\/storage\.googleapis\.com\//,
   /^https:\/\/[^/]+\.blob\.core\.windows\.net\//,
   /^http:\/\/localhost(:\d+)?\//,
