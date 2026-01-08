@@ -50,6 +50,7 @@ const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 const ALLOWED_URL_PATTERNS = [
   /^https:\/\/[^/]+\.amazonaws\.com\//,
   /^https:\/\/[^/]+\.cloudfront\.net\//,  // CloudFront CDN for S3
+  /^https:\/\/staticagridrone\.ndsmartdata\.com\//, // Custom CloudFront domain
   /^https:\/\/storage\.googleapis\.com\//,
   /^https:\/\/[^/]+\.blob\.core\.windows\.net\//,
   /^http:\/\/localhost(:\d+)?\//,
