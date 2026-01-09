@@ -58,6 +58,9 @@ model Team {
   
   members     TeamMember[]
   projects    Project[]
+  trainingDatasets  TrainingDataset[]
+  trainingJobs      TrainingJob[]
+  trainedModels     TrainedModel[]
 }
 
 model TeamMember {
@@ -102,6 +105,7 @@ model Project {
   jobs        ProcessingJob[]
   orthomosaics Orthomosaic[]
   batchJobs   BatchJob[]
+  trainingDatasets TrainingDataset[]
 
   @@index([teamId])
   @@index([location])
@@ -537,6 +541,190 @@ enum TrainingSessionStatus {
   READY_TO_PUSH
   PUSHING
   COMPLETED
+  FAILED
+}
+
+// ============================================
+// YOLO Training Pipeline Models
+// ============================================
+
+model TrainingDataset {
+  id                  String   @id @default(cuid())
+  name                String
+  description         String?
+
+  // S3 location
+  s3Path              String
+  s3Bucket            String
+
+  // Source project (optional - can be built from multiple sessions)
+  projectId           String?
+  project             Project? @relation(fields: [projectId], references: [id])
+
+  // Dataset statistics
+  imageCount          Int
+  labelCount          Int
+  classes             String   // JSON: ["wattle", "lantana", ...]
+
+  // Train/val/test split
+  trainCount          Int
+  valCount            Int
+  testCount           Int
+
+  // Augmentation settings applied
+  augmentationPreset  String?
+  augmentationConfig  String?  // JSON
+  augmentedImageCount Int?
+
+  // Relations
+  trainingJobs        TrainingJob[]
+
+  // Ownership
+  teamId              String
+  team                Team     @relation(fields: [teamId], references: [id])
+  createdById         String?
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([teamId])
+  @@index([projectId])
+}
+
+model TrainingJob {
+  id                  String          @id @default(cuid())
+
+  // What we're training
+  datasetId           String
+  dataset             TrainingDataset @relation(fields: [datasetId], references: [id])
+
+  // Training configuration
+  baseModel           String
+  epochs              Int             @default(100)
+  batchSize           Int             @default(16)
+  imageSize           Int             @default(640)
+  learningRate        Float           @default(0.01)
+
+  // Advanced config (optional)
+  trainingConfig      String?         // JSON
+
+  // Status tracking
+  status              TrainingStatus  @default(QUEUED)
+  currentEpoch        Int             @default(0)
+  progress            Float           @default(0)
+
+  // Reference to EC2 job
+  ec2JobId            String?
+
+  // Metrics - updated during training
+  currentMetrics      String?         // JSON
+  metricsHistory      String?         // JSON
+
+  // Final metrics (populated on completion)
+  finalMAP50          Float?
+  finalMAP5095        Float?
+  finalPrecision      Float?
+  finalRecall         Float?
+  finalF1             Float?
+
+  // Timing
+  startedAt           DateTime?
+  completedAt         DateTime?
+  estimatedMinutes    Int?
+
+  // Error handling
+  errorMessage        String?
+  errorDetails        String?         // JSON
+
+  // Output model (created on successful completion)
+  trainedModelId      String?         @unique
+  trainedModel        TrainedModel?   @relation(fields: [trainedModelId], references: [id])
+
+  // Ownership
+  teamId              String
+  team                Team            @relation(fields: [teamId], references: [id])
+  createdById         String?
+
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  @@index([teamId])
+  @@index([status])
+  @@index([datasetId])
+}
+
+model TrainedModel {
+  id                  String       @id @default(cuid())
+
+  // Naming
+  name                String
+  version             Int
+  displayName         String?
+  description         String?
+
+  // S3 storage
+  s3Path              String
+  s3Bucket            String
+  weightsFile         String       @default("best.pt")
+  fileSizeBytes       Int?
+
+  // What this model detects
+  classes             String       // JSON
+  classCount          Int
+
+  // Performance metrics
+  mAP50               Float?
+  mAP5095             Float?
+  precision           Float?
+  recall              Float?
+  f1Score             Float?
+
+  // Per-class metrics
+  classMetrics        String?      // JSON
+
+  // Training lineage
+  trainingJob         TrainingJob?
+  baseModel           String
+  trainedOnImages     Int?
+  trainedEpochs       Int?
+
+  // Status
+  status              ModelStatus  @default(READY)
+  isActive            Boolean      @default(false)
+
+  // Usage tracking
+  inferenceCount      Int          @default(0)
+  lastUsedAt          DateTime?
+
+  // Ownership
+  teamId              String
+  team                Team         @relation(fields: [teamId], references: [id])
+  createdById         String?
+
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  @@unique([name, version, teamId])
+  @@index([teamId])
+  @@index([status])
+  @@index([isActive])
+}
+
+enum TrainingStatus {
+  QUEUED
+  PREPARING
+  RUNNING
+  UPLOADING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ModelStatus {
+  TRAINING
+  READY
+  ACTIVE
+  ARCHIVED
   FAILED
 }
 

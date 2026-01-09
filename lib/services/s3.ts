@@ -473,11 +473,12 @@ export class S3Service {
    */
   static async getSignedUrl(
     key: string,
-    expiresIn: number = SIGNED_URL_EXPIRY
+    expiresIn: number = SIGNED_URL_EXPIRY,
+    bucket: string = BUCKET_NAME
   ): Promise<string> {
     try {
       const command = new GetObjectCommand({
-        Bucket: BUCKET_NAME,
+        Bucket: bucket,
         Key: key,
       });
 
@@ -583,6 +584,31 @@ export class S3Service {
    */
   static getPublicUrl(key: string): string {
     return this.buildPublicUrl(key);
+  }
+
+  /**
+   * Upload a buffer directly to S3
+   */
+  static async uploadBuffer(
+    buffer: Buffer,
+    key: string,
+    contentType: string,
+    bucket: string = this.bucketName
+  ): Promise<void> {
+    assertValidS3Key(key, 'S3 upload key');
+    try {
+      const command = new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: buffer,
+        ContentType: contentType,
+      });
+
+      await s3Client.send(command);
+    } catch (error) {
+      console.error("S3 upload error:", error);
+      throw new Error(`Failed to upload file to S3: ${error instanceof Error ? error.message : "Unknown error"}`);
+    }
   }
 
   /**

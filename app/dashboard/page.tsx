@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Upload, Zap, Map, Plus, Users, Settings, Folder, Download, Mountain, Sparkles } from "lucide-react";
+import { Upload, Zap, Map, Plus, Users, Settings, Folder, Download, Mountain, Sparkles, Brain } from "lucide-react";
 import Link from "next/link";
 
 export default function Dashboard() {
@@ -144,6 +144,21 @@ export default function Dashboard() {
               <CardContent>
                 <CardTitle className="text-lg mb-2">Training Hub</CardTitle>
                 <CardDescription>Train AI to detect new species</CardDescription>
+              </CardContent>
+            </Card>
+          </Link>
+
+          <Link href="/training">
+            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-blue-200 bg-gradient-to-br from-blue-50 to-green-50">
+              <CardHeader className="pb-4">
+                <div className="flex items-center justify-between">
+                  <Brain className="w-8 h-8 text-blue-600" />
+                  <Plus className="w-5 h-5 text-gray-400" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <CardTitle className="text-lg mb-2">YOLO Training</CardTitle>
+                <CardDescription>Build datasets and train models</CardDescription>
               </CardContent>
             </Card>
           </Link>

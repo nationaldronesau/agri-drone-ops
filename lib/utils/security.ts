@@ -10,6 +10,8 @@
 // SSRF protection patterns - only allow trusted cloud storage and local development
 const ALLOWED_URL_PATTERNS = [
   /^https:\/\/[^/]+\.amazonaws\.com\//,
+  /^https:\/\/[^/]+\.cloudfront\.net\//,
+  /^https:\/\/staticagridrone\.ndsmartdata\.com\//,
   /^https:\/\/storage\.googleapis\.com\//,
   /^https:\/\/[^/]+\.blob\.core\.windows\.net\//,
   /^http:\/\/localhost(:\d+)?\//,
