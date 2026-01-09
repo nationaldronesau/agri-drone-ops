@@ -36,6 +36,12 @@ interface Detection {
   rejected: boolean;
   userCorrected: boolean;
   originalClass: string | null;
+  customModel?: {
+    id: string;
+    name: string;
+    version: number;
+    displayName?: string | null;
+  } | null;
   asset: {
     id: string;
     fileName: string;
@@ -74,6 +80,8 @@ function ReviewPageContent() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [session, setSession] = useState<TrainingSession | null>(null);
   const [saving, setSaving] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const [modelOptions, setModelOptions] = useState<Array<{ value: string; label: string }>>([]);
 
   // Load session from storage
   useEffect(() => {
@@ -92,9 +100,19 @@ function ReviewPageContent() {
         setLoading(true);
         // Fetch detections that need review (not yet verified or rejected)
         // Use all=true to get all detections needing review
-        const response = await fetch(
-          `/api/detections?projectId=${projectId}&needsReview=true&maxConfidence=${session.confidenceThreshold || 0.7}&all=true`
-        );
+        const params = new URLSearchParams({
+          projectId,
+          needsReview: 'true',
+          maxConfidence: String(session.confidenceThreshold || 0.7),
+          all: 'true',
+        });
+        if (sourceFilter === 'roboflow') {
+          params.set('customModelId', 'none');
+        } else if (sourceFilter.startsWith('model:')) {
+          params.set('customModelId', sourceFilter.replace('model:', ''));
+        }
+
+        const response = await fetch(`/api/detections?${params.toString()}`);
         const data = await response.json();
         // API returns array directly when all=true, not wrapped in { detections: [] }
         setDetections(Array.isArray(data) ? data : []);
@@ -105,9 +123,32 @@ function ReviewPageContent() {
       }
     };
     fetchDetections();
-  }, [projectId, session]);
+  }, [projectId, session, sourceFilter]);
+
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        const response = await fetch('/api/training/models?limit=100');
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error || 'Failed to load models');
+        }
+        const options = (data.models || []).map((model: any) => ({
+          value: `model:${model.id}`,
+          label: model.displayName || `${model.name} v${model.version}`,
+        }));
+        setModelOptions(options);
+      } catch (err) {
+        console.error('Failed to fetch models:', err);
+      }
+    };
+    fetchModels();
+  }, []);
 
   const currentDetection = detections[currentIndex];
+  const currentModelLabel = currentDetection?.customModel
+    ? currentDetection.customModel.displayName || `${currentDetection.customModel.name} v${currentDetection.customModel.version}`
+    : 'Roboflow';
 
   const reviewedCount = detections.filter((d) => d.verified || d.rejected).length;
   const progress = detections.length > 0 ? (reviewedCount / detections.length) * 100 : 0;
@@ -244,6 +285,24 @@ function ReviewPageContent() {
           </div>
         </div>
 
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+          <div className="text-sm text-gray-600">Filter detections</div>
+          <Select value={sourceFilter} onValueChange={setSourceFilter}>
+            <SelectTrigger className="w-[220px]">
+              <SelectValue placeholder="All sources" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All sources</SelectItem>
+              <SelectItem value="roboflow">Roboflow</SelectItem>
+              {modelOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
         {loading ? (
           <div className="flex items-center justify-center py-16">
             <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
@@ -303,7 +362,11 @@ function ReviewPageContent() {
                         <div className="flex-1 text-left min-w-0">
                           <p className="text-sm font-medium truncate">{detection.className}</p>
                           <p className="text-xs text-gray-500">
-                            {(detection.confidence * 100).toFixed(0)}% confidence
+                            {(detection.confidence * 100).toFixed(0)}% confidence -{' '}
+                            {detection.customModel
+                              ? detection.customModel.displayName ||
+                                `${detection.customModel.name} v${detection.customModel.version}`
+                              : 'Roboflow'}
                           </p>
                         </div>
                         {detection.userCorrected && <Edit className="w-4 h-4 text-amber-500" />}
@@ -345,7 +408,7 @@ function ReviewPageContent() {
                         )}
                       </div>
                       <CardContent className="p-4">
-                        <div className="flex items-center justify-between mb-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
                           <div className="flex items-center gap-2">
                             <Button
                               variant="outline"
@@ -363,6 +426,9 @@ function ReviewPageContent() {
                             >
                               <ChevronRight className="w-4 h-4" />
                             </Button>
+                            <span className="text-xs text-gray-500">
+                              Model: {currentModelLabel}
+                            </span>
                           </div>
 
                           <div className="flex items-center gap-2">

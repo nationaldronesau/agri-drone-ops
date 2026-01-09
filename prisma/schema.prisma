@@ -214,6 +214,9 @@ model Detection {
   type            DetectionType
   className       String
   confidence      Float?
+
+  // Custom model source tracking
+  customModelId   String?
   
   // Pixel coordinates
   boundingBox     Json           // {x, y, width, height} or polygon points
@@ -236,9 +239,11 @@ model Detection {
   
   job             ProcessingJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
   asset           Asset          @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  customModel     TrainedModel?  @relation(fields: [customModelId], references: [id])
   
   @@index([jobId])
   @@index([assetId])
+  @@index([customModelId])
   @@index([centerLat, centerLon])
   @@index([verified])
   @@index([rejected])
@@ -687,6 +692,9 @@ model TrainedModel {
   baseModel           String
   trainedOnImages     Int?
   trainedEpochs       Int?
+
+  // Detection lineage
+  detections          Detection[]
 
   // Status
   status              ModelStatus  @default(READY)

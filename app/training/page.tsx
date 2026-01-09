@@ -18,6 +18,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
+import { Slider } from "@/components/ui/slider";
 import {
   Select,
   SelectContent,
@@ -34,6 +35,7 @@ import {
   Settings,
   ShieldCheck,
   XCircle,
+  PlayCircle,
 } from "lucide-react";
 
 interface Project {
@@ -93,10 +95,30 @@ interface TrainedModel {
   name: string;
   version: number;
   displayName?: string | null;
+  classes?: string[];
   mAP50?: number | null;
   status: string;
   isActive: boolean;
   createdAt: string;
+}
+
+interface InferenceJob {
+  id: string;
+  status: string;
+  progress: number;
+  errorMessage?: string | null;
+  createdAt: string;
+  project: { id: string; name: string };
+  config: {
+    modelId?: string;
+    modelName?: string;
+    confidence?: number;
+    totalImages?: number;
+    processedImages?: number;
+    detectionsFound?: number;
+    skippedImages?: number;
+    duplicateImages?: number;
+  };
 }
 
 interface DatasetPreview {
@@ -124,6 +146,14 @@ const STATUS_STYLES: Record<string, string> = {
   PREPARING: "bg-blue-100 text-blue-700",
   RUNNING: "bg-green-100 text-green-700",
   UPLOADING: "bg-amber-100 text-amber-700",
+  COMPLETED: "bg-emerald-100 text-emerald-700",
+  FAILED: "bg-red-100 text-red-700",
+  CANCELLED: "bg-gray-100 text-gray-600",
+};
+
+const INFERENCE_STATUS_STYLES: Record<string, string> = {
+  PENDING: "bg-slate-100 text-slate-700",
+  PROCESSING: "bg-blue-100 text-blue-700",
   COMPLETED: "bg-emerald-100 text-emerald-700",
   FAILED: "bg-red-100 text-red-700",
   CANCELLED: "bg-gray-100 text-gray-600",
@@ -162,6 +192,7 @@ export default function TrainingPage() {
   const [datasets, setDatasets] = useState<TrainingDataset[]>([]);
   const [jobs, setJobs] = useState<TrainingJob[]>([]);
   const [models, setModels] = useState<TrainedModel[]>([]);
+  const [inferenceJobs, setInferenceJobs] = useState<InferenceJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -178,6 +209,8 @@ export default function TrainingPage() {
 
   const [createDatasetOpen, setCreateDatasetOpen] = useState(false);
   const [startTrainingOpen, setStartTrainingOpen] = useState(false);
+  const [runInferenceOpen, setRunInferenceOpen] = useState(false);
+  const [selectedInferenceModel, setSelectedInferenceModel] = useState<TrainedModel | null>(null);
 
   const [datasetForm, setDatasetForm] = useState({
     name: "",
@@ -206,11 +239,25 @@ export default function TrainingPage() {
     batchSize: 16,
     imageSize: 640,
   });
+  const [inferenceForm, setInferenceForm] = useState({
+    projectId: "",
+    confidence: 0.25,
+  });
+  const [inferencePreview, setInferencePreview] = useState<{
+    totalImages: number;
+    skippedImages: number;
+    duplicateImages: number;
+    skippedReason?: string;
+  } | null>(null);
+  const [inferencePreviewLoading, setInferencePreviewLoading] = useState(false);
+  const [startingInference, setStartingInference] = useState(false);
   const [startingTraining, setStartingTraining] = useState(false);
   const [cancelJobId, setCancelJobId] = useState<string | null>(null);
+  const [cancelInferenceJobId, setCancelInferenceJobId] = useState<string | null>(null);
   const [activatingModelId, setActivatingModelId] = useState<string | null>(null);
   const [downloadingModelId, setDownloadingModelId] = useState<string | null>(null);
   const pollingInFlight = useRef(false);
+  const inferencePollingInFlight = useRef(false);
 
   const activeJobs = useMemo(
     () => jobs.filter((job) => ACTIVE_STATUSES.has(job.status)),
@@ -221,6 +268,23 @@ export default function TrainingPage() {
   const activeJobIds = useMemo(
     () => activeJobs.map((job) => job.id).join(","),
     [activeJobs]
+  );
+
+  const activeInferenceJobs = useMemo(
+    () => inferenceJobs.filter((job) => ["PENDING", "PROCESSING"].includes(job.status)),
+    [inferenceJobs]
+  );
+  const recentInferenceJobs = useMemo(
+    () =>
+      inferenceJobs
+        .filter((job) => !["PENDING", "PROCESSING"].includes(job.status))
+        .slice(0, 4),
+    [inferenceJobs]
+  );
+
+  const activeInferenceIds = useMemo(
+    () => activeInferenceJobs.map((job) => job.id).join(","),
+    [activeInferenceJobs]
   );
 
   const selectedDataset = useMemo(
@@ -277,6 +341,15 @@ export default function TrainingPage() {
     setModels(data.models || []);
   }, []);
 
+  const loadInferenceJobs = useCallback(async () => {
+    const response = await fetch("/api/inference/jobs?limit=30");
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data?.error || "Failed to load inference jobs");
+    }
+    setInferenceJobs(data.jobs || []);
+  }, []);
+
   const loadHealth = useCallback(async () => {
     setHealth((prev) => ({ ...prev, loading: true }));
     try {
@@ -304,11 +377,18 @@ export default function TrainingPage() {
     setError(null);
     setNotice(null);
     try {
-      await Promise.all([loadProjects(), loadDatasets(), loadJobs(), loadModels(), loadHealth()]);
+      await Promise.all([
+        loadProjects(),
+        loadDatasets(),
+        loadJobs(),
+        loadModels(),
+        loadInferenceJobs(),
+        loadHealth(),
+      ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load training data");
     }
-  }, [loadProjects, loadDatasets, loadJobs, loadModels, loadHealth]);
+  }, [loadProjects, loadDatasets, loadJobs, loadModels, loadInferenceJobs, loadHealth]);
 
   useEffect(() => {
     setLoading(true);
@@ -326,6 +406,12 @@ export default function TrainingPage() {
       setTrainingForm((prev) => ({ ...prev, datasetId: datasets[0].id }));
     }
   }, [datasets, trainingForm.datasetId]);
+
+  useEffect(() => {
+    if (projects.length > 0 && !inferenceForm.projectId) {
+      setInferenceForm((prev) => ({ ...prev, projectId: projects[0].id }));
+    }
+  }, [projects, inferenceForm.projectId]);
 
   const loadClassOptions = useCallback(async () => {
     if (!datasetForm.projectId) return;
@@ -369,6 +455,38 @@ export default function TrainingPage() {
     datasetForm.minConfidence,
   ]);
 
+  const loadInferencePreview = useCallback(async () => {
+    if (!selectedInferenceModel || !inferenceForm.projectId) return;
+    setInferencePreviewLoading(true);
+    try {
+      const response = await fetch("/api/inference/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          modelId: selectedInferenceModel.id,
+          projectId: inferenceForm.projectId,
+          confidence: inferenceForm.confidence,
+          saveDetections: true,
+          preview: true,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || "Failed to preview inference");
+      }
+      setInferencePreview({
+        totalImages: data.totalImages || 0,
+        skippedImages: data.skippedImages || 0,
+        duplicateImages: data.duplicateImages || 0,
+        skippedReason: data.skippedReason,
+      });
+    } catch (err) {
+      setInferencePreview(null);
+    } finally {
+      setInferencePreviewLoading(false);
+    }
+  }, [selectedInferenceModel, inferenceForm.projectId, inferenceForm.confidence]);
+
   useEffect(() => {
     if (!createDatasetOpen) return;
     loadClassOptions();
@@ -380,6 +498,17 @@ export default function TrainingPage() {
     datasetForm.minConfidence,
     loadClassOptions,
   ]);
+
+  useEffect(() => {
+    if (!runInferenceOpen) return;
+    loadInferencePreview();
+  }, [runInferenceOpen, loadInferencePreview]);
+
+  useEffect(() => {
+    if (runInferenceOpen) return;
+    setInferencePreview(null);
+    setInferencePreviewLoading(false);
+  }, [runInferenceOpen]);
 
   useEffect(() => {
     // Use activeJobIds as stable dependency to prevent infinite interval recreation
@@ -415,6 +544,24 @@ export default function TrainingPage() {
 
     return () => clearInterval(interval);
   }, [activeJobIds]);
+
+  useEffect(() => {
+    if (!activeInferenceIds) return;
+
+    const interval = setInterval(async () => {
+      if (inferencePollingInFlight.current) return;
+      inferencePollingInFlight.current = true;
+      try {
+        await loadInferenceJobs();
+      } catch (err) {
+        console.error("Failed to poll inference jobs:", err);
+      } finally {
+        inferencePollingInFlight.current = false;
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [activeInferenceIds, loadInferenceJobs]);
 
   const handlePreview = async () => {
     if (!datasetForm.projectId) {
@@ -538,6 +685,58 @@ export default function TrainingPage() {
     }
   };
 
+  const handleStartInference = async () => {
+    if (!selectedInferenceModel || !inferenceForm.projectId) {
+      setError("Select a model and project before running inference.");
+      return;
+    }
+
+    setStartingInference(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/inference/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          modelId: selectedInferenceModel.id,
+          projectId: inferenceForm.projectId,
+          confidence: inferenceForm.confidence,
+          saveDetections: true,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || "Failed to start inference");
+      }
+      setNotice("Inference job started. Results will appear in review.");
+      setRunInferenceOpen(false);
+      await loadInferenceJobs();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start inference");
+    } finally {
+      setStartingInference(false);
+    }
+  };
+
+  const handleCancelInferenceJob = async (jobId: string) => {
+    if (!confirm("Cancel this inference job?")) return;
+    setCancelInferenceJobId(jobId);
+    setError(null);
+    try {
+      const response = await fetch(`/api/inference/${jobId}`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || "Failed to cancel inference job");
+      }
+      await loadInferenceJobs();
+      setNotice("Inference job cancelled.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to cancel inference job");
+    } finally {
+      setCancelInferenceJobId(null);
+    }
+  };
+
   const handleCancelJob = async (jobId: string) => {
     if (!confirm("Cancel this training job?")) return;
     setCancelJobId(jobId);
@@ -595,6 +794,53 @@ export default function TrainingPage() {
       setDownloadingModelId(null);
     }
   };
+
+  const handleReviewInference = (job: InferenceJob) => {
+    const model = models.find((item) => item.id === job.config.modelId);
+    const modelClasses = model?.classes || [];
+    const project = projects.find((item) => item.id === job.project.id);
+    const sessionPayload = {
+      workflowType: "IMPROVE_EXISTING",
+      localProjectId: job.project.id,
+      roboflowProjectId: "",
+      roboflowProject: {
+        project: {
+          id: job.project.id,
+          roboflowId: "",
+          name: project?.name || job.project.name,
+        },
+        classes: modelClasses.map((className) => ({
+          id: className,
+          className,
+          color: null,
+        })),
+      },
+      confidenceThreshold: typeof job.config.confidence === "number" ? job.config.confidence : 0.7,
+    };
+
+    try {
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem("trainingSession", JSON.stringify(sessionPayload));
+        window.location.href = `/training-hub/improve/review?project=${job.project.id}`;
+      }
+    } catch (err) {
+      console.error("Failed to store training session:", err);
+    }
+  };
+
+  const getInferenceModelLabel = useCallback(
+    (job: InferenceJob) => {
+      if (job.config?.modelName) return job.config.modelName;
+      if (job.config?.modelId) {
+        const model = models.find((item) => item.id === job.config.modelId);
+        if (model) {
+          return model.displayName || `${model.name} v${model.version}`;
+        }
+      }
+      return "Custom model";
+    },
+    [models]
+  );
 
   const splitTotal = datasetForm.splitTrain + datasetForm.splitVal + datasetForm.splitTest;
 
@@ -1044,6 +1290,131 @@ export default function TrainingPage() {
               </DialogContent>
             </Dialog>
 
+            <Dialog open={runInferenceOpen} onOpenChange={setRunInferenceOpen}>
+              <DialogContent className="max-w-xl">
+                <DialogHeader>
+                  <DialogTitle>Run Model Inference</DialogTitle>
+                  <DialogDescription>
+                    Generate draft detections to review in Training Hub.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-3">
+                  <Label>Model</Label>
+                  <Input
+                    value={
+                      selectedInferenceModel
+                        ? selectedInferenceModel.displayName ||
+                          `${selectedInferenceModel.name} v${selectedInferenceModel.version}`
+                        : "Select a model"
+                    }
+                    readOnly
+                  />
+                </div>
+
+                <div className="space-y-3">
+                  <Label htmlFor="inference-project">Target project</Label>
+                  <Select
+                    value={inferenceForm.projectId}
+                    onValueChange={(value) =>
+                      setInferenceForm((prev) => ({ ...prev, projectId: value }))
+                    }
+                  >
+                    <SelectTrigger id="inference-project">
+                      <SelectValue placeholder="Select a project" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {projects.map((project) => (
+                        <SelectItem key={project.id} value={project.id}>
+                          {project.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Confidence threshold</Label>
+                  <div className="flex items-center gap-3">
+                    <Slider
+                      min={0.05}
+                      max={0.95}
+                      step={0.05}
+                      value={[inferenceForm.confidence]}
+                      onValueChange={(value) =>
+                        setInferenceForm((prev) => ({
+                          ...prev,
+                          confidence: value[0] ?? prev.confidence,
+                        }))
+                      }
+                    />
+                    <Input
+                      className="w-24"
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={inferenceForm.confidence}
+                      onChange={(event) =>
+                        setInferenceForm((prev) => ({
+                          ...prev,
+                          confidence: clampNumber(Number(event.target.value), 0, 1),
+                        }))
+                      }
+                    />
+                  </div>
+                </div>
+
+                <Card className="border-dashed border-gray-200">
+                  <CardHeader>
+                    <CardTitle className="text-base">Preview</CardTitle>
+                    <CardDescription>
+                      {inferencePreviewLoading
+                        ? "Calculating eligible images..."
+                        : "Counts exclude images already processed by this model."}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="grid gap-3 md:grid-cols-3 text-sm">
+                    <div className="rounded-md bg-white p-3 border border-gray-100">
+                      <p className="text-xs text-gray-500">Eligible images</p>
+                      <p className="text-lg font-semibold">
+                        {inferencePreview ? inferencePreview.totalImages : "--"}
+                      </p>
+                    </div>
+                    <div className="rounded-md bg-white p-3 border border-gray-100">
+                      <p className="text-xs text-gray-500">Skipped</p>
+                      <p className="text-lg font-semibold">
+                        {inferencePreview ? inferencePreview.skippedImages : "--"}
+                      </p>
+                    </div>
+                    <div className="rounded-md bg-white p-3 border border-gray-100">
+                      <p className="text-xs text-gray-500">Duplicates</p>
+                      <p className="text-lg font-semibold">
+                        {inferencePreview ? inferencePreview.duplicateImages : "--"}
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setRunInferenceOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleStartInference}
+                    disabled={
+                      startingInference ||
+                      !selectedInferenceModel ||
+                      !inferenceForm.projectId ||
+                      (inferencePreview && inferencePreview.totalImages === 0)
+                    }
+                  >
+                    {startingInference ? "Starting..." : "Start Inference"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
             <Link href="/dashboard">
               <Button variant="outline">Back to Dashboard</Button>
             </Link>
@@ -1079,7 +1450,7 @@ export default function TrainingPage() {
           </div>
         )}
 
-        <div className="grid gap-6 lg:grid-cols-2">
+        <div className="grid gap-6 lg:grid-cols-3">
           <Card>
             <CardHeader>
               <CardTitle>Active Training Jobs</CardTitle>
@@ -1196,6 +1567,157 @@ export default function TrainingPage() {
 
           <Card>
             <CardHeader>
+              <CardTitle>Inference Jobs</CardTitle>
+              <CardDescription>Draft detections from custom models.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {loading ? (
+                <p className="text-sm text-gray-500">Loading inference jobs...</p>
+              ) : inferenceJobs.length === 0 ? (
+                <p className="text-sm text-gray-500">No inference jobs yet.</p>
+              ) : (
+                <>
+                  <div className="space-y-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Active
+                    </p>
+                    {activeInferenceJobs.length === 0 ? (
+                      <p className="text-sm text-gray-500">No active inference jobs.</p>
+                    ) : (
+                      activeInferenceJobs.map((job) => {
+                        const totalImages = job.config?.totalImages ?? 0;
+                        const processedImages = job.config?.processedImages ?? 0;
+                        const progress =
+                          typeof job.progress === "number"
+                            ? Math.min(100, Math.max(0, job.progress))
+                            : totalImages > 0
+                              ? Math.min(
+                                  100,
+                                  Math.round((processedImages / totalImages) * 100)
+                                )
+                              : 0;
+                        const statusKey = job.status.toUpperCase();
+
+                        return (
+                          <div
+                            key={job.id}
+                            className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div>
+                                <p className="text-xs text-gray-500">Project</p>
+                                <p className="text-sm font-semibold text-gray-900">
+                                  {job.project.name}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {getInferenceModelLabel(job)}
+                                </p>
+                              </div>
+                              <Badge
+                                className={
+                                  INFERENCE_STATUS_STYLES[statusKey] ||
+                                  "bg-gray-100 text-gray-700"
+                                }
+                              >
+                                {formatStatus(job.status)}
+                              </Badge>
+                            </div>
+
+                            <div className="mt-3 space-y-2">
+                              <Progress value={progress} />
+                              <div className="flex items-center justify-between text-xs text-gray-500">
+                                <span>
+                                  {processedImages}/{totalImages} images
+                                </span>
+                                <span>{progress}%</span>
+                              </div>
+                            </div>
+
+                            <div className="mt-3 flex items-center justify-between text-xs text-gray-500">
+                              <span>
+                                Detections {job.config?.detectionsFound ?? 0}
+                              </span>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleCancelInferenceJob(job.id)}
+                                disabled={cancelInferenceJobId === job.id}
+                              >
+                                {cancelInferenceJobId === job.id
+                                  ? "Cancelling..."
+                                  : "Cancel"}
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  <div className="space-y-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Recent
+                    </p>
+                    {recentInferenceJobs.length === 0 ? (
+                      <p className="text-sm text-gray-500">No completed inference jobs.</p>
+                    ) : (
+                      recentInferenceJobs.map((job) => {
+                        const statusKey = job.status.toUpperCase();
+                        return (
+                          <div
+                            key={job.id}
+                            className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div>
+                                <p className="text-sm font-semibold text-gray-900">
+                                  {job.project.name}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {getInferenceModelLabel(job)}
+                                </p>
+                              </div>
+                              <Badge
+                                className={
+                                  INFERENCE_STATUS_STYLES[statusKey] ||
+                                  "bg-gray-100 text-gray-700"
+                                }
+                              >
+                                {formatStatus(job.status)}
+                              </Badge>
+                            </div>
+
+                            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
+                              <span>
+                                Detections {job.config?.detectionsFound ?? 0}
+                              </span>
+                              {job.status === "COMPLETED" ? (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleReviewInference(job)}
+                                >
+                                  Review
+                                </Button>
+                              ) : null}
+                            </div>
+                            {job.status === "FAILED" && job.errorMessage ? (
+                              <p className="mt-2 text-xs text-red-600">
+                                {job.errorMessage}
+                              </p>
+                            ) : null}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
               <CardTitle>Trained Models</CardTitle>
               <CardDescription>Activate a model to use it for detection.</CardDescription>
             </CardHeader>
@@ -1226,6 +1748,22 @@ export default function TrainingPage() {
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setSelectedInferenceModel(model);
+                          setInferencePreview(null);
+                          setRunInferenceOpen(true);
+                        }}
+                        disabled={
+                          !health.available ||
+                          !["READY", "ACTIVE"].includes(model.status)
+                        }
+                      >
+                        <PlayCircle className="mr-2 h-4 w-4" />
+                        Run on Project
+                      </Button>
                       <Button
                         variant="outline"
                         size="sm"

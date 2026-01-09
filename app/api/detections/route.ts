@@ -22,6 +22,7 @@ export async function GET(request: NextRequest) {
     const assetId = searchParams.get('assetId');
     const needsReview = searchParams.get('needsReview');
     const maxConfidence = searchParams.get('maxConfidence');
+    const customModelId = searchParams.get('customModelId');
 
     // If projectId specified, verify user has access
     if (projectId) {
@@ -95,6 +96,9 @@ export async function GET(request: NextRequest) {
     if (assetId) {
       where.assetId = assetId;
     }
+    if (customModelId) {
+      where.customModelId = customModelId === 'none' ? null : customModelId;
+    }
     if (needsReview === 'true') {
       where.verified = false;
       where.rejected = false;
@@ -130,6 +134,14 @@ export async function GET(request: NextRequest) {
           }
         },
         job: true,
+        customModel: {
+          select: {
+            id: true,
+            name: true,
+            version: true,
+            displayName: true,
+          },
+        },
       },
       orderBy: {
         ...(needsReview === 'true'
