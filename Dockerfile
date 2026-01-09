@@ -61,6 +61,8 @@ COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/workers ./workers
 COPY --from=builder /app/lib ./lib
+# Copy tsconfig.json so tsconfig-paths can resolve @/* imports
+COPY --from=builder /app/tsconfig.json ./tsconfig.json
 
 # Copy entrypoint script
 COPY ./scripts/docker-entrypoint.sh ./scripts/
