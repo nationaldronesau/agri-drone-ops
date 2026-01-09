@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Add npm to PATH
+export PATH=$PATH:/usr/local/bin
+
 echo "Starting inference worker with PM2..."
 
 # Install PM2 globally
