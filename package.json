@@ -11,11 +11,11 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:debug": "playwright test --debug",
-    "worker:dev": "tsx --env-file=.env workers/batch-worker.ts",
-    "worker": "tsx workers/batch-worker.ts",
+    "worker:dev": "tsx -r tsconfig-paths/register --env-file=.env workers/batch-worker.ts",
+    "worker": "tsx -r tsconfig-paths/register workers/batch-worker.ts",
     "worker:watch": "tsx --watch --env-file=.env workers/batch-worker.ts",
-    "worker:inference": "tsx workers/inference-worker.ts",
-    "worker:inference:dev": "tsx --env-file=.env workers/inference-worker.ts",
+    "worker:inference": "tsx -r tsconfig-paths/register workers/inference-worker.ts",
+    "worker:inference:dev": "tsx -r tsconfig-paths/register --env-file=.env workers/inference-worker.ts",
     "docker:build": "docker build -t agridrone-ops .",
     "docker:dev": "docker-compose -f docker-compose.yml -f docker-compose.dev.yml up",
     "docker:prod": "docker-compose up -d",
@@ -77,6 +77,7 @@
     "sharp": "^0.34.3",
     "tailwind-merge": "^3.3.1",
     "tailwindcss": "^3.4.15",
+    "tsconfig-paths": "4.2.0",
     "zod": "^4.0.5"
   },
   "devDependencies": {
