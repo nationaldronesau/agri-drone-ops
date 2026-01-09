@@ -18,7 +18,6 @@ RUN npm ci
 COPY prisma ./prisma/
 RUN npx prisma generate
 
-
 # ----------------------
 # Stage 2: Build the Next.js app
 # ----------------------
@@ -34,9 +33,8 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build
 
-
 # ----------------------
-# Stage 3: Production runtime
+# Stage 3: Production runtime with PM2
 # ----------------------
 FROM node:20-alpine AS runner
 
@@ -47,7 +45,9 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=8080
 
-RUN apk add --no-cache libc6-compat
+# Install compatibility libs + PM2 globally
+RUN apk add --no-cache libc6-compat bash curl \
+    && npm install -g pm2
 
 # Create non-root user
 RUN addgroup --system --gid 1001 nodejs \
@@ -59,7 +59,6 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/prisma ./prisma
-
 # Copy entrypoint script
 COPY ./scripts/docker-entrypoint.sh ./scripts/
 RUN chmod +x ./scripts/docker-entrypoint.sh
@@ -74,8 +73,13 @@ USER nextjs
 # Match Beanstalk’s default Nginx proxy mapping
 EXPOSE 8080
 
+# ----------------------
+# PM2 ecosystem configuration
+# ----------------------
+# We'll define two processes: web (Next.js) and worker:inference
+COPY ./ecosystem.config.js ./
+
 ##############################################################################
-# Run docker-entrypoint.sh script when the container starts.
-# Note: If you run migrations etc outside CMD, env vars won't be available!
+# Run PM2-runtime when container starts
 ##############################################################################
-CMD ["sh", "./scripts/docker-entrypoint.sh"]
+CMD ["pm2-runtime", "ecosystem.config.js"]
