@@ -10,6 +10,14 @@ module.exports = {
       },
     },
     {
+      name: "worker",
+      script: "npm",
+      args: "run worker",
+      env: {
+        NODE_ENV: "production",
+      },
+    },
+    {
       name: "inference-worker",
       script: "npm",
       args: "run worker:inference",
