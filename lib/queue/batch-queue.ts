@@ -5,7 +5,7 @@
  * Jobs are processed by the worker in workers/batch-worker.ts
  */
 import { Queue } from 'bullmq';
-import { createRedisConnection } from './redis';
+import { createRedisConnection, QUEUE_PREFIX } from './redis';
 
 // Job data structure
 export interface BatchJobData {
@@ -39,6 +39,7 @@ export function getBatchQueue(): Queue<BatchJobData, BatchJobResult> {
   if (!batchQueue) {
     batchQueue = new Queue<BatchJobData, BatchJobResult>(BATCH_QUEUE_NAME, {
       connection: createRedisConnection(),
+      prefix: QUEUE_PREFIX, // Hash tag prefix for Redis Cluster compatibility
       defaultJobOptions: {
         attempts: 3,
         backoff: {

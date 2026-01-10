@@ -13,7 +13,7 @@
  */
 import { Worker, Job } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
-import { createRedisConnection } from '../lib/queue/redis';
+import { createRedisConnection, QUEUE_PREFIX } from '../lib/queue/redis';
 import { BATCH_QUEUE_NAME, BatchJobData, BatchJobResult } from '../lib/queue/batch-queue';
 import { sam3Orchestrator } from '../lib/services/sam3-orchestrator';
 import { normalizeDetectionType } from '../lib/utils/detection-types';
@@ -308,6 +308,7 @@ async function startWorker() {
     },
     {
       connection: redisConnection,
+      prefix: QUEUE_PREFIX, // Hash tag prefix for Redis Cluster compatibility
       concurrency: 2, // Process up to 2 jobs in parallel
     }
   );
