@@ -6,7 +6,7 @@
  */
 import { Worker, Job } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
-import { createRedisConnection } from '../lib/queue/redis';
+import { createRedisConnection, QUEUE_PREFIX } from '../lib/queue/redis';
 import {
   INFERENCE_QUEUE_NAME,
   InferenceJobData,
@@ -85,6 +85,7 @@ async function startWorker() {
     async (job) => handleInferenceJob(job),
     {
       connection: redisConnection,
+      prefix: QUEUE_PREFIX, // Hash tag prefix for Redis Cluster compatibility
       concurrency: 2,
     }
   );

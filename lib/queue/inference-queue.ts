@@ -5,7 +5,7 @@
  * Jobs are processed by workers/inference-worker.ts
  */
 import { Queue } from 'bullmq';
-import { createRedisConnection } from './redis';
+import { createRedisConnection, QUEUE_PREFIX } from './redis';
 
 export interface InferenceJobData {
   processingJobId: string;
@@ -33,6 +33,7 @@ export function getInferenceQueue(): Queue<InferenceJobData, InferenceJobResult>
   if (!inferenceQueue) {
     inferenceQueue = new Queue<InferenceJobData, InferenceJobResult>(INFERENCE_QUEUE_NAME, {
       connection: createRedisConnection(),
+      prefix: QUEUE_PREFIX, // Hash tag prefix for Redis Cluster compatibility
       defaultJobOptions: {
         attempts: 2,
         backoff: {
