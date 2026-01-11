@@ -311,7 +311,24 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   try {
-    const body: BatchRequest = await request.json();
+    // Parse request body with specific error handling
+    let body: BatchRequest;
+    try {
+      body = await request.json();
+    } catch (parseError) {
+      console.error('Failed to parse request body:', parseError);
+      return NextResponse.json(
+        { error: 'Invalid request body - could not parse JSON', success: false },
+        { status: 400 }
+      );
+    }
+
+    console.log('[Batch] Request received:', {
+      projectId: body.projectId,
+      weedType: body.weedType,
+      exemplarCount: body.exemplars?.length,
+      assetIdCount: body.assetIds?.length,
+    });
 
     // Validate required fields
     if (!body.projectId || !body.weedType || !body.exemplars?.length) {
@@ -323,6 +340,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     // Validate projectId format (CUID)
     if (!/^c[a-z0-9]{24,}$/i.test(body.projectId)) {
+      console.log('[Batch] Invalid projectId format:', body.projectId);
       return NextResponse.json(
         { error: 'Invalid project ID format', success: false },
         { status: 400 }
@@ -330,7 +348,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
 
     // Authentication and project access check
-    const projectAccess = await checkProjectAccess(body.projectId);
+    let projectAccess;
+    try {
+      projectAccess = await checkProjectAccess(body.projectId);
+    } catch (authError) {
+      console.error('[Batch] Auth check failed:', authError);
+      return NextResponse.json(
+        { error: 'Authentication check failed', success: false },
+        { status: 500 }
+      );
+    }
     if (!projectAccess.authenticated) {
       return NextResponse.json(
         { error: 'Authentication required', success: false },
@@ -352,11 +379,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
+    // Validate exemplar coordinates (support high-res images up to 50MP - approx 8000x6000)
+    const MAX_COORD = 20000;
     for (const exemplar of body.exemplars) {
       if (typeof exemplar.x1 !== 'number' || typeof exemplar.y1 !== 'number' ||
           typeof exemplar.x2 !== 'number' || typeof exemplar.y2 !== 'number' ||
           exemplar.x1 < 0 || exemplar.y1 < 0 || exemplar.x2 < 0 || exemplar.y2 < 0 ||
-          exemplar.x1 > 10000 || exemplar.y1 > 10000 || exemplar.x2 > 10000 || exemplar.y2 > 10000) {
+          exemplar.x1 > MAX_COORD || exemplar.y1 > MAX_COORD || exemplar.x2 > MAX_COORD || exemplar.y2 > MAX_COORD) {
+        console.log('[Batch] Invalid exemplar coordinates:', exemplar);
         return NextResponse.json(
           { error: 'Invalid exemplar coordinates', success: false },
           { status: 400 }
@@ -366,34 +396,42 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     // Get target asset IDs
     let assetIds: string[];
-    if (body.assetIds?.length) {
-      // Validate asset IDs format
-      for (const assetId of body.assetIds) {
-        if (!/^c[a-z0-9]{24,}$/i.test(assetId)) {
-          return NextResponse.json(
-            { error: 'Invalid asset ID format', success: false },
-            { status: 400 }
-          );
+    try {
+      if (body.assetIds?.length) {
+        // Validate asset IDs format
+        for (const assetId of body.assetIds) {
+          if (!/^c[a-z0-9]{24,}$/i.test(assetId)) {
+            return NextResponse.json(
+              { error: 'Invalid asset ID format', success: false },
+              { status: 400 }
+            );
+          }
         }
-      }
 
-      // Verify assets exist and belong to project
-      const assets = await prisma.asset.findMany({
-        where: {
-          id: { in: body.assetIds.slice(0, MAX_IMAGES_PER_BATCH) },
-          projectId: body.projectId,
-        },
-        select: { id: true },
-      });
-      assetIds = assets.map(a => a.id);
-    } else {
-      // Get all project assets (up to limit)
-      const assets = await prisma.asset.findMany({
-        where: { projectId: body.projectId },
-        select: { id: true },
-        take: MAX_IMAGES_PER_BATCH,
-      });
-      assetIds = assets.map(a => a.id);
+        // Verify assets exist and belong to project
+        const assets = await prisma.asset.findMany({
+          where: {
+            id: { in: body.assetIds.slice(0, MAX_IMAGES_PER_BATCH) },
+            projectId: body.projectId,
+          },
+          select: { id: true },
+        });
+        assetIds = assets.map(a => a.id);
+      } else {
+        // Get all project assets (up to limit)
+        const assets = await prisma.asset.findMany({
+          where: { projectId: body.projectId },
+          select: { id: true },
+          take: MAX_IMAGES_PER_BATCH,
+        });
+        assetIds = assets.map(a => a.id);
+      }
+    } catch (dbError) {
+      console.error('[Batch] Database error fetching assets:', dbError);
+      return NextResponse.json(
+        { error: 'Database error while fetching assets', success: false },
+        { status: 500 }
+      );
     }
 
     if (assetIds.length === 0) {
@@ -404,8 +442,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
 
     // Check if Redis is available for queue-based processing
-    const redisAvailable = await checkRedisConnection();
+    let redisAvailable = false;
+    try {
+      redisAvailable = await checkRedisConnection();
+      console.log(`[Batch] Redis available: ${redisAvailable}`);
+    } catch (redisError) {
+      console.error('[Batch] Redis check error:', redisError);
+      // Continue with sync processing
+    }
+
     const useSyncProcessing = !redisAvailable && assetIds.length <= MAX_SYNC_IMAGES;
+    console.log(`[Batch] Processing mode: ${useSyncProcessing ? 'sync' : 'queue'}, ${assetIds.length} images`);
 
     // If Redis unavailable and batch too large, return error with guidance
     if (!redisAvailable && assetIds.length > MAX_SYNC_IMAGES) {
@@ -420,16 +467,26 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
 
     // Create batch job record
-    const batchJob = await prisma.batchJob.create({
-      data: {
-        projectId: body.projectId,
-        weedType: body.weedType,
-        exemplars: body.exemplars,
-        textPrompt: body.textPrompt?.substring(0, 100) || body.weedType.replace('Suspected ', ''),
-        totalImages: assetIds.length,
-        status: useSyncProcessing ? 'PROCESSING' : 'QUEUED',
-      },
-    });
+    let batchJob;
+    try {
+      batchJob = await prisma.batchJob.create({
+        data: {
+          projectId: body.projectId,
+          weedType: body.weedType,
+          exemplars: body.exemplars,
+          textPrompt: body.textPrompt?.substring(0, 100) || body.weedType.replace('Suspected ', ''),
+          totalImages: assetIds.length,
+          status: useSyncProcessing ? 'PROCESSING' : 'QUEUED',
+        },
+      });
+      console.log(`[Batch] Created batch job: ${batchJob.id}`);
+    } catch (createError) {
+      console.error('[Batch] Failed to create batch job record:', createError);
+      return NextResponse.json(
+        { error: 'Failed to create batch job in database', success: false },
+        { status: 500 }
+      );
+    }
 
     // SYNCHRONOUS PROCESSING PATH
     // When Redis is unavailable but batch is small enough, process inline
@@ -536,9 +593,31 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     });
 
   } catch (error) {
-    console.error('Batch enqueue error:', error instanceof Error ? error.message : 'Unknown');
+    // Log detailed error for debugging
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    console.error('Batch enqueue error:', {
+      message: errorMessage,
+      stack: errorStack,
+      errorType: error?.constructor?.name,
+    });
+
+    // Return more specific error message
+    let clientError = 'Failed to create batch job';
+    if (errorMessage.includes('prisma') || errorMessage.includes('database')) {
+      clientError = 'Database error - please try again';
+    } else if (errorMessage.includes('JSON') || errorMessage.includes('parse')) {
+      clientError = 'Invalid request format';
+    } else if (errorMessage.includes('connect')) {
+      clientError = 'Service connection error';
+    }
+
     return NextResponse.json(
-      { error: 'Failed to create batch job', success: false },
+      {
+        error: clientError,
+        success: false,
+        details: process.env.NODE_ENV === 'development' ? errorMessage : undefined,
+      },
       { status: 500 }
     );
   }

@@ -12,16 +12,26 @@ import prisma from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
 
 export async function GET(): Promise<NextResponse> {
-  // Authentication check
-  const auth = await getAuthenticatedUser();
-  if (!auth.authenticated || !auth.userId) {
-    return NextResponse.json(
-      { error: 'Authentication required', success: false },
-      { status: 401 }
-    );
-  }
-
   try {
+    // Authentication check (now inside try-catch)
+    let auth;
+    try {
+      auth = await getAuthenticatedUser();
+    } catch (authError) {
+      console.error('[Batch/All] Auth error:', authError);
+      return NextResponse.json(
+        { error: 'Authentication check failed', success: false },
+        { status: 500 }
+      );
+    }
+
+    if (!auth.authenticated || !auth.userId) {
+      return NextResponse.json(
+        { error: 'Authentication required', success: false },
+        { status: 401 }
+      );
+    }
+
     // Get all projects user has access to through team membership
     const userTeams = await prisma.teamMember.findMany({
       where: { userId: auth.userId },
@@ -29,6 +39,15 @@ export async function GET(): Promise<NextResponse> {
     });
 
     const teamIds = userTeams.map(t => t.teamId);
+
+    // Handle empty teamIds case
+    if (teamIds.length === 0) {
+      console.log('[Batch/All] User has no team memberships:', auth.userId);
+      return NextResponse.json({
+        success: true,
+        batchJobs: [],
+      });
+    }
 
     // Get all batch jobs from accessible projects
     const batchJobs = await prisma.batchJob.findMany({
@@ -57,9 +76,25 @@ export async function GET(): Promise<NextResponse> {
       batchJobs,
     });
   } catch (error) {
-    console.error('Failed to fetch batch jobs:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Failed to fetch batch jobs:', {
+      message: errorMessage,
+      stack: error instanceof Error ? error.stack : undefined,
+      errorType: error?.constructor?.name,
+    });
+
+    // Check for specific error types
+    let clientError = 'Failed to fetch batch jobs';
+    if (errorMessage.includes('prisma') || errorMessage.includes('database')) {
+      clientError = 'Database error - please try again';
+    }
+
     return NextResponse.json(
-      { error: 'Failed to fetch batch jobs', success: false },
+      {
+        error: clientError,
+        success: false,
+        details: process.env.NODE_ENV === 'development' ? errorMessage : undefined,
+      },
       { status: 500 }
     );
   }
