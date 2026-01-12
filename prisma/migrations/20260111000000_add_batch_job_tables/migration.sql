@@ -1,69 +1,53 @@
--- CreateEnum
-CREATE TYPE "BatchJobStatus" AS ENUM ('QUEUED', 'PROCESSING', 'COMPLETED', 'FAILED', 'CANCELLED');
+-- CreateTable
+CREATE TABLE `BatchJob` (
+    `id` VARCHAR(191) NOT NULL,
+    `projectId` VARCHAR(191) NOT NULL,
+    `weedType` VARCHAR(191) NOT NULL,
+    `exemplars` JSON NOT NULL,
+    `textPrompt` TEXT NULL,
+    `status` ENUM('QUEUED', 'PROCESSING', 'COMPLETED', 'FAILED', 'CANCELLED') NOT NULL DEFAULT 'QUEUED',
+    `totalImages` INTEGER NOT NULL,
+    `processedImages` INTEGER NOT NULL DEFAULT 0,
+    `detectionsFound` INTEGER NOT NULL DEFAULT 0,
+    `errorMessage` TEXT NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `startedAt` DATETIME(3) NULL,
+    `completedAt` DATETIME(3) NULL,
 
--- CreateEnum
-CREATE TYPE "PendingAnnotationStatus" AS ENUM ('PENDING', 'ACCEPTED', 'REJECTED');
+    INDEX `BatchJob_projectId_idx`(`projectId`),
+    INDEX `BatchJob_status_idx`(`status`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
-CREATE TABLE "BatchJob" (
-    "id" TEXT NOT NULL,
-    "projectId" TEXT NOT NULL,
-    "weedType" TEXT NOT NULL,
-    "exemplars" JSONB NOT NULL,
-    "textPrompt" TEXT,
-    "status" "BatchJobStatus" NOT NULL DEFAULT 'QUEUED',
-    "totalImages" INTEGER NOT NULL,
-    "processedImages" INTEGER NOT NULL DEFAULT 0,
-    "detectionsFound" INTEGER NOT NULL DEFAULT 0,
-    "errorMessage" TEXT,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "startedAt" TIMESTAMP(3),
-    "completedAt" TIMESTAMP(3),
+CREATE TABLE `PendingAnnotation` (
+    `id` VARCHAR(191) NOT NULL,
+    `batchJobId` VARCHAR(191) NOT NULL,
+    `assetId` VARCHAR(191) NOT NULL,
+    `weedType` VARCHAR(191) NOT NULL,
+    `confidence` DOUBLE NOT NULL,
+    `polygon` JSON NOT NULL,
+    `bbox` JSON NOT NULL,
+    `geoPolygon` JSON NULL,
+    `centerLat` DOUBLE NULL,
+    `centerLon` DOUBLE NULL,
+    `status` ENUM('PENDING', 'ACCEPTED', 'REJECTED') NOT NULL DEFAULT 'PENDING',
+    `reviewedAt` DATETIME(3) NULL,
+    `reviewedBy` VARCHAR(191) NULL,
+    `rejectionReason` TEXT NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 
-    CONSTRAINT "BatchJob_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "PendingAnnotation" (
-    "id" TEXT NOT NULL,
-    "batchJobId" TEXT NOT NULL,
-    "assetId" TEXT NOT NULL,
-    "weedType" TEXT NOT NULL,
-    "confidence" DOUBLE PRECISION NOT NULL,
-    "polygon" JSONB NOT NULL,
-    "bbox" JSONB NOT NULL,
-    "geoPolygon" JSONB,
-    "centerLat" DOUBLE PRECISION,
-    "centerLon" DOUBLE PRECISION,
-    "status" "PendingAnnotationStatus" NOT NULL DEFAULT 'PENDING',
-    "reviewedAt" TIMESTAMP(3),
-    "reviewedBy" TEXT,
-    "rejectionReason" TEXT,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "PendingAnnotation_pkey" PRIMARY KEY ("id")
-);
-
--- CreateIndex
-CREATE INDEX "BatchJob_projectId_idx" ON "BatchJob"("projectId");
-
--- CreateIndex
-CREATE INDEX "BatchJob_status_idx" ON "BatchJob"("status");
-
--- CreateIndex
-CREATE INDEX "PendingAnnotation_batchJobId_idx" ON "PendingAnnotation"("batchJobId");
-
--- CreateIndex
-CREATE INDEX "PendingAnnotation_assetId_idx" ON "PendingAnnotation"("assetId");
-
--- CreateIndex
-CREATE INDEX "PendingAnnotation_status_idx" ON "PendingAnnotation"("status");
+    INDEX `PendingAnnotation_batchJobId_idx`(`batchJobId`),
+    INDEX `PendingAnnotation_assetId_idx`(`assetId`),
+    INDEX `PendingAnnotation_status_idx`(`status`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- AddForeignKey
-ALTER TABLE "BatchJob" ADD CONSTRAINT "BatchJob_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE `BatchJob` ADD CONSTRAINT `BatchJob_projectId_fkey` FOREIGN KEY (`projectId`) REFERENCES `Project`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "PendingAnnotation" ADD CONSTRAINT "PendingAnnotation_batchJobId_fkey" FOREIGN KEY ("batchJobId") REFERENCES "BatchJob"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE `PendingAnnotation` ADD CONSTRAINT `PendingAnnotation_batchJobId_fkey` FOREIGN KEY (`batchJobId`) REFERENCES `BatchJob`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "PendingAnnotation" ADD CONSTRAINT "PendingAnnotation_assetId_fkey" FOREIGN KEY ("assetId") REFERENCES "Asset"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE `PendingAnnotation` ADD CONSTRAINT `PendingAnnotation_assetId_fkey` FOREIGN KEY (`assetId`) REFERENCES `Asset`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
