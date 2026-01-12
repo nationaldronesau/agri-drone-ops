@@ -5,6 +5,12 @@ import prisma from '@/lib/db';
 import { roboflowTrainingService } from '@/lib/services/roboflow-training';
 import { isAuthBypassed } from '@/lib/utils/auth-bypass';
 
+// Increase function timeout for long-running uploads (AWS/Vercel)
+export const maxDuration = 300; // 5 minutes
+
+// Maximum annotations to process in one request to avoid timeouts
+const MAX_BATCH_SIZE = 10;
+
 export async function POST(request: NextRequest) {
   try {
     // Auth check with explicit bypass for development
@@ -87,9 +93,16 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Push to Roboflow
+    // Process in batches to avoid timeout
     const annotationIds = annotations.map((a) => a.id);
-    const result = await roboflowTrainingService.uploadBatch(annotationIds);
+    const batchSize = Math.min(annotationIds.length, MAX_BATCH_SIZE);
+    const batchToProcess = annotationIds.slice(0, batchSize);
+    const remaining = annotationIds.length - batchSize;
+
+    console.log(`[Push-Session] Processing ${batchToProcess.length} of ${annotationIds.length} annotations`);
+
+    // Push batch to Roboflow
+    const result = await roboflowTrainingService.uploadBatch(batchToProcess);
 
     // If all uploads failed, return an error with details
     if (result.success === 0 && result.failed > 0) {
@@ -108,7 +121,11 @@ export async function POST(request: NextRequest) {
       success: true,
       pushed: result.success,
       failed: result.failed,
-      errors: result.errors,
+      remaining: remaining,
+      message: remaining > 0
+        ? `Uploaded ${result.success} annotations. ${remaining} more remaining - click again to continue.`
+        : `Successfully uploaded ${result.success} annotations.`,
+      errors: result.errors.length > 0 ? result.errors : undefined,
     });
   } catch (error) {
     console.error('Error pushing to training service:', error);
