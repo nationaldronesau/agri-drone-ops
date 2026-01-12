@@ -755,6 +755,8 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
           projectId: session.asset.project.id,
           weedType: selectedClass,
           exemplars: boxExemplars.map(e => e.box),
+          exemplarSourceWidth: session.asset.imageWidth,   // Source image dimensions for scaling
+          exemplarSourceHeight: session.asset.imageHeight, // to other images in the batch
           // No assetIds = process all images in project
           textPrompt: selectedClass,
         }),

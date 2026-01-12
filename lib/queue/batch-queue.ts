@@ -18,6 +18,8 @@ export interface BatchJobData {
     x2: number;
     y2: number;
   }>;
+  exemplarSourceWidth?: number;  // Width of image where exemplars were drawn
+  exemplarSourceHeight?: number; // Height of image where exemplars were drawn
   textPrompt?: string;
   assetIds: string[];
 }

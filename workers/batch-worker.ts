@@ -50,7 +50,7 @@ function isUrlAllowed(url: string): boolean {
 
 // Process a single batch job
 async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> {
-  const { batchJobId, projectId, weedType, exemplars, textPrompt, assetIds } = job.data;
+  const { batchJobId, projectId, weedType, exemplars, exemplarSourceWidth, exemplarSourceHeight, textPrompt, assetIds } = job.data;
 
   console.log(`[Worker] Starting batch job ${batchJobId} with ${assetIds.length} images`);
 
@@ -150,13 +150,35 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
         continue;
       }
 
-      // Build boxes for orchestrator (limit to 10)
-      const boxes = exemplars.slice(0, 10).map((box) => ({
-        x1: Math.max(0, Math.round(box.x1)),
-        y1: Math.max(0, Math.round(box.y1)),
-        x2: Math.max(0, Math.round(box.x2)),
-        y2: Math.max(0, Math.round(box.y2)),
-      }));
+      // Get current image dimensions for scaling
+      const currentWidth = asset.imageWidth || 4000;
+      const currentHeight = asset.imageHeight || 3000;
+
+      // Build boxes for orchestrator (limit to 10), scaling from source to current image
+      const boxes = exemplars.slice(0, 10).map((box) => {
+        // If we have source dimensions, normalize to 0-1 and scale to current image
+        if (exemplarSourceWidth && exemplarSourceHeight) {
+          const normX1 = box.x1 / exemplarSourceWidth;
+          const normY1 = box.y1 / exemplarSourceHeight;
+          const normX2 = box.x2 / exemplarSourceWidth;
+          const normY2 = box.y2 / exemplarSourceHeight;
+
+          return {
+            x1: Math.max(0, Math.round(normX1 * currentWidth)),
+            y1: Math.max(0, Math.round(normY1 * currentHeight)),
+            x2: Math.min(currentWidth, Math.round(normX2 * currentWidth)),
+            y2: Math.min(currentHeight, Math.round(normY2 * currentHeight)),
+          };
+        }
+
+        // Fallback: use absolute coordinates (backward compatibility)
+        return {
+          x1: Math.max(0, Math.round(box.x1)),
+          y1: Math.max(0, Math.round(box.y1)),
+          x2: Math.max(0, Math.round(box.x2)),
+          y2: Math.max(0, Math.round(box.y2)),
+        };
+      });
 
       // Sanitize text prompt if provided
       const sanitizedPrompt = textPrompt
