@@ -748,6 +748,20 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     setBatchProcessing(true);
     setSam3Error(null);
     try {
+      // Check if source image has dimensions for proper scaling
+      if (!session.asset.imageWidth || !session.asset.imageHeight) {
+        console.warn('[Batch] Source image missing dimensions - scaling may be inaccurate');
+      }
+
+      // Only send dimensions if both are valid (API requires both or neither)
+      const sourceDimensions =
+        session.asset.imageWidth && session.asset.imageHeight
+          ? {
+              exemplarSourceWidth: session.asset.imageWidth,
+              exemplarSourceHeight: session.asset.imageHeight,
+            }
+          : {};
+
       const response = await fetch('/api/sam3/batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -755,8 +769,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
           projectId: session.asset.project.id,
           weedType: selectedClass,
           exemplars: boxExemplars.map(e => e.box),
-          exemplarSourceWidth: session.asset.imageWidth,   // Source image dimensions for scaling
-          exemplarSourceHeight: session.asset.imageHeight, // to other images in the batch
+          ...sourceDimensions,
           // No assetIds = process all images in project
           textPrompt: selectedClass,
         }),

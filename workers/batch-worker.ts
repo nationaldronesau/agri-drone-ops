@@ -17,6 +17,7 @@ import { createRedisConnection, QUEUE_PREFIX } from '../lib/queue/redis';
 import { BATCH_QUEUE_NAME, BatchJobData, BatchJobResult } from '../lib/queue/batch-queue';
 import { sam3Orchestrator } from '../lib/services/sam3-orchestrator';
 import { normalizeDetectionType } from '../lib/utils/detection-types';
+import { scaleExemplarBoxes } from '../lib/utils/exemplar-scaling';
 import {
   startShutdownScheduler,
   stopShutdownScheduler,
@@ -93,7 +94,7 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
       // Build and validate image URL
       let imageUrl: string;
 
-      if (asset.storageType === 'S3' && asset.s3Key && asset.s3Bucket) {
+      if (asset.storageType?.toLowerCase() === 's3' && asset.s3Key && asset.s3Bucket) {
         // Get signed URL for S3 assets
         const signedUrlResponse = await fetch(`${BASE_URL}/api/assets/${asset.id}/signed-url`, {
           headers: { 'X-Internal-Request': 'true' },
@@ -154,31 +155,29 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
       const currentWidth = asset.imageWidth || 4000;
       const currentHeight = asset.imageHeight || 3000;
 
-      // Build boxes for orchestrator (limit to 10), scaling from source to current image
-      const boxes = exemplars.slice(0, 10).map((box) => {
-        // If we have source dimensions, normalize to 0-1 and scale to current image
-        if (exemplarSourceWidth && exemplarSourceHeight) {
-          const normX1 = box.x1 / exemplarSourceWidth;
-          const normY1 = box.y1 / exemplarSourceHeight;
-          const normX2 = box.x2 / exemplarSourceWidth;
-          const normY2 = box.y2 / exemplarSourceHeight;
+      // Log if using fallback dimensions
+      if (!asset.imageWidth || !asset.imageHeight) {
+        console.warn(
+          `[Worker] Job ${batchJobId}, Asset ${asset.id}: Missing dimensions, using fallback ${currentWidth}x${currentHeight}`
+        );
+      }
 
-          return {
-            x1: Math.max(0, Math.round(normX1 * currentWidth)),
-            y1: Math.max(0, Math.round(normY1 * currentHeight)),
-            x2: Math.min(currentWidth, Math.round(normX2 * currentWidth)),
-            y2: Math.min(currentHeight, Math.round(normY2 * currentHeight)),
-          };
-        }
-
-        // Fallback: use absolute coordinates (backward compatibility)
-        return {
-          x1: Math.max(0, Math.round(box.x1)),
-          y1: Math.max(0, Math.round(box.y1)),
-          x2: Math.max(0, Math.round(box.x2)),
-          y2: Math.max(0, Math.round(box.y2)),
-        };
+      // Scale exemplar boxes using shared utility
+      const { boxes } = scaleExemplarBoxes({
+        exemplars,
+        sourceWidth: exemplarSourceWidth,
+        sourceHeight: exemplarSourceHeight,
+        targetWidth: currentWidth,
+        targetHeight: currentHeight,
+        jobId: batchJobId,
+        assetId: asset.id,
       });
+
+      // Skip if all boxes became invalid after scaling
+      if (boxes.length === 0 && exemplars.length > 0) {
+        errors.push(`Asset ${asset.id}: All exemplar boxes became invalid after scaling`);
+        continue;
+      }
 
       // Sanitize text prompt if provided
       const sanitizedPrompt = textPrompt
