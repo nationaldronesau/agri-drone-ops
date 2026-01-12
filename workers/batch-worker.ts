@@ -76,7 +76,6 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
     select: {
       id: true,
       storageUrl: true,
-      filePath: true,
       s3Key: true,
       s3Bucket: true,
       storageType: true,
@@ -116,13 +115,6 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
           continue;
         }
         imageUrl = asset.storageUrl.startsWith('/') ? `${BASE_URL}${asset.storageUrl}` : asset.storageUrl;
-      } else if (asset.filePath) {
-        const urlPath = asset.filePath.replace(/^public\//, '/');
-        if (urlPath.includes('..') || !urlPath.startsWith('/')) {
-          errors.push(`Asset ${asset.id}: Invalid file path`);
-          continue;
-        }
-        imageUrl = `${BASE_URL}${urlPath}`;
       } else {
         errors.push(`Asset ${asset.id}: No image URL available`);
         continue;
