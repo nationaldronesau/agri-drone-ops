@@ -23,6 +23,7 @@ import { enqueueBatchJob, getQueueStats } from '@/lib/queue/batch-queue';
 import { checkRedisConnection } from '@/lib/queue/redis';
 import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
 import { normalizeDetectionType } from '@/lib/utils/detection-types';
+import { scaleExemplarBoxes } from '@/lib/utils/exemplar-scaling';
 
 // Rate limiting (per-instance; use Redis for production multi-instance)
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
@@ -219,30 +220,29 @@ async function processSynchronously(
       const currentWidth = asset.imageWidth || 4000;
       const currentHeight = asset.imageHeight || 3000;
 
-      // Build boxes for orchestrator (limit to 10)
-      // Scale exemplars from source image to current image dimensions
-      const boxes = exemplars.slice(0, 10).map((box) => {
-        // If source dimensions provided, normalize and re-scale
-        if (exemplarSourceWidth && exemplarSourceHeight) {
-          const normX1 = box.x1 / exemplarSourceWidth;
-          const normY1 = box.y1 / exemplarSourceHeight;
-          const normX2 = box.x2 / exemplarSourceWidth;
-          const normY2 = box.y2 / exemplarSourceHeight;
-          return {
-            x1: Math.max(0, Math.round(normX1 * currentWidth)),
-            y1: Math.max(0, Math.round(normY1 * currentHeight)),
-            x2: Math.min(currentWidth, Math.round(normX2 * currentWidth)),
-            y2: Math.min(currentHeight, Math.round(normY2 * currentHeight)),
-          };
-        }
-        // Fallback: use absolute coordinates (backward compatibility)
-        return {
-          x1: Math.max(0, Math.round(box.x1)),
-          y1: Math.max(0, Math.round(box.y1)),
-          x2: Math.max(0, Math.round(box.x2)),
-          y2: Math.max(0, Math.round(box.y2)),
-        };
+      // Log if using fallback dimensions
+      if (!asset.imageWidth || !asset.imageHeight) {
+        console.warn(
+          `[Sync] Job ${batchJobId}, Asset ${asset.id}: Missing dimensions, using fallback ${currentWidth}x${currentHeight}`
+        );
+      }
+
+      // Scale exemplar boxes using shared utility
+      const { boxes } = scaleExemplarBoxes({
+        exemplars,
+        sourceWidth: exemplarSourceWidth,
+        sourceHeight: exemplarSourceHeight,
+        targetWidth: currentWidth,
+        targetHeight: currentHeight,
+        jobId: batchJobId,
+        assetId: asset.id,
       });
+
+      // Skip if all boxes became invalid after scaling
+      if (boxes.length === 0 && exemplars.length > 0) {
+        errors.push(`Asset ${asset.id}: All exemplar boxes became invalid after scaling`);
+        continue;
+      }
 
       // Sanitize text prompt if provided
       const sanitizedPrompt = textPrompt
@@ -414,6 +414,37 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         console.log('[Batch] Invalid exemplar coordinates:', exemplar);
         return NextResponse.json(
           { error: 'Invalid exemplar coordinates', success: false },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Validate source dimensions if provided
+    if (body.exemplarSourceWidth !== undefined || body.exemplarSourceHeight !== undefined) {
+      // Both must be provided together
+      if (body.exemplarSourceWidth === undefined || body.exemplarSourceHeight === undefined) {
+        console.log('[Batch] Incomplete source dimensions:', {
+          width: body.exemplarSourceWidth,
+          height: body.exemplarSourceHeight,
+        });
+        return NextResponse.json(
+          { error: 'Both exemplarSourceWidth and exemplarSourceHeight must be provided together', success: false },
+          { status: 400 }
+        );
+      }
+      // Must be positive finite numbers
+      if (
+        body.exemplarSourceWidth <= 0 ||
+        body.exemplarSourceHeight <= 0 ||
+        !Number.isFinite(body.exemplarSourceWidth) ||
+        !Number.isFinite(body.exemplarSourceHeight)
+      ) {
+        console.log('[Batch] Invalid source dimensions:', {
+          width: body.exemplarSourceWidth,
+          height: body.exemplarSourceHeight,
+        });
+        return NextResponse.json(
+          { error: 'Source dimensions must be positive finite numbers', success: false },
           { status: 400 }
         );
       }
