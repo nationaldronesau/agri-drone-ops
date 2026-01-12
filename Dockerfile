@@ -85,6 +85,6 @@ EXPOSE 8080
 COPY ./ecosystem.config.js ./
 
 ##############################################################################
-# Run PM2-runtime when container starts
+# Run entrypoint which handles migrations, then starts PM2
 ##############################################################################
-CMD ["pm2-runtime", "ecosystem.config.js"]
+ENTRYPOINT ["./scripts/docker-entrypoint.sh"]
