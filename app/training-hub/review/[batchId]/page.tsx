@@ -116,6 +116,20 @@ export default function BatchReviewPage() {
     fetchBatchJob();
   }, [fetchBatchJob]);
 
+  // Auto-refresh while processing
+  useEffect(() => {
+    // Only poll while job is processing or queued
+    if (!batchJob || (batchJob.status !== 'PROCESSING' && batchJob.status !== 'QUEUED')) {
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      fetchBatchJob();
+    }, 3000); // Poll every 3 seconds
+
+    return () => clearInterval(intervalId);
+  }, [batchJob?.status, fetchBatchJob]);
+
   // Group annotations by image
   const groupedByImage = useMemo(() => {
     const groups = new Map<string, GroupedByImage>();
