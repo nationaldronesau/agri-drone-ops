@@ -128,7 +128,12 @@ export function InteractiveDetectionOverlay({
             const isPending = detection.status === 'PENDING';
 
             return (
-              <g key={detection.id}>
+              <g
+                key={detection.id}
+                onMouseEnter={() => setHoveredId(detection.id)}
+                onMouseLeave={() => setHoveredId(null)}
+                className="pointer-events-auto cursor-pointer"
+              >
                 {/* Detection Box */}
                 <rect
                   x={box.x}
@@ -138,12 +143,10 @@ export function InteractiveDetectionOverlay({
                   fill={colors.fill}
                   stroke={colors.stroke}
                   strokeWidth={isHovered ? 3 : 2}
-                  className="pointer-events-auto cursor-pointer transition-all"
+                  className="transition-all"
                   style={{
                     opacity: detection.status === 'REJECTED' ? 0.5 : 1,
                   }}
-                  onMouseEnter={() => setHoveredId(detection.id)}
-                  onMouseLeave={() => setHoveredId(null)}
                 />
 
                 {/* Status Icon for accepted/rejected */}
