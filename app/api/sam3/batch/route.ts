@@ -97,6 +97,8 @@ interface BatchRequest {
   projectId: string;
   weedType: string;
   exemplars: BoxExemplar[];
+  exemplarSourceWidth?: number;  // Width of image where exemplars were drawn
+  exemplarSourceHeight?: number; // Height of image where exemplars were drawn
   assetIds?: string[];
   textPrompt?: string;
 }
@@ -121,6 +123,8 @@ async function processSynchronously(
   projectId: string,
   weedType: string,
   exemplars: BoxExemplar[],
+  exemplarSourceWidth: number | undefined,
+  exemplarSourceHeight: number | undefined,
   textPrompt: string | undefined,
   assets: AssetForProcessing[]
 ): Promise<{ processedImages: number; detectionsFound: number; errors: string[] }> {
@@ -211,13 +215,34 @@ async function processSynchronously(
         continue;
       }
 
+      // Get current image dimensions (fallback to default if not stored)
+      const currentWidth = asset.imageWidth || 4000;
+      const currentHeight = asset.imageHeight || 3000;
+
       // Build boxes for orchestrator (limit to 10)
-      const boxes = exemplars.slice(0, 10).map((box) => ({
-        x1: Math.max(0, Math.round(box.x1)),
-        y1: Math.max(0, Math.round(box.y1)),
-        x2: Math.max(0, Math.round(box.x2)),
-        y2: Math.max(0, Math.round(box.y2)),
-      }));
+      // Scale exemplars from source image to current image dimensions
+      const boxes = exemplars.slice(0, 10).map((box) => {
+        // If source dimensions provided, normalize and re-scale
+        if (exemplarSourceWidth && exemplarSourceHeight) {
+          const normX1 = box.x1 / exemplarSourceWidth;
+          const normY1 = box.y1 / exemplarSourceHeight;
+          const normX2 = box.x2 / exemplarSourceWidth;
+          const normY2 = box.y2 / exemplarSourceHeight;
+          return {
+            x1: Math.max(0, Math.round(normX1 * currentWidth)),
+            y1: Math.max(0, Math.round(normY1 * currentHeight)),
+            x2: Math.min(currentWidth, Math.round(normX2 * currentWidth)),
+            y2: Math.min(currentHeight, Math.round(normY2 * currentHeight)),
+          };
+        }
+        // Fallback: use absolute coordinates (backward compatibility)
+        return {
+          x1: Math.max(0, Math.round(box.x1)),
+          y1: Math.max(0, Math.round(box.y1)),
+          x2: Math.max(0, Math.round(box.x2)),
+          y2: Math.max(0, Math.round(box.y2)),
+        };
+      });
 
       // Sanitize text prompt if provided
       const sanitizedPrompt = textPrompt
@@ -474,6 +499,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           projectId: body.projectId,
           weedType: body.weedType,
           exemplars: body.exemplars,
+          exemplarSourceWidth: body.exemplarSourceWidth,
+          exemplarSourceHeight: body.exemplarSourceHeight,
           textPrompt: body.textPrompt?.substring(0, 100) || body.weedType.replace('Suspected ', ''),
           totalImages: assetIds.length,
           status: useSyncProcessing ? 'PROCESSING' : 'QUEUED',
@@ -516,6 +543,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           body.projectId,
           body.weedType,
           body.exemplars,
+          body.exemplarSourceWidth,
+          body.exemplarSourceHeight,
           body.textPrompt,
           assetsForProcessing
         );
@@ -558,6 +587,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         projectId: body.projectId,
         weedType: body.weedType,
         exemplars: body.exemplars,
+        exemplarSourceWidth: body.exemplarSourceWidth,
+        exemplarSourceHeight: body.exemplarSourceHeight,
         textPrompt: body.textPrompt,
         assetIds,
       });

@@ -399,6 +399,8 @@ model BatchJob {
   weedType        String          // Target weed type for detection
   exemplars       Json            // Stored exemplar boxes [{x1,y1,x2,y2}, ...]
   textPrompt      String?         // Optional text prompt for SAM3
+  exemplarSourceWidth  Int?       // Width of image where exemplars were drawn
+  exemplarSourceHeight Int?       // Height of image where exemplars were drawn
 
   // Processing status
   status          BatchJobStatus  @default(QUEUED)
