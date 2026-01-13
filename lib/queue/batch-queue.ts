@@ -12,6 +12,7 @@ export interface BatchJobData {
   batchJobId: string;
   projectId: string;
   weedType: string;
+  exemplarId?: string;           // Concept propagation exemplar ID (if already created)
   exemplars: Array<{
     x1: number;
     y1: number;
@@ -20,6 +21,9 @@ export interface BatchJobData {
   }>;
   exemplarSourceWidth?: number;  // Width of image where exemplars were drawn
   exemplarSourceHeight?: number; // Height of image where exemplars were drawn
+  // NEW: Visual crop-based exemplars for cross-image detection
+  exemplarCrops?: string[];      // Base64 encoded crop images from source
+  sourceAssetId?: string;        // Asset ID where exemplars were drawn
   textPrompt?: string;
   assetIds: string[];
 }

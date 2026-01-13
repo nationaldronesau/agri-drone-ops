@@ -401,6 +401,8 @@ model BatchJob {
   textPrompt      String?         // Optional text prompt for SAM3
   exemplarSourceWidth  Int?       // Width of image where exemplars were drawn
   exemplarSourceHeight Int?       // Height of image where exemplars were drawn
+  exemplarId      String?         // Concept propagation exemplar ID
+  sourceAssetId   String?         // Asset ID used to create exemplar
 
   // Processing status
   status          BatchJobStatus  @default(QUEUED)
@@ -436,6 +438,7 @@ model PendingAnnotation {
   assetId       String
   weedType      String
   confidence    Float                   // SAM3 confidence score
+  similarity    Float?                  // Concept similarity score (if available)
 
   // Coordinates
   polygon       Json                    // [[x,y], ...] pixel coordinates
