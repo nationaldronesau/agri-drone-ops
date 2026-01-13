@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .sam3_predictor import get_predictor
-from .routers import health_router, predict_router
+from .routers import health_router, predict_router, segment_router
 
 # Configure logging
 logging.basicConfig(
@@ -62,6 +62,7 @@ app.add_middleware(
 # Include routers
 app.include_router(health_router)
 app.include_router(predict_router)
+app.include_router(segment_router)
 
 
 @app.get("/")

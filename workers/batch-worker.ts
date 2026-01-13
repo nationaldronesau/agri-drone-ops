@@ -16,6 +16,7 @@ import { PrismaClient } from '@prisma/client';
 import { createRedisConnection, QUEUE_PREFIX } from '../lib/queue/redis';
 import { BATCH_QUEUE_NAME, BatchJobData, BatchJobResult } from '../lib/queue/batch-queue';
 import { sam3Orchestrator } from '../lib/services/sam3-orchestrator';
+import { sam3ConceptService, type ConceptDetection } from '../lib/services/sam3-concept';
 import { normalizeDetectionType } from '../lib/utils/detection-types';
 import { scaleExemplarBoxes } from '../lib/utils/exemplar-scaling';
 import {
@@ -51,7 +52,19 @@ function isUrlAllowed(url: string): boolean {
 
 // Process a single batch job
 async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> {
-  const { batchJobId, projectId, weedType, exemplars, exemplarSourceWidth, exemplarSourceHeight, textPrompt, assetIds } = job.data;
+  const {
+    batchJobId,
+    projectId,
+    weedType,
+    exemplarId,
+    exemplars,
+    exemplarSourceWidth,
+    exemplarSourceHeight,
+    exemplarCrops,  // NEW: Visual crop images from source
+    sourceAssetId,  // NEW: Asset ID where exemplars were drawn
+    textPrompt,
+    assetIds
+  } = job.data;
 
   console.log(`[Worker] Starting batch job ${batchJobId} with ${assetIds.length} images`);
 
@@ -85,69 +98,143 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
     },
   });
 
+  type AssetForProcessing = (typeof assets)[number];
   const totalImages = assets.length;
+
+  const batchJobRecord = await prisma.batchJob.findUnique({
+    where: { id: batchJobId },
+    select: { exemplarId: true, sourceAssetId: true },
+  });
+
+  const fetchAssetImage = async (
+    asset: AssetForProcessing
+  ): Promise<{ buffer: Buffer } | null> => {
+    let imageUrl: string;
+
+    if (asset.storageType?.toLowerCase() === 's3' && asset.s3Key && asset.s3Bucket) {
+      const signedUrlResponse = await fetch(`${BASE_URL}/api/assets/${asset.id}/signed-url`, {
+        headers: { 'X-Internal-Request': 'true' },
+      });
+      if (!signedUrlResponse.ok) {
+        errors.push(`Asset ${asset.id}: Failed to get signed URL`);
+        return null;
+      }
+      const signedUrlData = await signedUrlResponse.json();
+      imageUrl = signedUrlData.url;
+
+      if (!isUrlAllowed(imageUrl)) {
+        errors.push(`Asset ${asset.id}: Invalid signed URL domain`);
+        return null;
+      }
+    } else if (asset.storageUrl) {
+      if (!asset.storageUrl.startsWith('/') && !isUrlAllowed(asset.storageUrl)) {
+        errors.push(`Asset ${asset.id}: Invalid storage URL`);
+        return null;
+      }
+      imageUrl = asset.storageUrl.startsWith('/') ? `${BASE_URL}${asset.storageUrl}` : asset.storageUrl;
+    } else {
+      errors.push(`Asset ${asset.id}: No image URL available`);
+      return null;
+    }
+
+    const imageResponse = await fetch(imageUrl, {
+      signal: AbortSignal.timeout(IMAGE_TIMEOUT),
+    });
+
+    if (!imageResponse.ok) {
+      errors.push(`Asset ${asset.id}: Failed to fetch image (${imageResponse.status})`);
+      return null;
+    }
+
+    const contentType = imageResponse.headers.get('content-type') || '';
+    if (!contentType.startsWith('image/')) {
+      errors.push(`Asset ${asset.id}: Invalid content type`);
+      return null;
+    }
+
+    const contentLength = imageResponse.headers.get('content-length');
+    if (contentLength && parseInt(contentLength) > MAX_IMAGE_SIZE) {
+      errors.push(`Asset ${asset.id}: Image too large`);
+      return null;
+    }
+
+    const imageBuffer = await imageResponse.arrayBuffer();
+    if (imageBuffer.byteLength > MAX_IMAGE_SIZE) {
+      errors.push(`Asset ${asset.id}: Image too large`);
+      return null;
+    }
+
+    return { buffer: Buffer.from(imageBuffer) };
+  };
+
+  let conceptExemplarId = exemplarId || batchJobRecord?.exemplarId || null;
+  let resolvedSourceAssetId = sourceAssetId || batchJobRecord?.sourceAssetId || null;
+  const conceptConfigured = sam3ConceptService.isConfigured();
+  let useConcept = false;
+
+  if (!resolvedSourceAssetId && assets.length > 0) {
+    resolvedSourceAssetId = assets[0].id;
+  }
+
+  if (conceptConfigured) {
+    if (!conceptExemplarId && resolvedSourceAssetId) {
+      const sourceAsset =
+        assets.find((asset) => asset.id === resolvedSourceAssetId) ||
+        (await prisma.asset.findUnique({
+          where: { id: resolvedSourceAssetId },
+          select: {
+            id: true,
+            storageUrl: true,
+            s3Key: true,
+            s3Bucket: true,
+            storageType: true,
+            imageWidth: true,
+            imageHeight: true,
+          },
+        }));
+
+      if (sourceAsset) {
+        const sourceImage = await fetchAssetImage(sourceAsset);
+        if (sourceImage) {
+          const createResult = await sam3ConceptService.createExemplar({
+            imageBuffer: sourceImage.buffer,
+            boxes: exemplars,
+            className: weedType,
+            imageId: resolvedSourceAssetId,
+          });
+
+          if (createResult.success && createResult.data) {
+            conceptExemplarId = createResult.data.exemplar_id;
+            await prisma.batchJob.update({
+              where: { id: batchJobId },
+              data: {
+                exemplarId: conceptExemplarId,
+                sourceAssetId: resolvedSourceAssetId,
+              },
+            });
+          } else {
+            console.warn('[Worker] Concept exemplar creation failed:', createResult.error);
+          }
+        }
+      }
+    }
+
+    if (conceptExemplarId) {
+      const warmupResult = await sam3ConceptService.warmup();
+      if (!warmupResult.success) {
+        console.warn('[Worker] Concept warmup failed:', warmupResult.error);
+        conceptExemplarId = null;
+      }
+    }
+    useConcept = Boolean(conceptExemplarId);
+  }
 
   for (let i = 0; i < assets.length; i++) {
     const asset = assets[i];
 
     try {
-      // Build and validate image URL
-      let imageUrl: string;
-
-      if (asset.storageType?.toLowerCase() === 's3' && asset.s3Key && asset.s3Bucket) {
-        // Get signed URL for S3 assets
-        const signedUrlResponse = await fetch(`${BASE_URL}/api/assets/${asset.id}/signed-url`, {
-          headers: { 'X-Internal-Request': 'true' },
-        });
-        if (!signedUrlResponse.ok) {
-          errors.push(`Asset ${asset.id}: Failed to get signed URL`);
-          continue;
-        }
-        const signedUrlData = await signedUrlResponse.json();
-        imageUrl = signedUrlData.url;
-
-        if (!isUrlAllowed(imageUrl)) {
-          errors.push(`Asset ${asset.id}: Invalid signed URL domain`);
-          continue;
-        }
-      } else if (asset.storageUrl) {
-        if (!asset.storageUrl.startsWith('/') && !isUrlAllowed(asset.storageUrl)) {
-          errors.push(`Asset ${asset.id}: Invalid storage URL`);
-          continue;
-        }
-        imageUrl = asset.storageUrl.startsWith('/') ? `${BASE_URL}${asset.storageUrl}` : asset.storageUrl;
-      } else {
-        errors.push(`Asset ${asset.id}: No image URL available`);
-        continue;
-      }
-
-      // Fetch image with timeout
-      const imageResponse = await fetch(imageUrl, {
-        signal: AbortSignal.timeout(IMAGE_TIMEOUT),
-      });
-
-      if (!imageResponse.ok) {
-        errors.push(`Asset ${asset.id}: Failed to fetch image (${imageResponse.status})`);
-        continue;
-      }
-
-      // Validate content type
-      const contentType = imageResponse.headers.get('content-type') || '';
-      if (!contentType.startsWith('image/')) {
-        errors.push(`Asset ${asset.id}: Invalid content type`);
-        continue;
-      }
-
-      // Check content length
-      const contentLength = imageResponse.headers.get('content-length');
-      if (contentLength && parseInt(contentLength) > MAX_IMAGE_SIZE) {
-        errors.push(`Asset ${asset.id}: Image too large`);
-        continue;
-      }
-
-      const imageBuffer = await imageResponse.arrayBuffer();
-      if (imageBuffer.byteLength > MAX_IMAGE_SIZE) {
-        errors.push(`Asset ${asset.id}: Image too large`);
+      const imageData = await fetchAssetImage(asset);
+      if (!imageData) {
         continue;
       }
 
@@ -184,36 +271,100 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
         ? textPrompt.trim().substring(0, 100).replace(/[^\w\s-]/g, '')
         : undefined;
 
-      // Call SAM3 via orchestrator (AWS primary, Roboflow fallback)
-      const result = await sam3Orchestrator.predict({
-        imageBuffer: Buffer.from(imageBuffer),
-        boxes: boxes.length > 0 ? boxes : undefined,
-        textPrompt: sanitizedPrompt,
-        className: weedType,
-      });
+      let detections: Array<{ bbox: [number, number, number, number]; polygon: [number, number][]; confidence: number; similarity?: number }> = [];
+      let conceptApplied = false;
 
-      if (!result.success) {
-        errors.push(`Asset ${asset.id}: SAM3 error - ${result.error || 'Unknown error'}`);
-        continue;
-      }
+      if (useConcept && conceptExemplarId) {
+        const conceptResult = await sam3ConceptService.applyExemplar({
+          exemplarId: conceptExemplarId,
+          imageBuffer: imageData.buffer,
+          imageId: asset.id,
+          options: { returnPolygons: true },
+        });
 
-      // Log which backend was used (first image only to avoid spam)
-      if (processedCount === 0) {
-        console.log(`[Worker] Job ${batchJobId}: Using ${result.backend.toUpperCase()} backend`);
-        if (result.startupMessage) {
-          console.log(`[Worker] ${result.startupMessage}`);
+        if (conceptResult.success && conceptResult.data) {
+          conceptApplied = true;
+          detections = conceptResult.data.detections.map((det: ConceptDetection) => ({
+            bbox: det.bbox,
+            polygon: det.polygon || [],
+            confidence: det.confidence,
+            similarity: det.similarity,
+          }));
+          if (processedCount === 0) {
+            console.log(`[Worker] Job ${batchJobId}: Using CONCEPT backend`);
+          }
+        } else {
+          console.warn(`[Worker] Job ${batchJobId}, Asset ${asset.id}: Concept apply failed (${conceptResult.error}), falling back`);
         }
       }
 
+      if (!conceptApplied) {
+        // Determine if this is the source image (where exemplars were drawn)
+        const isSourceImage = resolvedSourceAssetId ? asset.id === resolvedSourceAssetId : i === 0;
+
+        // Call SAM3 via orchestrator with appropriate method
+        let result;
+
+        if (isSourceImage) {
+          // Source image: use box-based detection (boxes point to actual content)
+          console.log(`[Worker] Job ${batchJobId}, Asset ${asset.id}: Processing as SOURCE image with ${boxes.length} boxes`);
+          result = await sam3Orchestrator.predict({
+            imageBuffer: imageData.buffer,
+            boxes: boxes.length > 0 ? boxes : undefined,
+            textPrompt: sanitizedPrompt,
+            className: weedType,
+          });
+        } else if (exemplarCrops && exemplarCrops.length > 0) {
+          // Target image with visual crops: use crop-based detection
+          console.log(`[Worker] Job ${batchJobId}, Asset ${asset.id}: Processing as TARGET image with ${exemplarCrops.length} visual exemplar crops`);
+          result = await sam3Orchestrator.predictWithExemplars({
+            imageBuffer: imageData.buffer,
+            exemplarCrops,
+            className: weedType,
+          });
+        } else {
+          // Fallback: text-only or box-based (may not work well for domain-specific objects)
+          console.log(`[Worker] Job ${batchJobId}, Asset ${asset.id}: Processing as TARGET image with fallback (text/boxes)`);
+          result = await sam3Orchestrator.predict({
+            imageBuffer: imageData.buffer,
+            boxes: boxes.length > 0 ? boxes : undefined,
+            textPrompt: sanitizedPrompt,
+            className: weedType,
+          });
+        }
+
+        if (!result.success) {
+          errors.push(`Asset ${asset.id}: SAM3 error - ${result.error || 'Unknown error'}`);
+          continue;
+        }
+
+        // Log which backend was used (first image only to avoid spam)
+        if (processedCount === 0) {
+          console.log(`[Worker] Job ${batchJobId}: Using ${result.backend.toUpperCase()} backend`);
+          if (result.startupMessage) {
+            console.log(`[Worker] ${result.startupMessage}`);
+          }
+        }
+
+        detections = result.detections.map((det) => ({
+          bbox: det.bbox,
+          polygon: det.polygon,
+          confidence: det.score,
+        }));
+      }
+
       // Create pending annotations from detections
-      for (const detection of result.detections) {
+      for (const detection of detections) {
+        const confidenceScore =
+          typeof detection.similarity === 'number' ? detection.similarity : detection.confidence;
         await prisma.pendingAnnotation.create({
           data: {
             batchJobId,
             assetId: asset.id,
             weedType: normalizeDetectionType(weedType),
-            confidence: detection.score,
-            polygon: detection.polygon,
+            confidence: confidenceScore,
+            similarity: detection.similarity ?? null,
+            polygon: detection.polygon ?? [],
             bbox: detection.bbox,
             status: 'PENDING',
           },

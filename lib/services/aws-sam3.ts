@@ -80,6 +80,13 @@ export interface SAM3SegmentRequest {
   maxSize?: number | null;
 }
 
+// Request for segmentation with visual exemplar crops
+export interface SAM3ExemplarSegmentRequest {
+  image: string; // base64 encoded target image
+  exemplarCrops: string[]; // base64 encoded crop images from source
+  className?: string; // optional text prompt fallback
+}
+
 export interface SAM3Detection {
   bbox: [number, number, number, number];
   area: number;
@@ -735,6 +742,93 @@ class AWSSAM3Service {
       const isTimeout = error instanceof Error && error.name === 'TimeoutError';
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error('[AWS-SAM3] Segment error:', errorMessage);
+
+      return {
+        success: false,
+        response: null,
+        error: errorMessage,
+        errorCode: isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR',
+      };
+    }
+  }
+
+  /**
+   * Segment with visual exemplar crops for cross-image detection
+   *
+   * Uses crops extracted from a source image to find similar objects
+   * in the target image. This is the key method for true few-shot
+   * detection across multiple images.
+   */
+  async segmentWithExemplars(request: SAM3ExemplarSegmentRequest): Promise<SAM3SegmentResult> {
+    if (!this.configured) {
+      return {
+        success: false,
+        response: null,
+        error: this.configError || 'AWS SAM3 not configured',
+        errorCode: 'NOT_CONFIGURED',
+      };
+    }
+
+    if (!this.instanceIp || this.instanceState !== 'ready') {
+      return {
+        success: false,
+        response: null,
+        error: `Instance not ready (state: ${this.instanceState})`,
+        errorCode: 'NOT_READY',
+      };
+    }
+
+    this.updateActivity();
+
+    try {
+      console.log(
+        `[AWS-SAM3] Calling /segment with ${request.exemplarCrops.length} exemplar crops, class: ${request.className || 'detection'}`
+      );
+
+      const response = await fetch(`http://${this.instanceIp}:${SAM3_PORT}/segment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image: request.image,
+          exemplar_crops: request.exemplarCrops,
+          class_name: request.className || 'detection',
+        }),
+        signal: AbortSignal.timeout(120000), // 2 minutes timeout
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error');
+        console.error(`[AWS-SAM3] Segment with exemplars failed: ${response.status} - ${errorText}`);
+        return {
+          success: false,
+          response: null,
+          error: `SAM3 API error: ${response.status} - ${errorText.substring(0, 200)}`,
+          errorCode: 'API_ERROR',
+        };
+      }
+
+      const result = await response.json();
+      console.log(`[AWS-SAM3] Segment with exemplars returned ${result.count} detections`);
+
+      // Convert response format to match SAM3SegmentResponse
+      return {
+        success: true,
+        response: {
+          detections: result.detections.map((det: { bbox: [number, number, number, number]; confidence: number; class_name: string; polygon?: [number, number][] }) => ({
+            bbox: det.bbox,
+            area: (det.bbox[2] - det.bbox[0]) * (det.bbox[3] - det.bbox[1]),
+            class_name: det.class_name,
+            confidence: det.confidence,
+            polygon: det.polygon,
+          })),
+          count: result.count,
+          image_size: [0, 0], // Not provided by exemplar endpoint
+        },
+      };
+    } catch (error) {
+      const isTimeout = error instanceof Error && error.name === 'TimeoutError';
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[AWS-SAM3] Segment with exemplars error:', errorMessage);
 
       return {
         success: false,

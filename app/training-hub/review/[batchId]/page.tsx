@@ -27,6 +27,7 @@ interface PendingAnnotation {
   id: string;
   weedType: string;
   confidence: number;
+  similarity?: number | null;
   status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
   polygon: number[][];
   bbox: number[];

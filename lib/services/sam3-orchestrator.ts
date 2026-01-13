@@ -23,6 +23,13 @@ export interface PredictionRequest {
   className?: string;
 }
 
+// Request for prediction with visual exemplar crops (cross-image detection)
+export interface ExemplarPredictionRequest {
+  imageBuffer: Buffer;
+  exemplarCrops: string[]; // Base64 encoded crop images from source
+  className?: string;
+}
+
 export interface Detection {
   polygon: [number, number][];
   bbox: [number, number, number, number];
@@ -523,6 +530,141 @@ class SAM3Orchestrator {
    */
   async stopAWSInstance(): Promise<void> {
     await awsSam3Service.stopInstance();
+  }
+
+  /**
+   * Predict using visual exemplar crops for cross-image detection
+   *
+   * This is the key method for batch processing where exemplar boxes
+   * drawn on a source image are used to find similar objects in target images.
+   */
+  async predictWithExemplars(request: ExemplarPredictionRequest): Promise<PredictionResult> {
+    const startTime = Date.now();
+
+    // Try AWS first if configured
+    if (awsSam3Service.isConfigured()) {
+      // If not ready, try to start
+      if (!awsSam3Service.isReady()) {
+        const { ready, message, starting } = await this.ensureAWSReady();
+
+        if (!ready) {
+          if (starting) {
+            console.log('[Orchestrator] AWS starting, waiting for exemplar prediction...');
+            const awsReady = await this.waitForAWSReady(180000);
+            if (!awsReady) {
+              console.log('[Orchestrator] AWS failed to start for exemplar prediction');
+              return {
+                success: false,
+                backend: 'aws',
+                detections: [],
+                count: 0,
+                processingTimeMs: Date.now() - startTime,
+                startupMessage: message,
+                error: 'AWS failed to start',
+              };
+            }
+          } else {
+            return {
+              success: false,
+              backend: 'aws',
+              detections: [],
+              count: 0,
+              processingTimeMs: Date.now() - startTime,
+              error: 'AWS not ready and not starting',
+            };
+          }
+        }
+      }
+
+      // AWS is ready, use exemplar-based prediction
+      console.log(`[Orchestrator] Using AWS exemplar prediction with ${request.exemplarCrops.length} crops`);
+
+      // Resize image for GPU memory limits
+      const { buffer, scaling } = await awsSam3Service.resizeImage(request.imageBuffer);
+      const base64Image = buffer.toString('base64');
+
+      const result = await awsSam3Service.segmentWithExemplars({
+        image: base64Image,
+        exemplarCrops: request.exemplarCrops,
+        className: request.className,
+      });
+
+      if (!result.success || !result.response) {
+        console.error(`[Orchestrator] AWS exemplar prediction failed: ${result.error}`);
+        return {
+          success: false,
+          backend: 'aws',
+          detections: [],
+          count: 0,
+          processingTimeMs: Date.now() - startTime,
+          error: result.error,
+          errorCode: result.errorCode,
+        };
+      }
+
+      // Convert detections and scale back to original coordinates
+      const detections: Detection[] = (result.response.detections || []).map((det) => {
+        // Scale bbox back to original coordinates
+        const scaledBbox = awsSam3Service.scaleCoordinatesToOriginal(
+          {
+            x1: det.bbox[0],
+            y1: det.bbox[1],
+            x2: det.bbox[2],
+            y2: det.bbox[3],
+          },
+          scaling
+        );
+
+        // Scale polygon if available
+        let polygon: [number, number][];
+        if (det.polygon && Array.isArray(det.polygon) && det.polygon.length >= 3) {
+          const inverseScale = 1 / scaling.scaleFactor;
+          polygon = det.polygon.map((point: number[]) => [
+            Math.round(point[0] * inverseScale),
+            Math.round(point[1] * inverseScale),
+          ] as [number, number]);
+        } else {
+          // Fallback: Create polygon from bbox
+          polygon = [
+            [scaledBbox.x1, scaledBbox.y1],
+            [scaledBbox.x2, scaledBbox.y1],
+            [scaledBbox.x2, scaledBbox.y2],
+            [scaledBbox.x1, scaledBbox.y2],
+          ];
+        }
+
+        return {
+          polygon,
+          bbox: [scaledBbox.x1, scaledBbox.y1, scaledBbox.x2, scaledBbox.y2] as [
+            number,
+            number,
+            number,
+            number,
+          ],
+          score: det.confidence,
+          className: det.class_name,
+        };
+      });
+
+      console.log(`[Orchestrator] AWS exemplar prediction succeeded with ${detections.length} detections`);
+      return {
+        success: true,
+        backend: 'aws',
+        detections,
+        count: detections.length,
+        processingTimeMs: Date.now() - startTime,
+      };
+    }
+
+    // No AWS available
+    return {
+      success: false,
+      backend: 'aws',
+      detections: [],
+      count: 0,
+      processingTimeMs: Date.now() - startTime,
+      error: 'AWS SAM3 not configured for exemplar prediction',
+    };
   }
 
   /**

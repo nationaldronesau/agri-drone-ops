@@ -39,6 +39,14 @@ interface SAM3HealthResponse {
   funMessage?: string;
 }
 
+interface SAM3ConceptStatusResponse {
+  configured: boolean;
+  ready: boolean;
+  sam3Loaded: boolean;
+  dinoLoaded: boolean;
+  error?: string;
+}
+
 interface SAM3Point {
   x: number;
   y: number;
@@ -171,6 +179,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   // SAM3 state
   const [annotationMode, setAnnotationMode] = useState<AnnotationMode>('sam3');
   const [sam3Health, setSam3Health] = useState<SAM3HealthResponse | null>(null);
+  const [sam3ConceptStatus, setSam3ConceptStatus] = useState<SAM3ConceptStatusResponse | null>(null);
   const [sam3Points, setSam3Points] = useState<SAM3Point[]>([]);
   const [sam3PreviewPolygon, setSam3PreviewPolygon] = useState<[number, number][] | null>(null);
   const [sam3Loading, setSam3Loading] = useState(false);
@@ -314,8 +323,38 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
           setAnnotationMode('manual');
           setSam3Error('No SAM3 backend configured');
         }
+
+        try {
+          const conceptResponse = await fetch('/api/sam3/concept/status');
+          const conceptStatus: SAM3ConceptStatusResponse | null = await conceptResponse
+            .json()
+            .catch(() => null);
+          if (conceptStatus) {
+            setSam3ConceptStatus(conceptStatus);
+          } else {
+            setSam3ConceptStatus({
+              configured: false,
+              ready: false,
+              sam3Loaded: false,
+              dinoLoaded: false,
+            });
+          }
+        } catch {
+          setSam3ConceptStatus({
+            configured: false,
+            ready: false,
+            sam3Loaded: false,
+            dinoLoaded: false,
+          });
+        }
       } catch {
         setSam3Health({ available: false, mode: 'unavailable', device: null, latencyMs: null });
+        setSam3ConceptStatus({
+          configured: false,
+          ready: false,
+          sam3Loaded: false,
+          dinoLoaded: false,
+        });
         setAnnotationMode('manual');
       }
     };
@@ -770,6 +809,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
           weedType: selectedClass,
           exemplars: boxExemplars.map(e => e.box),
           ...sourceDimensions,
+          sourceAssetId: session.asset.id,
           // No assetIds = process all images in project
           textPrompt: selectedClass,
         }),
@@ -1247,6 +1287,13 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
           {sam3Health && (
             <Badge variant={sam3Health.available ? "default" : "secondary"} className="text-xs">
               {sam3Health.available ? (sam3Backend === 'aws' ? 'SAM3 AWS' : 'SAM3') : 'SAM3 Unavailable'}
+            </Badge>
+          )}
+          {sam3ConceptStatus && (
+            <Badge variant={sam3ConceptStatus.ready ? "default" : "secondary"} className="text-xs">
+              {sam3ConceptStatus.configured
+                ? (sam3ConceptStatus.ready ? 'Concept Ready' : 'Concept Warming')
+                : 'Concept Off'}
             </Badge>
           )}
 
