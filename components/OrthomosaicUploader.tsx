@@ -221,7 +221,7 @@ export function OrthomosaicUploader({
 
         const orthomosaic = await response.json();
         callbacksRef.current.onProcessingComplete?.(orthomosaic);
-        uppy.reset();
+        uppy.clear();
       } catch (error) {
         console.error("Orthomosaic post-processing failed:", error);
         if (error instanceof Error) {

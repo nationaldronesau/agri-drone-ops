@@ -1,11 +1,46 @@
 import { awsSam3Service, type ScalingInfo } from './aws-sam3';
 
+const SAM3_SERVICE_URL = process.env.SAM3_SERVICE_URL || process.env.SAM3_API_URL;
 const SAM3_CONCEPT_API_URL =
   process.env.SAM3_CONCEPT_API_URL || process.env.SAM3_CONCEPT_URL;
 const SAM3_CONCEPT_PORT = process.env.SAM3_CONCEPT_PORT || '8002';
 const SAM3_CONCEPT_API_KEY =
   process.env.SAM3_CONCEPT_API_KEY || process.env.SAM3_API_KEY;
 const REQUEST_TIMEOUT_MS = 180000;
+
+const parseOptionalNumber = (value: string | undefined): number | undefined => {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const parseOptionalInt = (value: string | undefined): number | undefined => {
+  if (!value) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const DEFAULT_SIMILARITY_THRESHOLD = parseOptionalNumber(
+  process.env.SAM3_CONCEPT_SIMILARITY_THRESHOLD
+);
+const DEFAULT_TOP_K = parseOptionalInt(process.env.SAM3_CONCEPT_TOP_K);
+const DEFAULT_MIN_BOX_SIZE = parseOptionalInt(process.env.SAM3_CONCEPT_MIN_BOX_SIZE);
+const DEFAULT_MAX_BOX_SIZE = parseOptionalInt(process.env.SAM3_CONCEPT_MAX_BOX_SIZE);
+const DEFAULT_NMS_THRESHOLD = parseOptionalNumber(process.env.SAM3_CONCEPT_NMS_THRESHOLD);
+
+const resolveDerivedBaseUrl = (): string | null => {
+  if (!SAM3_SERVICE_URL) return null;
+  try {
+    const parsed = new URL(SAM3_SERVICE_URL);
+    const port = SAM3_CONCEPT_PORT;
+    const host = port ? `${parsed.hostname}:${port}` : parsed.host;
+    return `${parsed.protocol}//${host}`;
+  } catch {
+    return null;
+  }
+};
+
+const SAM3_CONCEPT_BASE_URL = SAM3_CONCEPT_API_URL || resolveDerivedBaseUrl();
 
 export interface ConceptBox {
   x1: number;
@@ -52,7 +87,7 @@ export interface ConceptServiceResult<T> {
 
 class SAM3ConceptService {
   isConfigured(): boolean {
-    return Boolean(SAM3_CONCEPT_API_URL) || awsSam3Service.isConfigured();
+    return Boolean(SAM3_CONCEPT_BASE_URL) || awsSam3Service.isConfigured();
   }
 
   private buildHeaders(): Record<string, string> {
@@ -64,8 +99,8 @@ class SAM3ConceptService {
   }
 
   private async resolveBaseUrl(ensureReady: boolean): Promise<string | null> {
-    if (SAM3_CONCEPT_API_URL) {
-      return SAM3_CONCEPT_API_URL.replace(/\/+$/, '');
+    if (SAM3_CONCEPT_BASE_URL) {
+      return SAM3_CONCEPT_BASE_URL.replace(/\/+$/, '');
     }
 
     if (!awsSam3Service.isConfigured()) {
@@ -268,20 +303,42 @@ class SAM3ConceptService {
     try {
       const { buffer, scaling } = await awsSam3Service.resizeImage(params.imageBuffer);
 
+      const similarityThreshold =
+        params.options?.similarityThreshold ?? DEFAULT_SIMILARITY_THRESHOLD;
+      const topK = params.options?.topK ?? DEFAULT_TOP_K;
+      const minBoxSize = params.options?.minBoxSize ?? DEFAULT_MIN_BOX_SIZE;
+      const maxBoxSize = params.options?.maxBoxSize ?? DEFAULT_MAX_BOX_SIZE;
+      const nmsThreshold = params.options?.nmsThreshold ?? DEFAULT_NMS_THRESHOLD;
+
+      const payload: Record<string, unknown> = {
+        exemplar_id: params.exemplarId,
+        images: [buffer.toString('base64')],
+        return_polygons: params.options?.returnPolygons ?? true,
+      };
+
+      if (params.imageId) {
+        payload.image_ids = [params.imageId];
+      }
+      if (similarityThreshold !== undefined) {
+        payload.similarity_threshold = similarityThreshold;
+      }
+      if (topK !== undefined) {
+        payload.top_k = topK;
+      }
+      if (minBoxSize !== undefined) {
+        payload.min_box_size = minBoxSize;
+      }
+      if (maxBoxSize !== undefined) {
+        payload.max_box_size = maxBoxSize;
+      }
+      if (nmsThreshold !== undefined) {
+        payload.nms_threshold = nmsThreshold;
+      }
+
       const response = await fetch(`${baseUrl}/api/v1/exemplars/apply`, {
         method: 'POST',
         headers: this.buildHeaders(),
-        body: JSON.stringify({
-          exemplar_id: params.exemplarId,
-          images: [buffer.toString('base64')],
-          image_ids: params.imageId ? [params.imageId] : undefined,
-          similarity_threshold: params.options?.similarityThreshold,
-          top_k: params.options?.topK,
-          min_box_size: params.options?.minBoxSize,
-          max_box_size: params.options?.maxBoxSize,
-          nms_threshold: params.options?.nmsThreshold,
-          return_polygons: params.options?.returnPolygons ?? true,
-        }),
+        body: JSON.stringify(payload),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
 

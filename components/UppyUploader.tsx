@@ -357,7 +357,7 @@ export function UppyUploader({
 
         const payload = (await response.json()) as UploadApiResponse;
         callbacksRef.current.onProcessingComplete?.(payload);
-        uppy.reset();
+        uppy.clear();
       } catch (error) {
         console.error("Post-upload processing failed:", error);
         if (error instanceof Error) {
