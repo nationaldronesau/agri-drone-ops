@@ -98,7 +98,10 @@ class SAM3ConceptService {
     return headers;
   }
 
-  private async resolveBaseUrl(ensureReady: boolean): Promise<string | null> {
+  private async resolveBaseUrl(
+    ensureReady: boolean,
+    forceRefresh: boolean = false
+  ): Promise<string | null> {
     if (SAM3_CONCEPT_BASE_URL) {
       return SAM3_CONCEPT_BASE_URL.replace(/\/+$/, '');
     }
@@ -107,17 +110,60 @@ class SAM3ConceptService {
       return null;
     }
 
+    if (forceRefresh) {
+      await awsSam3Service.refreshStatus();
+    }
+
     if (ensureReady && !awsSam3Service.isReady()) {
       await awsSam3Service.startInstance();
     }
 
-    const cachedIp = awsSam3Service.getStatus().ipAddress;
-    const ip = cachedIp || (await awsSam3Service.discoverInstanceIp());
+    let ip = awsSam3Service.getStatus().ipAddress;
+    if (!ip) {
+      ip = await awsSam3Service.discoverInstanceIp();
+    }
     if (!ip) {
       return null;
     }
 
     return `http://${ip}:${SAM3_CONCEPT_PORT}`;
+  }
+
+  private async fetchWithRetry(
+    baseUrl: string,
+    ensureReady: boolean,
+    requestFactory: (baseUrl: string) => Promise<Response>
+  ): Promise<{ response: Response | null; error?: string }> {
+    try {
+      const response = await requestFactory(baseUrl);
+      return { response };
+    } catch (error) {
+      const refreshedBaseUrl = await this.resolveBaseUrl(ensureReady, true);
+      if (!refreshedBaseUrl) {
+        return {
+          response: null,
+          error: error instanceof Error ? error.message : 'Request failed',
+        };
+      }
+
+      if (refreshedBaseUrl === baseUrl) {
+        console.warn('[SAM3 Concept] Request failed, retrying after refresh');
+      } else {
+        console.warn(
+          `[SAM3 Concept] Request failed against ${baseUrl}, retrying with refreshed base URL ${refreshedBaseUrl}`
+        );
+      }
+
+      try {
+        const response = await requestFactory(refreshedBaseUrl);
+        return { response };
+      } catch (retryError) {
+        return {
+          response: null,
+          error: retryError instanceof Error ? retryError.message : 'Request failed',
+        };
+      }
+    }
   }
 
   private scaleBoxesToResized(boxes: ConceptBox[], scaling: ScalingInfo): ConceptBox[] {
@@ -173,15 +219,25 @@ class SAM3ConceptService {
       return { success: false, data: null, error: 'Concept service not configured' };
     }
 
-    try {
-      const response = await fetch(`${baseUrl}/health`, {
+    const { response, error } = await this.fetchWithRetry(baseUrl, false, (resolvedBaseUrl) =>
+      fetch(`${resolvedBaseUrl}/health`, {
         signal: AbortSignal.timeout(5000),
-      });
+      })
+    );
 
-      if (!response.ok) {
-        return { success: false, data: null, error: `Health check failed: ${response.status}` };
-      }
+    if (!response) {
+      return {
+        success: false,
+        data: null,
+        error: error || 'Health check failed',
+      };
+    }
 
+    if (!response.ok) {
+      return { success: false, data: null, error: `Health check failed: ${response.status}` };
+    }
+
+    try {
       const data = await response.json();
       return {
         success: true,
@@ -205,22 +261,32 @@ class SAM3ConceptService {
       return { success: false, data: null, error: 'Concept service not configured' };
     }
 
-    try {
-      const response = await fetch(`${baseUrl}/warmup`, {
+    const { response, error } = await this.fetchWithRetry(baseUrl, true, (resolvedBaseUrl) =>
+      fetch(`${resolvedBaseUrl}/warmup`, {
         method: 'POST',
         headers: this.buildHeaders(),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
+      })
+    );
 
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => '');
-        return {
-          success: false,
-          data: null,
-          error: `Warmup failed: ${response.status} ${errorText}`.trim(),
-        };
-      }
+    if (!response) {
+      return {
+        success: false,
+        data: null,
+        error: error || 'Warmup failed',
+      };
+    }
 
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      return {
+        success: false,
+        data: null,
+        error: `Warmup failed: ${response.status} ${errorText}`.trim(),
+      };
+    }
+
+    try {
       const data = await response.json();
       return {
         success: true,
@@ -253,7 +319,8 @@ class SAM3ConceptService {
       const { buffer, scaling } = await awsSam3Service.resizeImage(params.imageBuffer);
       const scaledBoxes = this.scaleBoxesToResized(params.boxes, scaling);
 
-      const response = await fetch(`${baseUrl}/api/v1/exemplars/create`, {
+      const { response, error } = await this.fetchWithRetry(baseUrl, true, (resolvedBaseUrl) =>
+        fetch(`${resolvedBaseUrl}/api/v1/exemplars/create`, {
         method: 'POST',
         headers: this.buildHeaders(),
         body: JSON.stringify({
@@ -263,7 +330,16 @@ class SAM3ConceptService {
           image_id: params.imageId,
         }),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
+      })
+      );
+
+      if (!response) {
+        return {
+          success: false,
+          data: null,
+          error: error || 'Create exemplar failed',
+        };
+      }
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
@@ -335,12 +411,22 @@ class SAM3ConceptService {
         payload.nms_threshold = nmsThreshold;
       }
 
-      const response = await fetch(`${baseUrl}/api/v1/exemplars/apply`, {
+      const { response, error } = await this.fetchWithRetry(baseUrl, true, (resolvedBaseUrl) =>
+        fetch(`${resolvedBaseUrl}/api/v1/exemplars/apply`, {
         method: 'POST',
         headers: this.buildHeaders(),
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
+      })
+      );
+
+      if (!response) {
+        return {
+          success: false,
+          data: null,
+          error: error || 'Apply exemplar failed',
+        };
+      }
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
