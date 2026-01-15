@@ -9,6 +9,7 @@
  */
 import { awsSam3Service, FUN_LOADING_MESSAGES } from './aws-sam3';
 import sharp from 'sharp';
+import { normalizeExemplarCrops } from '@/lib/utils/exemplar-crops';
 
 const ROBOFLOW_API_KEY = process.env.ROBOFLOW_API_KEY;
 const ROBOFLOW_SAM3_URL = 'https://serverless.roboflow.com/sam3/concept_segment';
@@ -540,6 +541,18 @@ class SAM3Orchestrator {
    */
   async predictWithExemplars(request: ExemplarPredictionRequest): Promise<PredictionResult> {
     const startTime = Date.now();
+    const normalizedCrops = normalizeExemplarCrops(request.exemplarCrops);
+
+    if (normalizedCrops.length === 0) {
+      return {
+        success: false,
+        backend: 'aws',
+        detections: [],
+        count: 0,
+        processingTimeMs: Date.now() - startTime,
+        error: 'No valid exemplar crops provided',
+      };
+    }
 
     // Try AWS first if configured
     if (awsSam3Service.isConfigured()) {
@@ -577,7 +590,7 @@ class SAM3Orchestrator {
       }
 
       // AWS is ready, use exemplar-based prediction
-      console.log(`[Orchestrator] Using AWS exemplar prediction with ${request.exemplarCrops.length} crops`);
+      console.log(`[Orchestrator] Using AWS exemplar prediction with ${normalizedCrops.length} crops`);
 
       // Resize image for GPU memory limits
       const { buffer, scaling } = await awsSam3Service.resizeImage(request.imageBuffer);
@@ -585,7 +598,7 @@ class SAM3Orchestrator {
 
       const result = await awsSam3Service.segmentWithExemplars({
         image: base64Image,
-        exemplarCrops: request.exemplarCrops,
+        exemplarCrops: normalizedCrops,
         className: request.className,
       });
 

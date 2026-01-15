@@ -10,6 +10,8 @@ import prisma from '@/lib/db';
 import { roboflowTrainingService } from '@/lib/services/roboflow-training';
 import { checkRateLimit } from '@/lib/utils/security';
 
+export const maxDuration = 300;
+
 export async function POST(request: NextRequest) {
   try {
     // Check authentication
