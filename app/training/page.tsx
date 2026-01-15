@@ -42,6 +42,8 @@ interface Project {
   id: string;
   name: string;
   location: string | null;
+  activeModelId?: string | null;
+  autoInferenceEnabled?: boolean;
   _count?: { assets: number };
 }
 
@@ -243,6 +245,8 @@ export default function TrainingPage() {
     projectId: "",
     confidence: 0.25,
   });
+  const [settingsProjectId, setSettingsProjectId] = useState("");
+  const [savingAutoInference, setSavingAutoInference] = useState(false);
   const [inferencePreview, setInferencePreview] = useState<{
     totalImages: number;
     skippedImages: number;
@@ -281,6 +285,17 @@ export default function TrainingPage() {
         .slice(0, 4),
     [inferenceJobs]
   );
+  const selectedSettingsProject = useMemo(
+    () => projects.find((project) => project.id === settingsProjectId) || null,
+    [projects, settingsProjectId]
+  );
+  const activeModelForProject = useMemo(() => {
+    if (!selectedSettingsProject?.activeModelId) return null;
+    return (
+      models.find((model) => model.id === selectedSettingsProject.activeModelId) ||
+      null
+    );
+  }, [models, selectedSettingsProject]);
 
   const activeInferenceIds = useMemo(
     () => activeInferenceJobs.map((job) => job.id).join(","),
@@ -333,13 +348,17 @@ export default function TrainingPage() {
   }, []);
 
   const loadModels = useCallback(async () => {
-    const response = await fetch("/api/training/models?limit=50");
+    const params = new URLSearchParams({ limit: "50" });
+    if (settingsProjectId) {
+      params.set("projectId", settingsProjectId);
+    }
+    const response = await fetch(`/api/training/models?${params.toString()}`);
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data?.error || "Failed to load models");
     }
     setModels(data.models || []);
-  }, []);
+  }, [settingsProjectId]);
 
   const loadInferenceJobs = useCallback(async () => {
     const response = await fetch("/api/inference/jobs?limit=30");
@@ -412,6 +431,17 @@ export default function TrainingPage() {
       setInferenceForm((prev) => ({ ...prev, projectId: projects[0].id }));
     }
   }, [projects, inferenceForm.projectId]);
+
+  useEffect(() => {
+    if (projects.length > 0 && !settingsProjectId) {
+      setSettingsProjectId(projects[0].id);
+    }
+  }, [projects, settingsProjectId]);
+
+  useEffect(() => {
+    if (!settingsProjectId) return;
+    loadModels().catch(() => undefined);
+  }, [settingsProjectId, loadModels]);
 
   const loadClassOptions = useCallback(async () => {
     if (!datasetForm.projectId) return;
@@ -757,22 +787,78 @@ export default function TrainingPage() {
   };
 
   const handleActivateModel = async (modelId: string) => {
+    if (!settingsProjectId) {
+      setError("Select a project to activate this model.");
+      return;
+    }
     setActivatingModelId(modelId);
     setError(null);
     try {
       const response = await fetch(`/api/training/models/${modelId}/activate`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: settingsProjectId }),
       });
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data?.error || "Failed to activate model");
       }
       await loadModels();
+      setProjects((prev) =>
+        prev.map((project) =>
+          project.id === settingsProjectId
+            ? { ...project, activeModelId: modelId }
+            : project
+        )
+      );
       setNotice("Model activated for detection.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to activate model");
     } finally {
       setActivatingModelId(null);
+    }
+  };
+
+  const handleAutoInferenceToggle = async (enabled: boolean) => {
+    if (!settingsProjectId) {
+      setError("Select a project to update inference settings.");
+      return;
+    }
+    setSavingAutoInference(true);
+    setError(null);
+    try {
+      const response = await fetch(
+        `/api/projects/${settingsProjectId}/settings`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ autoInferenceEnabled: enabled }),
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || "Failed to update settings");
+      }
+      setProjects((prev) =>
+        prev.map((project) =>
+          project.id === settingsProjectId
+            ? {
+                ...project,
+                autoInferenceEnabled: data.project?.autoInferenceEnabled,
+                activeModelId: data.project?.activeModelId ?? project.activeModelId,
+              }
+            : project
+        )
+      );
+      setNotice(
+        enabled
+          ? "Auto inference enabled for this project."
+          : "Auto inference disabled for this project."
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update settings");
+    } finally {
+      setSavingAutoInference(false);
     }
   };
 
@@ -1718,6 +1804,59 @@ export default function TrainingPage() {
 
           <Card>
             <CardHeader>
+              <CardTitle>Project Inference Settings</CardTitle>
+              <CardDescription>
+                Configure the active YOLO model and auto-inference per project.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Project</Label>
+                  <Select
+                    value={settingsProjectId}
+                    onValueChange={setSettingsProjectId}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select project" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {projects.map((project) => (
+                        <SelectItem key={project.id} value={project.id}>
+                          {project.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Auto Inference</Label>
+                  <div className="flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm">
+                    <Checkbox
+                      checked={Boolean(selectedSettingsProject?.autoInferenceEnabled)}
+                      onCheckedChange={(value) =>
+                        handleAutoInferenceToggle(Boolean(value))
+                      }
+                      disabled={!settingsProjectId || savingAutoInference}
+                    />
+                    <span className="text-gray-600">
+                      Run active model after uploads
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div className="rounded-md bg-gray-50 px-3 py-2 text-sm text-gray-600">
+                Active model:{" "}
+                {activeModelForProject
+                  ? activeModelForProject.displayName ||
+                    `${activeModelForProject.name} v${activeModelForProject.version}`
+                  : "None selected"}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
               <CardTitle>Trained Models</CardTitle>
               <CardDescription>Activate a model to use it for detection.</CardDescription>
             </CardHeader>
@@ -1770,6 +1909,7 @@ export default function TrainingPage() {
                         onClick={() => handleActivateModel(model.id)}
                         disabled={
                           !health.available ||
+                          !settingsProjectId ||
                           model.isActive ||
                           activatingModelId === model.id
                         }

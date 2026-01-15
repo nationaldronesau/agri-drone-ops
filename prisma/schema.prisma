@@ -96,6 +96,11 @@ model Project {
   // Geographic center for map filtering
   centerLat   Float?
   centerLon   Float?
+
+  // YOLO inference settings
+  activeModelId         String?
+  activeModel           TrainedModel? @relation("ProjectActiveModel", fields: [activeModelId], references: [id])
+  autoInferenceEnabled  Boolean       @default(false)
   
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -110,6 +115,7 @@ model Project {
   @@index([teamId])
   @@index([location])
   @@index([purpose, season])
+  @@index([activeModelId])
 }
 
 enum ProjectPurpose {
@@ -713,6 +719,8 @@ model TrainedModel {
   teamId              String
   team                Team         @relation(fields: [teamId], references: [id])
   createdById         String?
+
+  activeProjects      Project[]    @relation("ProjectActiveModel")
 
   createdAt           DateTime     @default(now())
   updatedAt           DateTime     @updatedAt

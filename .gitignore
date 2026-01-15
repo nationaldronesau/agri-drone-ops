@@ -57,6 +57,10 @@ next-env.d.ts
 public/uploads/*
 !public/uploads/.gitkeep
 
+# local SAM3 working directories
+/SAM3/
+/SAM3-old/
+
 # Python (SAM3 annotation tools)
 tools/sam3-annotation/venv/
 tools/sam3-annotation/__pycache__/

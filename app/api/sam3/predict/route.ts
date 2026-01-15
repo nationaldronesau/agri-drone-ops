@@ -188,7 +188,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     let imageUrl: string;
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
-    if (asset.storageType === 'S3' && asset.s3Key && asset.s3Bucket) {
+    if (asset.storageType?.toLowerCase() === 's3' && asset.s3Key && asset.s3Bucket) {
       // Use internal API to get signed URL (trusted path)
       const signedUrlResponse = await fetch(`${baseUrl}/api/assets/${asset.id}/signed-url`, {
         headers: { 'X-Internal-Request': 'true' },

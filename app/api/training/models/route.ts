@@ -5,7 +5,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
+import { getAuthenticatedUser, getUserTeamIds, checkProjectAccess } from '@/lib/auth/api-auth';
 
 export async function GET(request: NextRequest) {
   try {
@@ -25,12 +25,29 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const teamId = searchParams.get('teamId');
+    const projectId = searchParams.get('projectId');
     const status = searchParams.get('status');
     const limit = parseInt(searchParams.get('limit') || '20', 10);
     const offset = parseInt(searchParams.get('offset') || '0', 10);
 
-    const teamIds = teamId ? [teamId] : membership.teamIds;
-    if (teamId && !membership.teamIds.includes(teamId)) {
+    let teamIds = teamId ? [teamId] : membership.teamIds;
+    let activeModelId: string | null = null;
+
+    if (projectId) {
+      const projectAccess = await checkProjectAccess(projectId);
+      if (!projectAccess.hasAccess || !projectAccess.teamId) {
+        return NextResponse.json(
+          { error: projectAccess.error || 'Access denied' },
+          { status: 403 }
+        );
+      }
+      teamIds = [projectAccess.teamId];
+      const project = await prisma.project.findUnique({
+        where: { id: projectId },
+        select: { activeModelId: true },
+      });
+      activeModelId = project?.activeModelId ?? null;
+    } else if (teamId && !membership.teamIds.includes(teamId)) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }
 
@@ -51,6 +68,7 @@ export async function GET(request: NextRequest) {
 
     const formatted = models.map((model) => ({
       ...model,
+      isActive: activeModelId ? model.id === activeModelId : model.isActive,
       classes: JSON.parse(model.classes),
       classMetrics: model.classMetrics ? JSON.parse(model.classMetrics) : null,
     }));
@@ -60,6 +78,7 @@ export async function GET(request: NextRequest) {
       total,
       limit,
       offset,
+      activeModelId,
     });
   } catch (error) {
     console.error('Error listing trained models:', error);
