@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ArrowLeft, Check, ZoomIn, ZoomOut, RotateCcw, Loader2, ChevronLeft, ChevronRight, Sparkles, Images, Upload } from "lucide-react";
 import Link from "next/link";
 import { Filmstrip } from "@/components/annotation/Filmstrip";
@@ -191,6 +192,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const [boxExemplars, setBoxExemplars] = useState<BoxExemplar[]>([]);
   const [currentBox, setCurrentBox] = useState<DrawingBox | null>(null);
   const [isDrawingBox, setIsDrawingBox] = useState(false);
+  const [useVisualCrops, setUseVisualCrops] = useState(true);
 
   // Annotation form state
   const [selectedClass, setSelectedClass] = useState(DEFAULT_WEED_CLASSES[0].name);
@@ -837,6 +839,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
           sourceAssetId: session.asset.id,
           // No assetIds = process all images in project
           textPrompt: selectedClass,
+          useVisualCrops,
         }),
       });
 
@@ -860,7 +863,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     } finally {
       setBatchProcessing(false);
     }
-  }, [session, boxExemplars, selectedClass]);
+  }, [session, boxExemplars, selectedClass, useVisualCrops]);
 
   // Zoom controls
   const handleZoomIn = useCallback(() => setZoomLevel(prev => Math.min(prev * 1.2, 5)), []);
@@ -1545,9 +1548,21 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
                   )}
                   Apply to All {projectAssets.length} Images
                 </Button>
+                <div className="flex items-center gap-2 text-[11px] text-purple-700">
+                  <Checkbox
+                    id="use-visual-crops"
+                    checked={useVisualCrops}
+                    onCheckedChange={(checked) => setUseVisualCrops(checked === true)}
+                  />
+                  <label htmlFor="use-visual-crops" className="cursor-pointer">
+                    Use visual crops only (skip concept propagation)
+                  </label>
+                </div>
               </div>
               <p className="text-[10px] text-purple-600 mt-2">
-                SAM3 will find similar objects in your images
+                {useVisualCrops
+                  ? 'Visual crop matching only (skips concept propagation)'
+                  : 'SAM3 will find similar objects in your images'}
               </p>
             </div>
           )}

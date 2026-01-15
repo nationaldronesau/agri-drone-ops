@@ -62,6 +62,7 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
     exemplarSourceWidth,
     exemplarSourceHeight,
     exemplarCrops,  // NEW: Visual crop images from source
+    useVisualCrops,
     sourceAssetId,  // NEW: Asset ID where exemplars were drawn
     textPrompt,
     assetIds
@@ -172,6 +173,7 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
   let resolvedSourceAssetId = sourceAssetId || batchJobRecord?.sourceAssetId || null;
   let resolvedExemplarCrops = normalizeExemplarCrops(exemplarCrops);
   const conceptConfigured = sam3ConceptService.isConfigured();
+  const allowConcept = conceptConfigured && !useVisualCrops;
   let useConcept = false;
   let sourceImageBuffer: Buffer | null = null;
 
@@ -203,7 +205,11 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
     }
   }
 
-  if (conceptConfigured) {
+  if (conceptConfigured && useVisualCrops) {
+    console.log(`[Worker] Job ${batchJobId}: Visual crops only requested, skipping concept propagation`);
+  }
+
+  if (allowConcept) {
     if (!conceptExemplarId && resolvedSourceAssetId && sourceImageBuffer) {
       const createResult = await sam3ConceptService.createExemplar({
         imageBuffer: sourceImageBuffer,
