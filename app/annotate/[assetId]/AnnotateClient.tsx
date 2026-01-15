@@ -410,7 +410,11 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       const response = await fetch('/api/sam3/predict', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ assetId: session.asset.id, points }),
+        body: JSON.stringify({
+          assetId: session.asset.id,
+          points,
+          textPrompt: selectedClass,
+        }),
       });
 
       if (response.status === 429) {
@@ -451,7 +455,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     } finally {
       setSam3Loading(false);
     }
-  }, [session?.asset?.id]);
+  }, [session?.asset?.id, selectedClass]);
 
   // Clear helpers
   const clearSam3 = useCallback(() => {
@@ -611,7 +615,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
 
     try {
       const response = await fetch(`/api/annotations/${targetId}`, { method: 'DELETE' });
-      if (response.ok) {
+      if (response.ok || response.status === 404) {
         setAnnotations(prev => prev.filter(a => a.id !== targetId));
         if (selectedAnnotation === targetId) setSelectedAnnotation(null);
       }
@@ -679,7 +683,11 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       });
 
       if (response.ok) {
-        const result = await response.json();
+        const result = await response.json().catch(() => null);
+        if (!result) {
+          setSam3Error('Upload succeeded but returned an invalid response');
+          return;
+        }
         // Update local state to mark annotations as pushed
         setAnnotations(prev => prev.map(a =>
           a.verified && !a.pushedToTraining
@@ -687,12 +695,23 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
             : a
         ));
         setSam3Error(null);
+        const remaining = typeof result.remaining === 'number' ? result.remaining : 0;
+        const pushedCount = result.pushed || 0;
+        const successMessage = remaining > 0
+          ? `Uploaded ${pushedCount} annotations. ${remaining} remaining - click Upload again to continue.`
+          : `Successfully uploaded ${pushedCount} annotations for training!`;
         // Show success message briefly
-        setSam3Error(`Successfully uploaded ${result.pushed || 0} annotations for training!`);
+        setSam3Error(successMessage);
         setTimeout(() => setSam3Error(null), 3000);
       } else {
-        const error = await response.json();
-        setSam3Error(error.error || 'Failed to upload for training');
+        let errorMessage = 'Failed to upload for training';
+        try {
+          const error = await response.json();
+          errorMessage = error.error || errorMessage;
+        } catch {
+          if (response.statusText) errorMessage = response.statusText;
+        }
+        setSam3Error(errorMessage);
       }
     } catch (err) {
       console.error('Failed to upload for training:', err);
@@ -734,6 +753,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
 
       if (response.ok) {
         const data = await response.json();
+        if (data.backend) setSam3Backend(data.backend);
 
         if (data.success && data.detections && data.detections.length > 0) {
           // Save each detection as an annotation
@@ -792,12 +812,17 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         console.warn('[Batch] Source image missing dimensions - scaling may be inaccurate');
       }
 
+      const fallbackWidth = imageRef.current?.naturalWidth;
+      const fallbackHeight = imageRef.current?.naturalHeight;
+      const sourceWidth = session.asset.imageWidth || fallbackWidth;
+      const sourceHeight = session.asset.imageHeight || fallbackHeight;
+
       // Only send dimensions if both are valid (API requires both or neither)
       const sourceDimensions =
-        session.asset.imageWidth && session.asset.imageHeight
+        sourceWidth && sourceHeight
           ? {
-              exemplarSourceWidth: session.asset.imageWidth,
-              exemplarSourceHeight: session.asset.imageHeight,
+              exemplarSourceWidth: sourceWidth,
+              exemplarSourceHeight: sourceHeight,
             }
           : {};
 
@@ -1286,7 +1311,13 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
           {/* SAM3 Status */}
           {sam3Health && (
             <Badge variant={sam3Health.available ? "default" : "secondary"} className="text-xs">
-              {sam3Health.available ? (sam3Backend === 'aws' ? 'SAM3 AWS' : 'SAM3') : 'SAM3 Unavailable'}
+              {sam3Health.available
+                ? (sam3Backend || sam3Health.backend) === 'aws'
+                  ? 'SAM3 AWS'
+                  : (sam3Backend || sam3Health.backend) === 'roboflow'
+                    ? 'SAM3 RF'
+                    : 'SAM3'
+                : 'SAM3 Unavailable'}
             </Badge>
           )}
           {sam3ConceptStatus && (

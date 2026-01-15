@@ -109,10 +109,11 @@ export default function PushAnnotationsPage() {
         }),
       });
 
-      const data = await response.json();
+      const data = await response.json().catch(() => null);
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to push annotations');
+        const message = data?.error || response.statusText || 'Failed to push annotations';
+        throw new Error(message);
       }
 
       setPushProgress(100);

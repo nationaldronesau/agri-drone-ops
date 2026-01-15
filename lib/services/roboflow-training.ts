@@ -1,5 +1,6 @@
 import prisma from "@/lib/db";
 import { S3Service } from "@/lib/services/s3";
+import { fetchImageSafely } from "@/lib/utils/security";
 import {
   AnnotationBox,
   BatchUploadResponse,
@@ -52,6 +53,13 @@ export class RoboflowTrainingService {
     process.env.ROBOFLOW_TRAINING_PROJECT || process.env.ROBOFLOW_PROJECT;
   private workspace = process.env.ROBOFLOW_WORKSPACE;
   private baseUrl = "https://api.roboflow.com";
+  private appBaseUrl =
+    process.env.NEXT_PUBLIC_APP_URL ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
+  private uploadTimeoutMs = Number.parseInt(
+    process.env.ROBOFLOW_UPLOAD_TIMEOUT_MS || "120000",
+    10,
+  );
 
   private ensureConfig(overrideProjectId?: string) {
     if (!this.apiKey) {
@@ -90,19 +98,30 @@ export class RoboflowTrainingService {
       if (!asset.s3Key) {
         throw new Error("Missing S3 key for asset");
       }
-      return S3Service.downloadFile(
-        asset.s3Key,
-        asset.s3Bucket || S3Service.bucketName,
-      );
+      try {
+        return await S3Service.downloadFile(
+          asset.s3Key,
+          asset.s3Bucket || S3Service.bucketName,
+        );
+      } catch (error) {
+        if (!asset.storageUrl) {
+          throw error;
+        }
+        console.warn(
+          "[Roboflow Training] S3 download failed, falling back to storageUrl:",
+          error,
+        );
+      }
     }
 
-    // Fallback to fetching via URL for local storage
-    const response = await fetch(asset.storageUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch image: ${response.statusText}`);
+    if (!asset.storageUrl) {
+      throw new Error("Missing storage URL for asset");
     }
-    const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
+
+    const resolvedUrl = asset.storageUrl.startsWith("/")
+      ? `${this.appBaseUrl}${asset.storageUrl}`
+      : asset.storageUrl;
+    return fetchImageSafely(resolvedUrl, `Asset ${asset.id}`);
   }
 
   async uploadTrainingData(
@@ -129,6 +148,7 @@ export class RoboflowTrainingService {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(this.uploadTimeoutMs),
     });
 
     if (!response.ok) {

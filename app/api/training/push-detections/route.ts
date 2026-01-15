@@ -17,6 +17,8 @@ import {
 } from '@/lib/utils/security';
 import { isAuthBypassed } from '@/lib/utils/auth-bypass';
 
+export const maxDuration = 300;
+
 export async function POST(request: NextRequest) {
   try {
     // Auth check with explicit bypass for development

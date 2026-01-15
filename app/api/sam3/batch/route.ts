@@ -25,6 +25,7 @@ import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
 import { sam3ConceptService, type ConceptDetection } from '@/lib/services/sam3-concept';
 import { normalizeDetectionType } from '@/lib/utils/detection-types';
 import { scaleExemplarBoxes } from '@/lib/utils/exemplar-scaling';
+import { buildExemplarCrops, normalizeExemplarCrops } from '@/lib/utils/exemplar-crops';
 
 // Rate limiting (per-instance; use Redis for production multi-instance)
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
@@ -219,53 +220,59 @@ async function processSynchronously(
 
   let conceptExemplarId = exemplarId || batchJobRecord?.exemplarId || null;
   let resolvedSourceAssetId = sourceAssetId || batchJobRecord?.sourceAssetId || null;
+  let resolvedExemplarCrops = normalizeExemplarCrops(exemplarCrops);
   const conceptConfigured = sam3ConceptService.isConfigured();
   let useConcept = false;
+  let sourceImageBuffer: Buffer | null = null;
 
   if (!resolvedSourceAssetId && assets.length > 0) {
     resolvedSourceAssetId = assets[0].id;
   }
 
+  if (resolvedSourceAssetId) {
+    const sourceAsset =
+      assets.find((asset) => asset.id === resolvedSourceAssetId) ||
+      (await prisma.asset.findUnique({
+        where: { id: resolvedSourceAssetId },
+        select: {
+          id: true,
+          storageUrl: true,
+          s3Key: true,
+          s3Bucket: true,
+          storageType: true,
+          imageWidth: true,
+          imageHeight: true,
+        },
+      }));
+
+    if (sourceAsset) {
+      const sourceImage = await fetchAssetImage(sourceAsset);
+      if (sourceImage) {
+        sourceImageBuffer = sourceImage.buffer;
+      }
+    }
+  }
+
   if (conceptConfigured) {
-    if (!conceptExemplarId && resolvedSourceAssetId) {
-      const sourceAsset =
-        assets.find((asset) => asset.id === resolvedSourceAssetId) ||
-        (await prisma.asset.findUnique({
-          where: { id: resolvedSourceAssetId },
-          select: {
-            id: true,
-            storageUrl: true,
-            s3Key: true,
-            s3Bucket: true,
-            storageType: true,
-            imageWidth: true,
-            imageHeight: true,
+    if (!conceptExemplarId && resolvedSourceAssetId && sourceImageBuffer) {
+      const createResult = await sam3ConceptService.createExemplar({
+        imageBuffer: sourceImageBuffer,
+        boxes: exemplars,
+        className: weedType,
+        imageId: resolvedSourceAssetId,
+      });
+
+      if (createResult.success && createResult.data) {
+        conceptExemplarId = createResult.data.exemplar_id;
+        await prisma.batchJob.update({
+          where: { id: batchJobId },
+          data: {
+            exemplarId: conceptExemplarId,
+            sourceAssetId: resolvedSourceAssetId,
           },
-        }));
-
-      if (sourceAsset) {
-        const sourceImage = await fetchAssetImage(sourceAsset);
-        if (sourceImage) {
-          const createResult = await sam3ConceptService.createExemplar({
-            imageBuffer: sourceImage.buffer,
-            boxes: exemplars,
-            className: weedType,
-            imageId: resolvedSourceAssetId,
-          });
-
-          if (createResult.success && createResult.data) {
-            conceptExemplarId = createResult.data.exemplar_id;
-            await prisma.batchJob.update({
-              where: { id: batchJobId },
-              data: {
-                exemplarId: conceptExemplarId,
-                sourceAssetId: resolvedSourceAssetId,
-              },
-            });
-          } else {
-            console.warn('[Sync] Concept exemplar creation failed:', createResult.error);
-          }
-        }
+        });
+      } else {
+        console.warn('[Sync] Concept exemplar creation failed:', createResult.error);
       }
     }
 
@@ -277,6 +284,13 @@ async function processSynchronously(
       }
     }
     useConcept = Boolean(conceptExemplarId);
+  }
+
+  if (!resolvedExemplarCrops.length && sourceImageBuffer) {
+    resolvedExemplarCrops = await buildExemplarCrops({
+      imageBuffer: sourceImageBuffer,
+      boxes: exemplars,
+    });
   }
 
   for (let i = 0; i < assets.length; i++) {
@@ -369,14 +383,23 @@ async function processSynchronously(
             textPrompt: sanitizedPrompt,
             className: weedType,
           });
-        } else if (exemplarCrops && exemplarCrops.length > 0) {
+        } else if (resolvedExemplarCrops.length > 0) {
           // Target image with visual crops: use crop-based detection
-          console.log(`[Sync] Job ${batchJobId}, Asset ${asset.id}: Processing as TARGET image with ${exemplarCrops.length} visual exemplar crops`);
+          console.log(`[Sync] Job ${batchJobId}, Asset ${asset.id}: Processing as TARGET image with ${resolvedExemplarCrops.length} visual exemplar crops`);
           result = await sam3Orchestrator.predictWithExemplars({
             imageBuffer: imageData.buffer,
-            exemplarCrops,
+            exemplarCrops: resolvedExemplarCrops,
             className: weedType,
           });
+          if (!result.success) {
+            console.warn(`[Sync] Job ${batchJobId}, Asset ${asset.id}: Exemplar prediction failed (${result.error}), falling back`);
+            result = await sam3Orchestrator.predict({
+              imageBuffer: imageData.buffer,
+              boxes: boxes.length > 0 ? boxes : undefined,
+              textPrompt: sanitizedPrompt,
+              className: weedType,
+            });
+          }
         } else {
           // Fallback: text-only or box-based (may not work well for domain-specific objects)
           console.log(`[Sync] Job ${batchJobId}, Asset ${asset.id}: Processing as TARGET image with fallback (text/boxes)`);
@@ -603,12 +626,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         );
       }
 
-      // Validate each crop is a base64 data URL
+      // Validate each crop is a base64 data URL or raw base64 string
       for (const crop of body.exemplarCrops) {
-        if (typeof crop !== 'string' || !crop.startsWith('data:image/')) {
+        const isDataUrl = typeof crop === 'string' && crop.startsWith('data:image/');
+        const isBase64 = typeof crop === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(crop);
+        if (!isDataUrl && !isBase64) {
           console.log('[Batch] Invalid exemplar crop format');
           return NextResponse.json(
-            { error: 'Exemplar crops must be base64 encoded images (data URLs)', success: false },
+            { error: 'Exemplar crops must be base64 encoded images', success: false },
             { status: 400 }
           );
         }

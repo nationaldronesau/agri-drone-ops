@@ -91,9 +91,10 @@ export default function BatchReviewPage() {
   const [pushing, setPushing] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
 
-  const fetchBatchJob = useCallback(async () => {
+  const fetchBatchJob = useCallback(async (options?: { silent?: boolean }) => {
     try {
-      setLoading(true);
+      const silent = options?.silent;
+      if (!silent) setLoading(true);
       setError(null);
 
       const response = await fetch(`/api/sam3/batch/${batchId}`);
@@ -109,7 +110,7 @@ export default function BatchReviewPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load batch job');
     } finally {
-      setLoading(false);
+      if (!options?.silent) setLoading(false);
     }
   }, [batchId]);
 
@@ -125,7 +126,7 @@ export default function BatchReviewPage() {
     }
 
     const intervalId = setInterval(() => {
-      fetchBatchJob();
+      fetchBatchJob({ silent: true });
     }, 3000); // Poll every 3 seconds
 
     return () => clearInterval(intervalId);
@@ -367,10 +368,11 @@ export default function BatchReviewPage() {
         }),
       });
 
-      const data = await response.json();
+      const data = await response.json().catch(() => null);
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to upload for training');
+        const message = data?.error || response.statusText || 'Failed to upload for training';
+        throw new Error(message);
       }
 
       alert(`Successfully uploaded ${data.pushed} annotations for training!`);
