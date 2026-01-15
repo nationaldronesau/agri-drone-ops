@@ -280,7 +280,7 @@ export async function GET(request: NextRequest) {
                    annotation.confidence === 'LIKELY' ? 0.75 : 0.5,
         centerLat,
         centerLon,
-        type: 'sam3',
+        type: 'manual',
         metadata: {
           color: '#00FF00', // Green for manual annotations
           source: 'manual',
@@ -384,7 +384,7 @@ export async function GET(request: NextRequest) {
         confidence: pending.confidence,
         centerLat,
         centerLon,
-        type: 'manual',
+        type: 'sam3',
         metadata: {
           color: '#8B5CF6', // Purple for SAM3
           source: 'sam3',

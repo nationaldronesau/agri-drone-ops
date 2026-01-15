@@ -10,6 +10,10 @@ import {
   ROBOFLOW_MODELS,
   roboflowService,
 } from "@/lib/services/roboflow";
+import { formatModelId } from "@/lib/services/yolo";
+import { processInferenceJob } from "@/lib/services/inference";
+import { checkRedisConnection } from "@/lib/queue/redis";
+import { enqueueInferenceJob } from "@/lib/queue/inference-queue";
 import { pixelToGeo } from "@/lib/utils/georeferencing";
 import { S3Service } from "@/lib/services/s3";
 
@@ -39,6 +43,9 @@ const requestSchema = z.object({
   dynamicModels: z.array(dynamicModelSchema).optional(), // New: dynamic models from workspace
   flightSession: z.string().optional(),
 });
+
+const AUTO_INFERENCE_CONFIDENCE = 0.25;
+const MAX_SYNC_INFERENCE_IMAGES = 50;
 
 interface ExtractedMetadata {
   gpsLatitude: number | null;
@@ -125,6 +132,19 @@ export async function POST(request: NextRequest) {
     }
 
     const userId = projectAuth.userId!;
+    const projectSettings = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: {
+        id: true,
+        teamId: true,
+        activeModelId: true,
+        autoInferenceEnabled: true,
+      },
+    });
+
+    if (!projectSettings) {
+      return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    }
 
     // Check if we're using dynamic models (new) or legacy hardcoded models
     const useDynamicModels = dynamicModels && dynamicModels.length > 0;
@@ -144,6 +164,20 @@ export async function POST(request: NextRequest) {
         : (Object.keys(ROBOFLOW_MODELS) as ModelType[]);
 
     const uploadResults: any[] = [];
+    const autoInferenceAssetIds: string[] = [];
+    let autoInferenceSkipped = 0;
+    let autoInferenceSummary:
+      | {
+          started: boolean;
+          status?: string;
+          jobId?: string;
+          totalImages?: number;
+          processedImages?: number;
+          detectionsFound?: number;
+          skippedImages?: number;
+          error?: string;
+        }
+      | undefined;
 
     const cloudFrontBase =
       process.env.CLOUDFRONT_BASE_URL ??
@@ -533,6 +567,19 @@ export async function POST(request: NextRequest) {
           return { asset, detections };
         });
 
+        if (projectSettings.autoInferenceEnabled && projectSettings.activeModelId) {
+          if (
+            extractedData.gpsLatitude != null &&
+            extractedData.gpsLongitude != null &&
+            extractedData.imageWidth != null &&
+            extractedData.imageHeight != null
+          ) {
+            autoInferenceAssetIds.push(asset.id);
+          } else {
+            autoInferenceSkipped += 1;
+          }
+        }
+
         // Add GPS warning to the list if coordinates are missing
         if (!extractedData.gpsLatitude || !extractedData.gpsLongitude) {
           if (!fileWarnings.some(w => w.includes("GPS"))) {
@@ -630,6 +677,128 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    if (
+      projectSettings.autoInferenceEnabled &&
+      projectSettings.activeModelId &&
+      autoInferenceAssetIds.length > 0
+    ) {
+      try {
+        const model = await prisma.trainedModel.findFirst({
+          where: {
+            id: projectSettings.activeModelId,
+            teamId: projectSettings.teamId,
+          },
+          select: {
+            id: true,
+            name: true,
+            version: true,
+            status: true,
+          },
+        });
+
+        if (!model) {
+          autoInferenceSummary = {
+            started: false,
+            error: "Active YOLO model not found for this project.",
+          };
+        } else if (!["READY", "ACTIVE"].includes(model.status)) {
+          autoInferenceSummary = {
+            started: false,
+            error: `Active YOLO model status ${model.status} is not ready for inference.`,
+          };
+        } else {
+          const modelName = formatModelId(model.name, model.version);
+          const processingJob = await prisma.processingJob.create({
+            data: {
+              projectId,
+              type: "AI_DETECTION",
+              status: "PENDING",
+              progress: 0,
+              config: {
+                modelId: model.id,
+                modelName,
+                confidence: AUTO_INFERENCE_CONFIDENCE,
+                saveDetections: true,
+                totalImages: autoInferenceAssetIds.length,
+                processedImages: 0,
+                detectionsFound: 0,
+                skippedImages: autoInferenceSkipped,
+                skippedReason: "missing_gps_or_dimensions",
+                duplicateImages: 0,
+                source: "auto_upload",
+              },
+            },
+          });
+
+          if (autoInferenceAssetIds.length <= MAX_SYNC_INFERENCE_IMAGES) {
+            const result = await processInferenceJob({
+              jobId: processingJob.id,
+              projectId,
+              modelId: model.id,
+              modelName,
+              assetIds: autoInferenceAssetIds,
+              confidence: AUTO_INFERENCE_CONFIDENCE,
+              saveDetections: true,
+              skippedImages: autoInferenceSkipped,
+              duplicateImages: 0,
+              skippedReason: "missing_gps_or_dimensions",
+            });
+
+            autoInferenceSummary = {
+              started: true,
+              status: "completed",
+              jobId: processingJob.id,
+              totalImages: autoInferenceAssetIds.length,
+              processedImages: result.processedImages,
+              detectionsFound: result.detectionsFound,
+              skippedImages: autoInferenceSkipped,
+            };
+          } else {
+            const redisAvailable = await checkRedisConnection();
+            if (!redisAvailable) {
+              await prisma.processingJob.update({
+                where: { id: processingJob.id },
+                data: {
+                  status: "FAILED",
+                  errorMessage:
+                    "Redis unavailable - batch too large for auto inference",
+                },
+              });
+              autoInferenceSummary = {
+                started: false,
+                error:
+                  "Redis unavailable - batch too large for auto inference.",
+              };
+            } else {
+              await enqueueInferenceJob({
+                processingJobId: processingJob.id,
+                modelId: model.id,
+                modelName,
+                projectId,
+                assetIds: autoInferenceAssetIds,
+                confidence: AUTO_INFERENCE_CONFIDENCE,
+                saveDetections: true,
+              });
+              autoInferenceSummary = {
+                started: true,
+                status: "queued",
+                jobId: processingJob.id,
+                totalImages: autoInferenceAssetIds.length,
+                skippedImages: autoInferenceSkipped,
+              };
+            }
+          }
+        }
+      } catch (autoError) {
+        const message =
+          autoError instanceof Error ? autoError.message : "Unknown error";
+        autoInferenceSummary = {
+          started: false,
+          error: message,
+        };
+      }
+    }
+
     // Aggregate warnings for the response summary
     const filesWithWarnings = uploadResults.filter(
       (file) => file.success && file.warnings && file.warnings.length > 0
@@ -646,6 +815,7 @@ export async function POST(request: NextRequest) {
           ? [...new Set(filesWithWarnings.flatMap((f) => f.warnings || []))]
           : [],
       },
+      autoInference: autoInferenceSummary,
     });
   } catch (error) {
     console.error("Upload error:", error);

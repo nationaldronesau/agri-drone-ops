@@ -5,12 +5,12 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import { getAuthenticatedUser } from '@/lib/auth/api-auth';
+import { getAuthenticatedUser, checkProjectAccess } from '@/lib/auth/api-auth';
 import { yoloService, formatModelId } from '@/lib/services/yolo';
 import { ModelStatus } from '@prisma/client';
 
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
@@ -19,14 +19,24 @@ export async function POST(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const body = await request.json().catch(() => ({}));
+    const projectId = typeof body?.projectId === 'string' ? body.projectId : null;
+    if (!projectId) {
+      return NextResponse.json({ error: 'projectId is required' }, { status: 400 });
+    }
+
+    const projectAccess = await checkProjectAccess(projectId);
+    if (!projectAccess.hasAccess || !projectAccess.teamId) {
+      return NextResponse.json(
+        { error: projectAccess.error || 'Access denied' },
+        { status: 403 }
+      );
+    }
+
     const model = await prisma.trainedModel.findFirst({
       where: {
         id: params.id,
-        team: {
-          members: {
-            some: { userId: auth.userId },
-          },
-        },
+        teamId: projectAccess.teamId,
       },
       select: {
         id: true,
@@ -54,13 +64,9 @@ export async function POST(
     }
 
     const [_, updatedModel] = await prisma.$transaction([
-      prisma.trainedModel.updateMany({
-        where: {
-          teamId: model.teamId,
-          isActive: true,
-          NOT: { id: model.id },
-        },
-        data: { isActive: false, status: ModelStatus.READY },
+      prisma.project.update({
+        where: { id: projectId },
+        data: { activeModelId: model.id },
       }),
       prisma.trainedModel.update({
         where: { id: model.id },
@@ -72,7 +78,7 @@ export async function POST(
       }),
     ]);
 
-    return NextResponse.json({ success: true, model: updatedModel });
+    return NextResponse.json({ success: true, model: updatedModel, projectId });
   } catch (error) {
     console.error('Error activating model:', error);
     return NextResponse.json(

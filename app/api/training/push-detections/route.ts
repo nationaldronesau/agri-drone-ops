@@ -213,8 +213,9 @@ export async function POST(request: NextRequest) {
             height: number;
           };
           return {
-            x: bbox.x + bbox.width / 2,
-            y: bbox.y + bbox.height / 2,
+            // Bounding boxes are already center-based when stored.
+            x: bbox.x,
+            y: bbox.y,
             width: bbox.width,
             height: bbox.height,
             class: detection.className,
