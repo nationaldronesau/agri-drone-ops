@@ -105,6 +105,7 @@ interface BatchRequest {
   exemplarSourceHeight?: number; // Height of image where exemplars were drawn
   // NEW: Visual crop-based exemplars for cross-image detection
   exemplarCrops?: string[];      // Base64 encoded crop images from source
+  useVisualCrops?: boolean;      // Skip concept propagation and use visual crops only
   sourceAssetId?: string;        // Asset ID where exemplars were drawn
   assetIds?: string[];
   textPrompt?: string;
@@ -134,6 +135,7 @@ async function processSynchronously(
   exemplarSourceWidth: number | undefined,
   exemplarSourceHeight: number | undefined,
   exemplarCrops: string[] | undefined,  // NEW: Visual crop images
+  useVisualCrops: boolean | undefined,
   sourceAssetId: string | undefined,    // NEW: Source asset ID
   textPrompt: string | undefined,
   assets: AssetForProcessing[]
@@ -222,6 +224,7 @@ async function processSynchronously(
   let resolvedSourceAssetId = sourceAssetId || batchJobRecord?.sourceAssetId || null;
   let resolvedExemplarCrops = normalizeExemplarCrops(exemplarCrops);
   const conceptConfigured = sam3ConceptService.isConfigured();
+  const allowConcept = conceptConfigured && !useVisualCrops;
   let useConcept = false;
   let sourceImageBuffer: Buffer | null = null;
 
@@ -253,7 +256,11 @@ async function processSynchronously(
     }
   }
 
-  if (conceptConfigured) {
+  if (conceptConfigured && useVisualCrops) {
+    console.log(`[Sync] Job ${batchJobId}: Visual crops only requested, skipping concept propagation`);
+  }
+
+  if (allowConcept) {
     if (!conceptExemplarId && resolvedSourceAssetId && sourceImageBuffer) {
       const createResult = await sam3ConceptService.createExemplar({
         imageBuffer: sourceImageBuffer,
@@ -518,6 +525,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       exemplarCount: body.exemplars?.length,
       exemplarCropCount: body.exemplarCrops?.length,
       sourceAssetId: body.sourceAssetId,
+      useVisualCrops: body.useVisualCrops,
       assetIdCount: body.assetIds?.length,
     });
 
@@ -614,6 +622,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           { status: 400 }
         );
       }
+    }
+
+    if (body.useVisualCrops !== undefined && typeof body.useVisualCrops !== 'boolean') {
+      return NextResponse.json(
+        { error: 'useVisualCrops must be a boolean', success: false },
+        { status: 400 }
+      );
     }
 
     // Validate exemplar crops if provided
@@ -786,6 +801,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           body.exemplarSourceWidth,
           body.exemplarSourceHeight,
           body.exemplarCrops,    // NEW: Visual crop images
+          body.useVisualCrops,
           body.sourceAssetId,   // NEW: Source asset ID
           body.textPrompt,
           assetsForProcessing
@@ -834,6 +850,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         exemplarSourceHeight: body.exemplarSourceHeight,
         // NEW: Visual crop-based exemplars for cross-image detection
         exemplarCrops: body.exemplarCrops,
+        useVisualCrops: body.useVisualCrops,
         sourceAssetId: body.sourceAssetId,
         textPrompt: body.textPrompt,
         assetIds,

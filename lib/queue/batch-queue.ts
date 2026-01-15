@@ -23,6 +23,7 @@ export interface BatchJobData {
   exemplarSourceHeight?: number; // Height of image where exemplars were drawn
   // NEW: Visual crop-based exemplars for cross-image detection
   exemplarCrops?: string[];      // Base64 encoded crop images from source
+  useVisualCrops?: boolean;      // Skip concept propagation and use visual crops only
   sourceAssetId?: string;        // Asset ID where exemplars were drawn
   textPrompt?: string;
   assetIds: string[];
