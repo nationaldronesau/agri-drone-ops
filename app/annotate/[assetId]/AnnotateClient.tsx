@@ -138,6 +138,8 @@ interface BoxExemplar {
   weedType: string;
   box: { x1: number; y1: number; x2: number; y2: number };
   assetId: string;
+  sourceWidth?: number;
+  sourceHeight?: number;
 }
 
 interface DrawingBox {
@@ -181,6 +183,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const [annotationMode, setAnnotationMode] = useState<AnnotationMode>('sam3');
   const [sam3Health, setSam3Health] = useState<SAM3HealthResponse | null>(null);
   const [sam3ConceptStatus, setSam3ConceptStatus] = useState<SAM3ConceptStatusResponse | null>(null);
+  const conceptWarmupTriggeredRef = useRef(false);
   const [sam3Points, setSam3Points] = useState<SAM3Point[]>([]);
   const [sam3PreviewPolygon, setSam3PreviewPolygon] = useState<[number, number][] | null>(null);
   const [sam3Loading, setSam3Loading] = useState(false);
@@ -333,6 +336,16 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
             .catch(() => null);
           if (conceptStatus) {
             setSam3ConceptStatus(conceptStatus);
+            if (
+              conceptStatus.configured &&
+              !conceptStatus.ready &&
+              !conceptWarmupTriggeredRef.current
+            ) {
+              conceptWarmupTriggeredRef.current = true;
+              fetch('/api/sam3/concept/warmup', { method: 'POST' }).catch((warmupError) => {
+                console.warn('[Annotate] Concept warmup request failed:', warmupError);
+              });
+            }
           } else {
             setSam3ConceptStatus({
               configured: false,
@@ -737,6 +750,19 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const applyToCurrentImage = useCallback(async () => {
     if (!session?.asset?.id || boxExemplars.length === 0) return;
 
+    const exemplarAssetIds = Array.from(new Set(boxExemplars.map(e => e.assetId)));
+    if (exemplarAssetIds.length !== 1) {
+      setSam3Error('Exemplars must come from a single image before applying.');
+      setTimeout(() => setSam3Error(null), 3000);
+      return;
+    }
+
+    if (exemplarAssetIds[0] !== session.asset.id) {
+      setSam3Error('Exemplars were drawn on a different image. Return to that image or clear exemplars.');
+      setTimeout(() => setSam3Error(null), 4000);
+      return;
+    }
+
     const exemplarsToProcess = [...boxExemplars];
 
     setBatchProcessing(true);
@@ -806,18 +832,29 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const applyToAllImages = useCallback(async () => {
     if (!session?.asset?.project?.id || boxExemplars.length === 0) return;
 
+    const exemplarAssetIds = Array.from(new Set(boxExemplars.map(e => e.assetId)));
+    if (exemplarAssetIds.length !== 1) {
+      setSam3Error('Exemplars must come from a single image before applying to a batch.');
+      setTimeout(() => setSam3Error(null), 3000);
+      return;
+    }
+
+    const sourceAssetId = exemplarAssetIds[0];
+
     setBatchProcessing(true);
     setSam3Error(null);
     try {
       // Check if source image has dimensions for proper scaling
-      if (!session.asset.imageWidth || !session.asset.imageHeight) {
+      if (sourceAssetId === session.asset.id && (!session.asset.imageWidth || !session.asset.imageHeight)) {
         console.warn('[Batch] Source image missing dimensions - scaling may be inaccurate');
       }
 
-      const fallbackWidth = imageRef.current?.naturalWidth;
-      const fallbackHeight = imageRef.current?.naturalHeight;
-      const sourceWidth = session.asset.imageWidth || fallbackWidth;
-      const sourceHeight = session.asset.imageHeight || fallbackHeight;
+      const fallbackWidth = sourceAssetId === session.asset.id ? imageRef.current?.naturalWidth : undefined;
+      const fallbackHeight = sourceAssetId === session.asset.id ? imageRef.current?.naturalHeight : undefined;
+      const exemplarSourceWidth = boxExemplars[0]?.sourceWidth;
+      const exemplarSourceHeight = boxExemplars[0]?.sourceHeight;
+      const sourceWidth = exemplarSourceWidth || (sourceAssetId === session.asset.id ? session.asset.imageWidth || fallbackWidth : undefined);
+      const sourceHeight = exemplarSourceHeight || (sourceAssetId === session.asset.id ? session.asset.imageHeight || fallbackHeight : undefined);
 
       // Only send dimensions if both are valid (API requires both or neither)
       const sourceDimensions =
@@ -836,7 +873,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
           weedType: selectedClass,
           exemplars: boxExemplars.map(e => e.box),
           ...sourceDimensions,
-          sourceAssetId: session.asset.id,
+          sourceAssetId,
           // No assetIds = process all images in project
           textPrompt: selectedClass,
           useVisualCrops,
@@ -1173,17 +1210,21 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       const y2 = Math.max(startY, endY);
 
       if (Math.abs(x2 - x1) >= 10 && Math.abs(y2 - y1) >= 10) {
+        const sourceWidth = session?.asset?.imageWidth || imageRef.current?.naturalWidth;
+        const sourceHeight = session?.asset?.imageHeight || imageRef.current?.naturalHeight;
         setBoxExemplars(prev => [...prev, {
           id: `exemplar-${Date.now()}`,
           weedType: selectedClass,
           box: { x1, y1, x2, y2 },
           assetId: session.asset.id,
+          sourceWidth: sourceWidth || undefined,
+          sourceHeight: sourceHeight || undefined,
         }]);
       }
       setCurrentBox(null);
       setIsDrawingBox(false);
     }
-  }, [isPanning, isDrawingBox, annotationMode, currentBox, session?.asset?.id, selectedClass]);
+  }, [isPanning, isDrawingBox, annotationMode, currentBox, session?.asset?.id, session?.asset?.imageWidth, session?.asset?.imageHeight, selectedClass]);
 
   const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (isPanning || e.shiftKey) return;

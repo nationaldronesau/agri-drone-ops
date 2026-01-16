@@ -82,6 +82,7 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
   let processedCount = 0;
   let totalDetections = 0;
   const errors: string[] = [];
+  let fatalError = false;
 
   // Get assets
   const assets = await prisma.asset.findMany({
@@ -173,7 +174,10 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
   let resolvedSourceAssetId = sourceAssetId || batchJobRecord?.sourceAssetId || null;
   let resolvedExemplarCrops = normalizeExemplarCrops(exemplarCrops);
   const conceptConfigured = sam3ConceptService.isConfigured();
+  const useConceptForVisualCrops = useVisualCrops && conceptConfigured;
   const allowConcept = conceptConfigured && !useVisualCrops;
+  const useConceptService = useConceptForVisualCrops || allowConcept;
+  const useSegmentCrops = useVisualCrops && !conceptConfigured;
   let useConcept = false;
   let sourceImageBuffer: Buffer | null = null;
 
@@ -205,11 +209,32 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
     }
   }
 
-  if (conceptConfigured && useVisualCrops) {
-    console.log(`[Worker] Job ${batchJobId}: Visual crops only requested, skipping concept propagation`);
+  if (useConceptForVisualCrops && !conceptExemplarId && !sourceImageBuffer) {
+    const message = 'Visual crops requested but the source image could not be loaded to create exemplars.';
+    await prisma.batchJob.update({
+      where: { id: batchJobId },
+      data: {
+        status: 'FAILED',
+        processedImages: 0,
+        detectionsFound: 0,
+        completedAt: new Date(),
+        errorMessage: message,
+      },
+    });
+    return {
+      processedImages: 0,
+      detectionsFound: 0,
+      errors: [message],
+    };
   }
 
-  if (allowConcept) {
+  if (useConceptForVisualCrops) {
+    console.log(`[Worker] Job ${batchJobId}: Visual crops requested - using concept service`);
+  } else if (conceptConfigured && useVisualCrops) {
+    console.log(`[Worker] Job ${batchJobId}: Visual crops requested - concept service not configured, using segment crops`);
+  }
+
+  if (useConceptService) {
     if (!conceptExemplarId && resolvedSourceAssetId && sourceImageBuffer) {
       const createResult = await sam3ConceptService.createExemplar({
         imageBuffer: sourceImageBuffer,
@@ -242,11 +267,49 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
     useConcept = Boolean(conceptExemplarId);
   }
 
-  if (!resolvedExemplarCrops.length && sourceImageBuffer) {
+  if (useConceptForVisualCrops && !useConcept) {
+    const message = 'Visual crops requested but concept exemplar could not be created.';
+    await prisma.batchJob.update({
+      where: { id: batchJobId },
+      data: {
+        status: 'FAILED',
+        processedImages: 0,
+        detectionsFound: 0,
+        completedAt: new Date(),
+        errorMessage: message,
+      },
+    });
+    return {
+      processedImages: 0,
+      detectionsFound: 0,
+      errors: [message],
+    };
+  }
+
+  if (useSegmentCrops && !resolvedExemplarCrops.length && sourceImageBuffer) {
     resolvedExemplarCrops = await buildExemplarCrops({
       imageBuffer: sourceImageBuffer,
       boxes: exemplars,
     });
+  }
+
+  if (useSegmentCrops && resolvedExemplarCrops.length === 0) {
+    const message = 'Visual crops requested but no exemplar crops could be built from the source image.';
+    await prisma.batchJob.update({
+      where: { id: batchJobId },
+      data: {
+        status: 'FAILED',
+        processedImages: 0,
+        detectionsFound: 0,
+        completedAt: new Date(),
+        errorMessage: message,
+      },
+    });
+    return {
+      processedImages: 0,
+      detectionsFound: 0,
+      errors: [message],
+    };
   }
 
   for (let i = 0; i < assets.length; i++) {
@@ -314,7 +377,13 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
             console.log(`[Worker] Job ${batchJobId}: Using CONCEPT backend`);
           }
         } else {
-          console.warn(`[Worker] Job ${batchJobId}, Asset ${asset.id}: Concept apply failed (${conceptResult.error}), falling back`);
+          console.warn(`[Worker] Job ${batchJobId}, Asset ${asset.id}: Concept apply failed (${conceptResult.error})`);
+          if (useConceptForVisualCrops) {
+            errors.push(`Asset ${asset.id}: ${conceptResult.error || 'Visual exemplar concept apply failed'}`);
+            fatalError = true;
+            break;
+          }
+          console.warn(`[Worker] Job ${batchJobId}, Asset ${asset.id}: Falling back after concept apply failure`);
         }
       }
 
@@ -334,7 +403,7 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
             textPrompt: sanitizedPrompt,
             className: weedType,
           });
-        } else if (resolvedExemplarCrops.length > 0) {
+        } else if (useSegmentCrops && resolvedExemplarCrops.length > 0) {
           // Target image with visual crops: use crop-based detection
           console.log(`[Worker] Job ${batchJobId}, Asset ${asset.id}: Processing as TARGET image with ${resolvedExemplarCrops.length} visual exemplar crops`);
           result = await sam3Orchestrator.predictWithExemplars({
@@ -344,6 +413,14 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
           });
           if (!result.success) {
             console.warn(`[Worker] Job ${batchJobId}, Asset ${asset.id}: Exemplar prediction failed (${result.error}), falling back`);
+            if (useVisualCrops) {
+              errors.push(`Asset ${asset.id}: ${result.error || 'Visual exemplar prediction failed'}`);
+              if (result.errorCode === 'UNSUPPORTED_EXEMPLAR_CROPS') {
+                fatalError = true;
+                break;
+              }
+              continue;
+            }
             result = await sam3Orchestrator.predict({
               imageBuffer: imageData.buffer,
               boxes: boxes.length > 0 ? boxes : undefined,
@@ -418,15 +495,21 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
 
       console.log(`[Worker] Job ${batchJobId}: Processed ${processedCount}/${totalImages} images, ${totalDetections} detections`);
 
+      if (fatalError) {
+        break;
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
       errors.push(`Asset ${asset.id}: ${errorMessage}`);
       console.error(`[Worker] Error processing asset ${asset.id}:`, errorMessage);
+      if (fatalError) {
+        break;
+      }
     }
   }
 
   // Mark job complete
-  const finalStatus = errors.length > 0 && processedCount === 0 ? 'FAILED' : 'COMPLETED';
+  const finalStatus = fatalError || (errors.length > 0 && processedCount === 0) ? 'FAILED' : 'COMPLETED';
   await prisma.batchJob.update({
     where: { id: batchJobId },
     data: {
