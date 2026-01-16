@@ -104,8 +104,10 @@ export interface SAM3SegmentResult {
   success: boolean;
   response: SAM3SegmentResponse | null;
   error?: string;
-  errorCode?: 'NOT_CONFIGURED' | 'NOT_READY' | 'API_ERROR' | 'TIMEOUT' | 'NETWORK_ERROR';
+  errorCode?: 'NOT_CONFIGURED' | 'NOT_READY' | 'API_ERROR' | 'TIMEOUT' | 'NETWORK_ERROR' | 'UNSUPPORTED';
 }
+
+export type SAM3ApiFlavor = 'legacy' | 'modern' | 'unknown';
 
 // Point-based prediction interfaces (for click-to-segment)
 export interface SAM3PointPredictRequest {
@@ -145,6 +147,8 @@ class AWSSAM3Service {
   private startupPromise: Promise<boolean> | null = null;
   private configError: string | null = null;
   private configured: boolean = false;
+  private apiFlavor: SAM3ApiFlavor = 'unknown';
+  private supportsExemplarCrops: boolean | null = null;
 
   constructor() {
     this.validateAndInitialize();
@@ -375,25 +379,55 @@ class AWSSAM3Service {
   async checkHealth(): Promise<{ modelLoaded: boolean; gpuAvailable: boolean } | null> {
     if (!this.instanceIp) return null;
 
-    try {
-      const response = await fetch(`http://${this.instanceIp}:${SAM3_PORT}/health`, {
-        signal: AbortSignal.timeout(5000),
-      });
+    const baseUrl = `http://${this.instanceIp}:${SAM3_PORT}`;
 
-      if (!response.ok) return null;
+    const tryModernHealth = async () => {
+      try {
+        const response = await fetch(`${baseUrl}/api/v1/health`, {
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!response.ok) return null;
 
-      const data = await response.json();
-      // SAM3 v0.6.0 returns: { status, model_loaded, gpu_available, ready, version, features }
-      this.modelLoaded = data.model_loaded === true || data.ready === true;
-      this.gpuAvailable = data.gpu_available === true;
+        const data = await response.json();
+        this.apiFlavor = 'modern';
+        this.supportsExemplarCrops = true;
+        this.modelLoaded = data.available === true;
+        this.gpuAvailable = data.device === 'cuda' || data.device === 'mps';
+        return {
+          modelLoaded: this.modelLoaded,
+          gpuAvailable: this.gpuAvailable,
+        };
+      } catch {
+        return null;
+      }
+    };
 
-      return {
-        modelLoaded: this.modelLoaded,
-        gpuAvailable: this.gpuAvailable,
-      };
-    } catch {
-      return null;
-    }
+    const tryLegacyHealth = async () => {
+      try {
+        const response = await fetch(`${baseUrl}/health`, {
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!response.ok) return null;
+
+        const data = await response.json();
+        // SAM3 v0.6.0 returns: { status, model_loaded, gpu_available, ready, version, features }
+        this.apiFlavor = 'legacy';
+        this.supportsExemplarCrops = false;
+        this.modelLoaded = data.model_loaded === true || data.ready === true;
+        this.gpuAvailable = data.gpu_available === true;
+        return {
+          modelLoaded: this.modelLoaded,
+          gpuAvailable: this.gpuAvailable,
+        };
+      } catch {
+        return null;
+      }
+    };
+
+    const modernHealth = await tryModernHealth();
+    if (modernHealth) return modernHealth;
+
+    return await tryLegacyHealth();
   }
 
   /**
@@ -403,22 +437,55 @@ class AWSSAM3Service {
   async warmup(): Promise<boolean> {
     if (!this.instanceIp) return false;
 
-    try {
-      console.log('[AWS-SAM3] Warming up model...');
-      const response = await fetch(`http://${this.instanceIp}:${SAM3_PORT}/warmup`, {
+    const baseUrl = `http://${this.instanceIp}:${SAM3_PORT}`;
+    const warmupPath =
+      this.apiFlavor === 'modern'
+        ? '/api/v1/warmup'
+        : this.apiFlavor === 'legacy'
+          ? '/warmup'
+          : null;
+
+    const attemptWarmup = async (path: string, flavor: SAM3ApiFlavor) => {
+      const response = await fetch(`${baseUrl}${path}`, {
         method: 'POST',
         signal: AbortSignal.timeout(120000), // 2 minutes for warmup
       });
-
       if (!response.ok) {
-        console.error('[AWS-SAM3] Warmup failed:', response.status);
+        return { success: false as const, status: response.status };
+      }
+      const data = await response.json();
+      this.apiFlavor = flavor;
+      this.modelLoaded = data.status === 'loaded' || data.success === true;
+      return { success: true as const, data };
+    };
+
+    try {
+      console.log('[AWS-SAM3] Warming up model...');
+
+      if (warmupPath) {
+        const result = await attemptWarmup(warmupPath, this.apiFlavor);
+        if (!result.success) {
+          console.error('[AWS-SAM3] Warmup failed:', result.status);
+          return false;
+        }
+        console.log('[AWS-SAM3] Warmup complete:', result.data);
+        return this.modelLoaded;
+      }
+
+      // Unknown flavor - try modern first, then legacy
+      const modernResult = await attemptWarmup('/api/v1/warmup', 'modern');
+      if (modernResult.success) {
+        console.log('[AWS-SAM3] Warmup complete:', modernResult.data);
+        return this.modelLoaded;
+      }
+
+      const legacyResult = await attemptWarmup('/warmup', 'legacy');
+      if (!legacyResult.success) {
+        console.error('[AWS-SAM3] Warmup failed:', legacyResult.status);
         return false;
       }
 
-      const data = await response.json();
-      console.log('[AWS-SAM3] Warmup complete:', data);
-      // SAM3 v0.6.0 returns: { status: "loaded", backend, gpu }
-      this.modelLoaded = data.status === 'loaded' || data.success === true;
+      console.log('[AWS-SAM3] Warmup complete:', legacyResult.data);
       return this.modelLoaded;
     } catch (error) {
       console.error('[AWS-SAM3] Warmup error:', error);
@@ -778,6 +845,16 @@ class AWSSAM3Service {
       };
     }
 
+    const supportsExemplars = await this.hasExemplarCropSupport();
+    if (!supportsExemplars) {
+      return {
+        success: false,
+        response: null,
+        error: 'SAM3 backend does not support exemplar crops (legacy API)',
+        errorCode: 'UNSUPPORTED',
+      };
+    }
+
     this.updateActivity();
 
     try {
@@ -854,6 +931,29 @@ class AWSSAM3Service {
   }
 
   /**
+   * Check whether the connected SAM3 API supports exemplar crops.
+   */
+  async hasExemplarCropSupport(): Promise<boolean> {
+    if (this.supportsExemplarCrops !== null) {
+      return this.supportsExemplarCrops;
+    }
+
+    if (!this.instanceIp) {
+      return false;
+    }
+
+    await this.checkHealth();
+    return this.supportsExemplarCrops === true;
+  }
+
+  /**
+   * Get the detected SAM3 API flavor (legacy vs modern).
+   */
+  getApiFlavor(): SAM3ApiFlavor {
+    return this.apiFlavor;
+  }
+
+  /**
    * Get the current status of the service (cached)
    */
   getStatus(): SAM3Status {
@@ -915,6 +1015,8 @@ class AWSSAM3Service {
       this.instanceState = 'stopped';
       this.instanceIp = null;
       this.modelLoaded = false;
+      this.apiFlavor = 'unknown';
+      this.supportsExemplarCrops = null;
     } else if (ec2State === 'pending') {
       this.instanceState = 'starting';
     } else if (ec2State === 'stopping') {

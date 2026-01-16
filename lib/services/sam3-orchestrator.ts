@@ -592,6 +592,19 @@ class SAM3Orchestrator {
       // AWS is ready, use exemplar-based prediction
       console.log(`[Orchestrator] Using AWS exemplar prediction with ${normalizedCrops.length} crops`);
 
+      const supportsExemplars = await awsSam3Service.hasExemplarCropSupport();
+      if (!supportsExemplars) {
+        return {
+          success: false,
+          backend: 'aws',
+          detections: [],
+          count: 0,
+          processingTimeMs: Date.now() - startTime,
+          error: 'AWS SAM3 backend does not support exemplar crops (legacy API)',
+          errorCode: 'UNSUPPORTED_EXEMPLAR_CROPS',
+        };
+      }
+
       // Resize image for GPU memory limits
       const { buffer, scaling } = await awsSam3Service.resizeImage(request.imageBuffer);
       const base64Image = buffer.toString('base64');

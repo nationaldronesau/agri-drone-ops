@@ -57,6 +57,19 @@ interface BatchJob {
   };
 }
 
+interface Sam3StartResponse {
+  success: boolean;
+  ready: boolean;
+  starting: boolean;
+  message?: string;
+}
+
+interface Sam3StatusResponse {
+  aws: {
+    ready: boolean;
+  };
+}
+
 export default function TrainingHubPage() {
   const [projects, setProjects] = useState<RoboflowProject[]>([]);
   const [batchJobs, setBatchJobs] = useState<BatchJob[]>([]);
@@ -64,6 +77,7 @@ export default function TrainingHubPage() {
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [sam3WarmupMessage, setSam3WarmupMessage] = useState<string | null>(null);
 
   const fetchProjects = async (sync = false) => {
     try {
@@ -120,6 +134,43 @@ export default function TrainingHubPage() {
     fetchBatchJobs();
   }, []);
 
+  useEffect(() => {
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    const startSam3 = async () => {
+      try {
+        const response = await fetch('/api/sam3/start', { method: 'POST' });
+        if (!response.ok) return;
+
+        const data: Sam3StartResponse = await response.json();
+        if (data.starting && !data.ready) {
+          setSam3WarmupMessage(data.message || 'Warming up the SAM3 GPU...');
+          pollTimer = setInterval(async () => {
+            try {
+              const statusResponse = await fetch('/api/sam3/status');
+              if (!statusResponse.ok) return;
+              const statusData: Sam3StatusResponse = await statusResponse.json();
+              if (statusData.aws?.ready) {
+                setSam3WarmupMessage(null);
+                if (pollTimer) clearInterval(pollTimer);
+              }
+            } catch {
+              // Ignore transient status errors
+            }
+          }, 5000);
+        }
+      } catch {
+        // Ignore warmup failures on load
+      }
+    };
+
+    startSam3();
+
+    return () => {
+      if (pollTimer) clearInterval(pollTimer);
+    };
+  }, []);
+
   const handleProjectCreated = () => {
     setShowCreateDialog(false);
     fetchProjects(true);
@@ -163,6 +214,19 @@ export default function TrainingHubPage() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {sam3WarmupMessage && (
+          <Card className="border-blue-200 bg-blue-50 mb-6">
+            <CardContent className="py-4">
+              <div className="flex items-center gap-3 text-blue-700">
+                <RefreshCw className="w-5 h-5 animate-spin" />
+                <div>
+                  <p className="font-medium">Starting SAM3 GPU…</p>
+                  <p className="text-sm text-blue-600">{sam3WarmupMessage}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
         {/* Workflow Cards */}
         <div className="grid md:grid-cols-2 gap-6 mb-8">
           {/* Label New Species */}
