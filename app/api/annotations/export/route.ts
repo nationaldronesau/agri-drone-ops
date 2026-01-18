@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import { precisionPixelToGeo, extractPrecisionParams } from '@/lib/utils/precision-georeferencing';
-import { pixelToGeo } from '@/lib/utils/georeferencing';
+import { pixelToGeoWithDSM, polygonToCenterBox, validateGeoParams } from '@/lib/utils/georeferencing';
 import { getAuthenticatedUser, getUserTeamIds, checkProjectAccess } from '@/lib/auth/api-auth';
 
 // Pagination defaults
@@ -109,6 +108,8 @@ export async function GET(request: NextRequest) {
                 gimbalYaw: true,
                 cameraFov: true,
                 lrfDistance: true,
+                lrfTargetLat: true,
+                lrfTargetLon: true,
                 metadata: true, // Include full metadata for precision georeferencing
                 project: {
                   select: {
@@ -146,6 +147,8 @@ export async function GET(request: NextRequest) {
             gimbalYaw: true,
             cameraFov: true,
             lrfDistance: true,
+            lrfTargetLat: true,
+            lrfTargetLon: true,
             metadata: true,
             project: {
               select: {
@@ -169,108 +172,53 @@ export async function GET(request: NextRequest) {
       const asset = annotation.session.asset;
 
       // Calculate geographic coordinates for the annotation center and full polygon
-      let centerLat: number | null = annotation.centerLat ?? null;
-      let centerLon: number | null = annotation.centerLon ?? null;
+      let centerLat: number | null = null;
+      let centerLon: number | null = null;
       let polygonCoordinates: Array<[number, number]> = [];
 
       const coords = Array.isArray(annotation.coordinates)
         ? (annotation.coordinates as [number, number][])
         : [];
 
-      if (coords.length > 0 && asset.gpsLatitude != null && asset.gpsLongitude != null && asset.altitude != null && asset.metadata) {
-        try {
-          // Extract precision parameters from full metadata
-          const precisionParams = extractPrecisionParams(asset.metadata);
-
-          // Convert each polygon vertex to geographic coordinates (with DSM)
-          const geoPolygonCoords: Array<[number, number]> = [];
-          let totalLat = 0;
-          let totalLon = 0;
-
-          for (const [x, y] of coords) {
-            const pixel = { x, y };
-            try {
-              const geoCoords = await precisionPixelToGeo(pixel, precisionParams);
-
-              if (geoCoords && typeof geoCoords.latitude === 'number' && typeof geoCoords.longitude === 'number') {
-                geoPolygonCoords.push([geoCoords.longitude, geoCoords.latitude]); // KML uses lon,lat
-                totalLat += geoCoords.latitude;
-                totalLon += geoCoords.longitude;
-              }
-            } catch (coordError) {
-              console.warn(`Failed to convert vertex ${x},${y}:`, coordError);
+      const validation = validateGeoParams(asset);
+      if (coords.length > 0 && validation.valid) {
+        const centerBox = polygonToCenterBox(coords);
+        if (centerBox) {
+          try {
+            const centerGeo = await pixelToGeoWithDSM(asset, { x: centerBox.x, y: centerBox.y });
+            if (centerGeo) {
+              centerLat = centerGeo.lat;
+              centerLon = centerGeo.lon;
             }
+          } catch (error) {
+            console.warn('Failed to convert annotation center:', annotation.id, error);
           }
+        }
 
-          if (geoPolygonCoords.length > 0) {
-            polygonCoordinates = geoPolygonCoords;
-            // Calculate centroid from converted coordinates
+        const geoPolygonCoords: Array<[number, number]> = [];
+        let totalLat = 0;
+        let totalLon = 0;
+
+        for (const [x, y] of coords) {
+          try {
+            const geoCoords = await pixelToGeoWithDSM(asset, { x, y });
+            if (geoCoords) {
+              geoPolygonCoords.push([geoCoords.lon, geoCoords.lat]);
+              totalLat += geoCoords.lat;
+              totalLon += geoCoords.lon;
+            }
+          } catch (coordError) {
+            console.warn(`Failed to convert vertex ${x},${y}:`, coordError);
+          }
+        }
+
+        if (geoPolygonCoords.length > 0) {
+          polygonCoordinates = geoPolygonCoords;
+          if (centerLat == null || centerLon == null) {
             centerLat = totalLat / geoPolygonCoords.length;
             centerLon = totalLon / geoPolygonCoords.length;
           }
-        } catch (error) {
-          console.warn('Failed to convert coordinates for annotation:', annotation.id, error);
-
-          // Fallback to basic method if precision fails
-          try {
-            const centerX = coords.reduce((sum, [x]) => sum + x, 0) / coords.length;
-            const centerY = coords.reduce((sum, [, y]) => sum + y, 0) / coords.length;
-
-            const precisionParams = extractPrecisionParams(asset.metadata);
-            const pixel = { x: centerX, y: centerY };
-            const geoCoords = await precisionPixelToGeo(pixel, precisionParams);
-
-            if (geoCoords && typeof geoCoords.latitude === 'number' && typeof geoCoords.longitude === 'number') {
-              centerLat = geoCoords.latitude;
-              centerLon = geoCoords.longitude;
-            }
-          } catch (fallbackError) {
-            console.warn('Fallback coordinate conversion also failed:', fallbackError);
-          }
         }
-      } else if (coords.length > 0 && asset.gpsLatitude != null && asset.gpsLongitude != null) {
-        // Basic pixel->geo fallback when precision metadata is missing
-        try {
-          const centerX = coords.reduce((sum, [x]) => sum + x, 0) / coords.length;
-          const centerY = coords.reduce((sum, [, y]) => sum + y, 0) / coords.length;
-          const geoCoords = pixelToGeo(
-            {
-              gpsLatitude: asset.gpsLatitude,
-              gpsLongitude: asset.gpsLongitude,
-              altitude: asset.altitude || 100,
-              gimbalPitch: asset.gimbalPitch || 0,
-              gimbalRoll: asset.gimbalRoll || 0,
-              gimbalYaw: asset.gimbalYaw || 0,
-              imageWidth: asset.imageWidth || 4000,
-              imageHeight: asset.imageHeight || 3000,
-              cameraFov: asset.cameraFov || 84,
-              lrfDistance: asset.lrfDistance || undefined,
-            },
-            { x: centerX, y: centerY }
-          );
-
-          if (!(geoCoords instanceof Promise)) {
-            centerLat = centerLat ?? geoCoords.lat;
-            centerLon = centerLon ?? geoCoords.lon;
-          }
-        } catch (fallbackError) {
-          console.warn('Basic coordinate conversion failed:', fallbackError);
-        }
-      }
-
-      // Fallback to stored polygon coordinates if precision conversion didn't succeed
-      if (polygonCoordinates.length === 0 && annotation.geoCoordinates && typeof annotation.geoCoordinates === 'object') {
-        const geo = annotation.geoCoordinates as { type?: string; coordinates?: Array<Array<[number, number]>> };
-        if (geo.type === 'Polygon' && Array.isArray(geo.coordinates?.[0])) {
-          polygonCoordinates = geo.coordinates[0];
-        }
-      }
-
-      if ((centerLat == null || centerLon == null) && polygonCoordinates.length > 0) {
-        const totalLat = polygonCoordinates.reduce((sum, [, lat]) => sum + lat, 0);
-        const totalLon = polygonCoordinates.reduce((sum, [lon]) => sum + lon, 0);
-        centerLat = centerLat ?? totalLat / polygonCoordinates.length;
-        centerLon = centerLon ?? totalLon / polygonCoordinates.length;
       }
 
       return {
@@ -305,77 +253,53 @@ export async function GET(request: NextRequest) {
     const exportPendingAnnotations = await Promise.all(pendingAnnotations.map(async pending => {
       const asset = pending.asset;
 
-      let centerLat: number | null = pending.centerLat ?? null;
-      let centerLon: number | null = pending.centerLon ?? null;
+      let centerLat: number | null = null;
+      let centerLon: number | null = null;
       let polygonCoordinates: Array<[number, number]> = [];
 
       const coords = Array.isArray(pending.polygon)
         ? (pending.polygon as [number, number][])
         : [];
 
-      if (coords.length > 0 && asset.gpsLatitude != null && asset.gpsLongitude != null && asset.altitude != null && asset.metadata) {
-        try {
-          const precisionParams = extractPrecisionParams(asset.metadata);
-          const geoPolygonCoords: Array<[number, number]> = [];
-          let totalLat = 0;
-          let totalLon = 0;
-
-          for (const [x, y] of coords) {
-            const pixel = { x, y };
-            try {
-              const geoCoords = await precisionPixelToGeo(pixel, precisionParams);
-              if (geoCoords && typeof geoCoords.latitude === 'number' && typeof geoCoords.longitude === 'number') {
-                geoPolygonCoords.push([geoCoords.longitude, geoCoords.latitude]);
-                totalLat += geoCoords.latitude;
-                totalLon += geoCoords.longitude;
-              }
-            } catch (coordError) {
-              console.warn(`Failed to convert SAM3 vertex ${x},${y}:`, coordError);
+      const validation = validateGeoParams(asset);
+      if (coords.length > 0 && validation.valid) {
+        const centerBox = polygonToCenterBox(coords);
+        if (centerBox) {
+          try {
+            const centerGeo = await pixelToGeoWithDSM(asset, { x: centerBox.x, y: centerBox.y });
+            if (centerGeo) {
+              centerLat = centerGeo.lat;
+              centerLon = centerGeo.lon;
             }
+          } catch (error) {
+            console.warn('Failed to convert pending annotation center:', pending.id, error);
           }
+        }
 
-          if (geoPolygonCoords.length > 0) {
-            polygonCoordinates = geoPolygonCoords;
+        const geoPolygonCoords: Array<[number, number]> = [];
+        let totalLat = 0;
+        let totalLon = 0;
+
+        for (const [x, y] of coords) {
+          try {
+            const geoCoords = await pixelToGeoWithDSM(asset, { x, y });
+            if (geoCoords) {
+              geoPolygonCoords.push([geoCoords.lon, geoCoords.lat]);
+              totalLat += geoCoords.lat;
+              totalLon += geoCoords.lon;
+            }
+          } catch (coordError) {
+            console.warn(`Failed to convert SAM3 vertex ${x},${y}:`, coordError);
+          }
+        }
+
+        if (geoPolygonCoords.length > 0) {
+          polygonCoordinates = geoPolygonCoords;
+          if (centerLat == null || centerLon == null) {
             centerLat = totalLat / geoPolygonCoords.length;
             centerLon = totalLon / geoPolygonCoords.length;
           }
-        } catch (error) {
-          console.warn('Failed to convert SAM3 coordinates:', pending.id, error);
         }
-      } else if (coords.length > 0 && asset.gpsLatitude != null && asset.gpsLongitude != null) {
-        try {
-          const centerX = coords.reduce((sum, [x]) => sum + x, 0) / coords.length;
-          const centerY = coords.reduce((sum, [, y]) => sum + y, 0) / coords.length;
-          const geoCoords = pixelToGeo(
-            {
-              gpsLatitude: asset.gpsLatitude,
-              gpsLongitude: asset.gpsLongitude,
-              altitude: asset.altitude || 100,
-              gimbalPitch: asset.gimbalPitch || 0,
-              gimbalRoll: asset.gimbalRoll || 0,
-              gimbalYaw: asset.gimbalYaw || 0,
-              imageWidth: asset.imageWidth || 4000,
-              imageHeight: asset.imageHeight || 3000,
-              cameraFov: asset.cameraFov || 84,
-              lrfDistance: asset.lrfDistance || undefined,
-            },
-            { x: centerX, y: centerY }
-          );
-
-          if (!(geoCoords instanceof Promise)) {
-            centerLat = centerLat ?? geoCoords.lat;
-            centerLon = centerLon ?? geoCoords.lon;
-          }
-        } catch (fallbackError) {
-          console.warn('Basic SAM3 coordinate conversion failed:', fallbackError);
-        }
-      }
-
-      if ((centerLat == null || centerLon == null) && polygonCoordinates.length > 0) {
-        const totalLat = polygonCoordinates.reduce((sum, [, lat]) => sum + lat, 0);
-        const totalLon = polygonCoordinates.reduce((sum, [lon]) => sum + lon, 0);
-        centerLat = centerLat ?? totalLat / polygonCoordinates.length;
-        centerLon = centerLon ?? totalLon / polygonCoordinates.length;
       }
 
       return {

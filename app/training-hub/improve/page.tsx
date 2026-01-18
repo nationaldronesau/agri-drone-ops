@@ -73,6 +73,8 @@ export default function ImproveWorkflowPage() {
   const [confidenceThreshold, setConfidenceThreshold] = useState([0.5]);
   const [stats, setStats] = useState<DetectionStats | null>(null);
   const [loadingStats, setLoadingStats] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
 
   // Fetch local projects
   useEffect(() => {
@@ -100,28 +102,12 @@ export default function ImproveWorkflowPage() {
     const fetchStats = async () => {
       setLoadingStats(true);
       try {
-        // Use all=true to get all detections for stats calculation
-        const response = await fetch(`/api/detections?projectId=${selectedProjectId}&all=true`);
-        const data = await response.json();
-
-        // Calculate stats from detections - API returns array directly when all=true
-        const detections = Array.isArray(data) ? data : [];
-        const statsData: DetectionStats = {
-          total: detections.length,
-          verified: detections.filter((d: { verified: boolean }) => d.verified).length,
-          rejected: detections.filter((d: { rejected: boolean }) => d.rejected).length,
-          pending: detections.filter(
-            (d: { verified: boolean; rejected: boolean }) => !d.verified && !d.rejected
-          ).length,
-          byConfidence: {
-            high: detections.filter((d: { confidence: number }) => d.confidence >= 0.8).length,
-            medium: detections.filter(
-              (d: { confidence: number }) => d.confidence >= 0.5 && d.confidence < 0.8
-            ).length,
-            low: detections.filter((d: { confidence: number }) => d.confidence < 0.5).length,
-          },
-        };
-        setStats(statsData);
+        const response = await fetch(`/api/detections/stats?projectId=${selectedProjectId}`);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.error || 'Failed to fetch stats');
+        }
+        setStats(data.stats || null);
       } catch (err) {
         console.error('Failed to fetch stats:', err);
         setStats(null);
@@ -139,19 +125,39 @@ export default function ImproveWorkflowPage() {
 
   const canProceed = selectedProjectId && selectedRoboflowProjectId && stats && stats.total > 0;
 
-  const handleStartReview = () => {
-    // Store selected project info in session storage
-    sessionStorage.setItem(
-      'trainingSession',
-      JSON.stringify({
-        workflowType: 'IMPROVE_EXISTING',
-        localProjectId: selectedProjectId,
-        roboflowProjectId: selectedRoboflowProjectId,
-        roboflowProject: selectedRoboflowProject,
-        confidenceThreshold: confidenceThreshold[0],
-      })
-    );
-    router.push(`/training-hub/improve/review?project=${selectedProjectId}`);
+  const handleStartReview = async () => {
+    if (!selectedProjectId) return;
+    setStarting(true);
+    setStartError(null);
+    try {
+      const response = await fetch('/api/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: selectedProjectId,
+          workflowType: 'improve_model',
+          targetType: 'both',
+          roboflowProjectId: selectedRoboflowProject?.project?.roboflowId || selectedRoboflowProjectId,
+          confidenceThreshold: confidenceThreshold[0],
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create review session');
+      }
+
+      const sessionId = data.session?.id;
+      if (!sessionId) {
+        throw new Error('Review session missing from response');
+      }
+
+      router.push(`/review?sessionId=${sessionId}`);
+    } catch (err) {
+      setStartError(err instanceof Error ? err.message : 'Failed to start review');
+    } finally {
+      setStarting(false);
+    }
   };
 
   return (
@@ -399,13 +405,28 @@ export default function ImproveWorkflowPage() {
 
             <Button
               onClick={handleStartReview}
-              disabled={!canProceed}
+              disabled={!canProceed || starting}
               className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700"
             >
-              Start Reviewing
-              <ArrowRight className="w-4 h-4 ml-2" />
+              {starting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Starting...
+                </>
+              ) : (
+                <>
+                  Start Reviewing
+                  <ArrowRight className="w-4 h-4 ml-2" />
+                </>
+              )}
             </Button>
           </div>
+
+          {startError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {startError}
+            </div>
+          )}
 
           {!canProceed && selectedProjectId && stats?.total === 0 && (
             <p className="text-center text-sm text-amber-600">

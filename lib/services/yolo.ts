@@ -242,6 +242,22 @@ export class YOLOService {
     );
   }
 
+  async runInference(options: {
+    imageBase64?: string;
+    s3Path?: string;
+    modelName: string;
+    confidence?: number;
+    iouThreshold?: number;
+  }): Promise<DetectionResponse> {
+    return this.detect({
+      image: options.imageBase64,
+      s3_path: options.s3Path,
+      model: options.modelName,
+      confidence: options.confidence,
+      iou_threshold: options.iouThreshold,
+    });
+  }
+
   async detectFromBase64(
     imageBase64: string,
     model: string,

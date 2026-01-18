@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -190,6 +191,7 @@ const clampNumber = (value: number, min: number, max: number) => {
 };
 
 export default function TrainingPage() {
+  const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
   const [datasets, setDatasets] = useState<TrainingDataset[]>([]);
   const [jobs, setJobs] = useState<TrainingJob[]>([]);
@@ -881,36 +883,34 @@ export default function TrainingPage() {
     }
   };
 
-  const handleReviewInference = (job: InferenceJob) => {
-    const model = models.find((item) => item.id === job.config.modelId);
-    const modelClasses = model?.classes || [];
-    const project = projects.find((item) => item.id === job.project.id);
-    const sessionPayload = {
-      workflowType: "IMPROVE_EXISTING",
-      localProjectId: job.project.id,
-      roboflowProjectId: "",
-      roboflowProject: {
-        project: {
-          id: job.project.id,
-          roboflowId: "",
-          name: project?.name || job.project.name,
-        },
-        classes: modelClasses.map((className) => ({
-          id: className,
-          className,
-          color: null,
-        })),
-      },
-      confidenceThreshold: typeof job.config.confidence === "number" ? job.config.confidence : 0.7,
-    };
-
+  const handleReviewInference = async (job: InferenceJob) => {
     try {
-      if (typeof window !== "undefined") {
-        sessionStorage.setItem("trainingSession", JSON.stringify(sessionPayload));
-        window.location.href = `/training-hub/improve/review?project=${job.project.id}`;
+      const response = await fetch("/api/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: job.project.id,
+          workflowType: "improve_model",
+          targetType: "both",
+          confidenceThreshold:
+            typeof job.config.confidence === "number" ? job.config.confidence : 0.7,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to create review session");
       }
+
+      const sessionId = data.session?.id;
+      if (!sessionId) {
+        throw new Error("Review session missing from response");
+      }
+
+      router.push(`/review?sessionId=${sessionId}`);
     } catch (err) {
-      console.error("Failed to store training session:", err);
+      console.error("Failed to start unified review:", err);
+      setError(err instanceof Error ? err.message : "Failed to start review");
     }
   };
 
