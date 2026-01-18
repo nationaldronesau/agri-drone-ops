@@ -1,3 +1,6 @@
+import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
+import { precisionPixelToGeo, extractPrecisionParams } from '@/lib/utils/precision-georeferencing';
+
 export interface GeoreferenceParams {
   gpsLatitude: number;
   gpsLongitude: number;
@@ -56,6 +59,27 @@ export interface GeoValidationResult {
   error?: string;
 }
 
+export interface GeoParamsValidationResult {
+  valid: boolean;
+  missingFields: string[];
+  warnings: string[];
+}
+
+export interface GeoAssetParams {
+  gpsLatitude: number | null;
+  gpsLongitude: number | null;
+  altitude: number | null;
+  gimbalPitch: number | null;
+  gimbalRoll: number | null;
+  gimbalYaw: number | null;
+  imageWidth: number | null;
+  imageHeight: number | null;
+  metadata?: unknown | null;
+  lrfDistance?: number | null;
+  lrfTargetLat?: number | null;
+  lrfTargetLon?: number | null;
+}
+
 /**
  * SAFETY CRITICAL: Validates computed GPS coordinates for spray drone operations.
  * Invalid coordinates could send drones to wrong locations.
@@ -104,6 +128,26 @@ export function assertValidGeoCoordinates(lat: number, lon: number, context: str
   if (!result.valid) {
     throw new Error(result.error);
   }
+}
+
+export function validateGeoParams(asset: GeoAssetParams): GeoParamsValidationResult {
+  const required: Array<keyof GeoAssetParams> = [
+    'gpsLatitude',
+    'gpsLongitude',
+    'altitude',
+    'gimbalPitch',
+    'gimbalRoll',
+    'gimbalYaw',
+    'imageWidth',
+    'imageHeight',
+  ];
+
+  const missing = required.filter((field) => asset[field] == null);
+  return {
+    valid: missing.length === 0,
+    missingFields: missing as string[],
+    warnings: missing.length > 0 ? [`Missing EXIF: ${missing.join(', ')}`] : [],
+  };
 }
 
 export function pixelToGeo(
@@ -325,4 +369,105 @@ export function extractGeoParams(metadata: any): GeoreferenceParams {
     lrfTargetLat: metadata.LRFTargetLat,
     lrfTargetLon: metadata.LRFTargetLon
   };
+}
+
+export function centerBoxToCorner(bbox: CenterBox): [number, number, number, number] {
+  return [
+    bbox.x - bbox.width / 2,
+    bbox.y - bbox.height / 2,
+    bbox.x + bbox.width / 2,
+    bbox.y + bbox.height / 2,
+  ];
+}
+
+export function polygonToCenterBox(points: number[][]): CenterBox | null {
+  if (!Array.isArray(points) || points.length < 2) {
+    return null;
+  }
+
+  const xs = points.map((p) => p[0]);
+  const ys = points.map((p) => p[1]);
+
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+
+  const width = maxX - minX;
+  const height = maxY - minY;
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
+  return {
+    x: minX + width / 2,
+    y: minY + height / 2,
+    width,
+    height,
+  };
+}
+
+export function rescaleToOriginalWithMeta(
+  bbox: CenterBox,
+  meta: YOLOPreprocessingMeta
+): CenterBox {
+  let { x, y, width, height } = bbox;
+
+  if (meta.letterbox?.enabled) {
+    x = (x - meta.letterbox.padLeft) / meta.letterbox.scale;
+    y = (y - meta.letterbox.padTop) / meta.letterbox.scale;
+    width = width / meta.letterbox.scale;
+    height = height / meta.letterbox.scale;
+  } else {
+    const scaleX = meta.originalWidth / meta.inferenceWidth;
+    const scaleY = meta.originalHeight / meta.inferenceHeight;
+    x *= scaleX;
+    y *= scaleY;
+    width *= scaleX;
+    height *= scaleY;
+  }
+
+  if (meta.tiling?.enabled) {
+    x += meta.tiling.tileX;
+    y += meta.tiling.tileY;
+  }
+
+  return { x, y, width, height };
+}
+
+export async function pixelToGeoWithDSM(
+  asset: GeoAssetParams,
+  pixel: PixelPoint
+): Promise<GeoPoint | null> {
+  const validation = validateGeoParams(asset);
+  if (!validation.valid) {
+    return null;
+  }
+
+  const metadata =
+    asset.metadata && typeof asset.metadata === 'object'
+      ? (asset.metadata as Record<string, unknown>)
+      : {};
+
+  const precisionParams = extractPrecisionParams({
+    ...metadata,
+    ExifImageWidth: asset.imageWidth,
+    ExifImageHeight: asset.imageHeight,
+    GpsLatitude: asset.gpsLatitude,
+    GpsLongitude: asset.gpsLongitude,
+    AbsoluteAltitude: asset.altitude,
+    GimbalPitchDegree: asset.gimbalPitch,
+    GimbalRollDegree: asset.gimbalRoll,
+    GimbalYawDegree: asset.gimbalYaw,
+    LRFTargetDistance: asset.lrfDistance ?? undefined,
+    LRFTargetLat: asset.lrfTargetLat ?? undefined,
+    LRFTargetLon: asset.lrfTargetLon ?? undefined,
+  });
+
+  const result = await precisionPixelToGeo(pixel, precisionParams);
+  if (!result) {
+    return null;
+  }
+
+  return { lat: result.latitude, lon: result.longitude };
 }

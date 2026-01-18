@@ -1,0 +1,8 @@
+branch-defaults:
+  main:
+    environment: AgriDrone
+global:
+  application_name: AgriDrones
+  default_platform: Node.js 20
+  default_region: ap-southeast-2
+  workspace_type: Application

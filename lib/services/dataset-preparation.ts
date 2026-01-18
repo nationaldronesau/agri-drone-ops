@@ -8,8 +8,9 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import prisma from '@/lib/db';
 import { S3Service } from '@/lib/services/s3';
-import { normalizeDetectionType } from '@/lib/utils/detection-types';
 import { fetchImageSafely } from '@/lib/utils/security';
+import { rescaleToOriginalWithMeta } from '@/lib/utils/georeferencing';
+import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
 
 interface BoundingBox {
   x: number;      // Center X (0-1)
@@ -26,7 +27,9 @@ interface YOLOAnnotation {
 export interface DatasetConfig {
   projectId?: string;
   sessionIds?: string[];
+  assetIds?: string[];
   classes?: string[];
+  classMapping?: Record<string, string>;
   splitRatio?: {
     train: number;
     val: number;
@@ -62,6 +65,14 @@ export interface DatasetPreview {
 
 type AnnotationPoint = [number, number];
 
+export function sanitizeClassName(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_]/g, '');
+}
+
 class DatasetPreparationService {
   private bucket = S3Service.bucketName;
 
@@ -82,9 +93,17 @@ class DatasetPreparationService {
       throw new Error('No annotated images found matching criteria');
     }
 
-    const normalizedClasses = config.classes.map((cls) => normalizeDetectionType(cls));
+    const normalizedClasses = config.classes
+      .map((cls) => sanitizeClassName(cls))
+      .filter(Boolean);
+
+    const dedupedClasses = Array.from(new Set(normalizedClasses));
+    if (dedupedClasses.length !== normalizedClasses.length) {
+      throw new Error('Duplicate class names detected after sanitization');
+    }
+
     const classMap = new Map<string, number>();
-    normalizedClasses.forEach((cls, idx) => {
+    dedupedClasses.forEach((cls, idx) => {
       classMap.set(cls, idx);
     });
 
@@ -130,7 +149,7 @@ class DatasetPreparationService {
       }
     }
 
-    const dataYaml = this.generateDataYaml(s3BasePath, normalizedClasses, splitCounts);
+    const dataYaml = this.generateDataYaml(s3BasePath, dedupedClasses, splitCounts);
     await S3Service.uploadBuffer(
       Buffer.from(dataYaml),
       `${s3BasePath}/data.yaml`,
@@ -147,7 +166,7 @@ class DatasetPreparationService {
         s3Bucket: this.bucket,
         imageCount: processedImages,
         labelCount: totalLabels,
-        classes: JSON.stringify(config.classes),
+        classes: JSON.stringify(dedupedClasses),
         trainCount: splitCounts.train,
         valCount: splitCounts.val,
         testCount: splitCounts.test,
@@ -164,7 +183,7 @@ class DatasetPreparationService {
       trainCount: splitCounts.train,
       valCount: splitCounts.val,
       testCount: splitCounts.test,
-      classes: normalizedClasses,
+      classes: dedupedClasses,
     };
   }
 
@@ -189,8 +208,10 @@ class DatasetPreparationService {
 
     const availableCounts = new Map<string, number>();
     const incrementAvailable = (className: string) => {
-      const next = (availableCounts.get(className) || 0) + 1;
-      availableCounts.set(className, next);
+      const sanitized = sanitizeClassName(className);
+      if (!sanitized) return;
+      const next = (availableCounts.get(sanitized) || 0) + 1;
+      availableCounts.set(sanitized, next);
     };
 
     for (const asset of assets) {
@@ -198,18 +219,14 @@ class DatasetPreparationService {
         for (const detection of asset.detections) {
           const confidence = typeof detection.confidence === 'number' ? detection.confidence : 0;
           if (confidence < minConfidence) continue;
-          const className = normalizeDetectionType(detection.className);
-          incrementAvailable(className);
+          incrementAvailable(detection.className);
         }
       }
 
       if (includeManual && asset.annotationSessions) {
         for (const session of asset.annotationSessions) {
           for (const annotation of session.annotations) {
-            const className = normalizeDetectionType(
-              annotation.roboflowClassName || annotation.weedType
-            );
-            incrementAvailable(className);
+            incrementAvailable(annotation.roboflowClassName || annotation.weedType);
           }
         }
       }
@@ -220,7 +237,7 @@ class DatasetPreparationService {
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 
     const selectedClasses = (config.classes && config.classes.length > 0)
-      ? config.classes.map((cls) => normalizeDetectionType(cls))
+      ? config.classes.map((cls) => sanitizeClassName(cls)).filter(Boolean)
       : availableClasses.map((entry) => entry.name);
 
     const dedupedClasses = Array.from(new Set(selectedClasses));
@@ -275,6 +292,9 @@ class DatasetPreparationService {
     if (config.projectId) {
       where.projectId = config.projectId;
     }
+    if (config.assetIds && config.assetIds.length > 0) {
+      where.id = { in: config.assetIds };
+    }
 
     const assets = await prisma.asset.findMany({
       where,
@@ -282,7 +302,7 @@ class DatasetPreparationService {
         detections: config.includeAIDetections
           ? {
               where: {
-                type: 'AI',
+                type: { in: ['AI', 'YOLO_LOCAL'] },
                 rejected: false,
                 OR: [{ verified: true }, { userCorrected: true }],
               },
@@ -330,11 +350,11 @@ class DatasetPreparationService {
         const confidence = typeof detection.confidence === 'number' ? detection.confidence : 0;
         if (confidence < minConfidence) continue;
 
-        const className = normalizeDetectionType(detection.className);
+        const className = sanitizeClassName(detection.className);
         const classId = classMap.get(className);
         if (classId === undefined) continue;
 
-        const bbox = this.parseDetectionBBox(detection.boundingBox, imageWidth, imageHeight);
+        const bbox = this.parseDetectionBBox(detection, imageWidth, imageHeight);
         if (!bbox) continue;
 
         annotations.push({ classId, bbox });
@@ -344,7 +364,7 @@ class DatasetPreparationService {
     if (includeManual && asset.annotationSessions) {
       for (const session of asset.annotationSessions) {
         for (const annotation of session.annotations) {
-          const className = normalizeDetectionType(
+          const className = sanitizeClassName(
             annotation.roboflowClassName || annotation.weedType
           );
           const classId = classMap.get(className);
@@ -363,14 +383,20 @@ class DatasetPreparationService {
   }
 
   private parseDetectionBBox(
-    bboxValue: unknown,
+    detection: {
+      boundingBox: unknown;
+      type?: string | null;
+      preprocessingMeta?: unknown;
+    },
     imgWidth: number,
     imgHeight: number
   ): BoundingBox | null {
-    if (!bboxValue) return null;
+    if (!detection?.boundingBox) return null;
 
     const parsed =
-      typeof bboxValue === 'string' ? this.safeJsonParse(bboxValue) : bboxValue;
+      typeof detection.boundingBox === 'string'
+        ? this.safeJsonParse(detection.boundingBox)
+        : detection.boundingBox;
 
     if (Array.isArray(parsed) && parsed.length >= 4) {
       const [x1, y1, x2, y2] = parsed;
@@ -385,7 +411,18 @@ class DatasetPreparationService {
       'width' in parsed &&
       'height' in parsed
     ) {
-      const box = parsed as { x: number; y: number; width: number; height: number };
+      let box = parsed as CenterBox;
+
+      if (detection.type === 'YOLO_LOCAL' && detection.preprocessingMeta) {
+        const meta =
+          typeof detection.preprocessingMeta === 'string'
+            ? this.safeJsonParse(detection.preprocessingMeta)
+            : detection.preprocessingMeta;
+        if (meta) {
+          box = rescaleToOriginalWithMeta(box, meta as YOLOPreprocessingMeta);
+        }
+      }
+
       return this.centerBoxToYOLO(box, imgWidth, imgHeight);
     }
 

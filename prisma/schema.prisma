@@ -20,6 +20,8 @@ model User {
   sessions      Session[]
   teamMembers   TeamMember[]
   createdAssets Asset[]
+  reviewSessions ReviewSession[]
+  yoloInferenceJobs YOLOInferenceJob[]
 }
 
 model Account {
@@ -61,6 +63,8 @@ model Team {
   trainingDatasets  TrainingDataset[]
   trainingJobs      TrainingJob[]
   trainedModels     TrainedModel[]
+  reviewSessions    ReviewSession[]
+  yoloInferenceJobs YOLOInferenceJob[]
 }
 
 model TeamMember {
@@ -111,6 +115,8 @@ model Project {
   orthomosaics Orthomosaic[]
   batchJobs   BatchJob[]
   trainingDatasets TrainingDataset[]
+  reviewSessions ReviewSession[]
+  yoloInferenceJobs YOLOInferenceJob[]
 
   @@index([teamId])
   @@index([location])
@@ -215,7 +221,7 @@ enum JobStatus {
 
 model Detection {
   id              String         @id @default(cuid())
-  jobId           String
+  jobId           String?
   assetId         String
   type            DetectionType
   className       String
@@ -228,10 +234,17 @@ model Detection {
   boundingBox     Json           // {x, y, width, height} or polygon points
   
   // Geographic coordinates
-  geoCoordinates  Json           // GeoJSON format
+  geoCoordinates  Json?          // GeoJSON format
   centerLat       Float?
   centerLon       Float?
-  
+  geoDsmCorrected Boolean        @default(false)
+
+  // YOLO preprocessing metadata (letterbox/tiling)
+  preprocessingMeta Json?
+
+  // YOLO inference linkage (local model)
+  inferenceJobId  String?
+
   // Additional data
   metadata        Json?          // Any additional data (e.g., chemical recommendations)
   verified        Boolean        @default(false)
@@ -243,13 +256,15 @@ model Detection {
   
   createdAt       DateTime       @default(now())
   
-  job             ProcessingJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job             ProcessingJob? @relation(fields: [jobId], references: [id], onDelete: Cascade)
   asset           Asset          @relation(fields: [assetId], references: [id], onDelete: Cascade)
   customModel     TrainedModel?  @relation(fields: [customModelId], references: [id])
+  inferenceJob    YOLOInferenceJob? @relation(fields: [inferenceJobId], references: [id], onDelete: SetNull)
   
   @@index([jobId])
   @@index([assetId])
   @@index([customModelId])
+  @@index([inferenceJobId])
   @@index([centerLat, centerLon])
   @@index([verified])
   @@index([rejected])
@@ -260,6 +275,7 @@ model Detection {
 enum DetectionType {
   AI
   MANUAL
+  YOLO_LOCAL
 }
 
 model ChemicalRecommendation {
@@ -477,6 +493,109 @@ enum PendingAnnotationStatus {
   PENDING
   ACCEPTED
   REJECTED
+}
+
+// ============================================
+// Unified Review Session Models
+// ============================================
+
+model ReviewSession {
+  id                  String   @id @default(cuid())
+
+  // Ownership
+  teamId              String
+  team                Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  createdById         String
+  createdBy           User     @relation(fields: [createdById], references: [id])
+
+  // Project scope
+  projectId           String
+  project             Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // Workflow context
+  workflowType        String
+  targetType          String
+  roboflowProjectId   String?
+  yoloModelName       String?
+
+  // Filters (used at creation)
+  confidenceThreshold Float?
+  weedTypeFilter      String?
+
+  // Asset snapshot (deterministic review/export)
+  assetIds            Json     // String[] of asset IDs
+  assetCount          Int
+
+  // Job linkage (app-level defaults)
+  inferenceJobIds     Json?    // String[] of YOLOInferenceJob IDs
+  batchJobIds         Json?    // String[] of BatchJob IDs
+
+  // Status and counters
+  status              String   @default("active")
+  itemsReviewed       Int      @default(0)
+  itemsAccepted       Int      @default(0)
+  itemsRejected       Int      @default(0)
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  edits               ReviewSessionEdit[]
+  yoloJobs            YOLOInferenceJob[]
+
+  @@index([teamId])
+  @@index([projectId])
+  @@index([status])
+}
+
+model ReviewSessionEdit {
+  id                String   @id @default(cuid())
+  reviewSessionId   String
+  reviewSession     ReviewSession @relation(fields: [reviewSessionId], references: [id], onDelete: Cascade)
+  sourceType        String
+  sourceId          String
+  newAnnotationId   String
+  createdAt         DateTime @default(now())
+
+  @@unique([reviewSessionId, sourceType, sourceId])
+  @@index([reviewSessionId])
+}
+
+model YOLOInferenceJob {
+  id              String   @id @default(cuid())
+
+  // Ownership
+  teamId          String
+  team            Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  createdById     String
+  createdBy       User     @relation(fields: [createdById], references: [id])
+
+  // Context
+  reviewSessionId String?
+  reviewSession   ReviewSession? @relation(fields: [reviewSessionId], references: [id], onDelete: SetNull)
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assetIds        Json?    // String[] - only when reviewSessionId is null
+
+  // Model config
+  modelName       String
+  confidence      Float    @default(0.5)
+
+  // Status
+  status          BatchJobStatus @default(QUEUED)
+  processedImages Int      @default(0)
+  totalImages     Int
+  detectionsFound Int      @default(0)
+  errorMessage    String?
+
+  createdAt       DateTime @default(now())
+  completedAt     DateTime?
+
+  detections      Detection[]
+
+  @@index([teamId])
+  @@index([projectId])
+  @@index([reviewSessionId])
+  @@index([status])
 }
 
 // ============================================

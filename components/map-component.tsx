@@ -115,7 +115,7 @@ export default function MapComponent() {
   const fetchDetections = async () => {
     try {
       // Use all=true to get all detections for map display
-      const res = await fetch("/api/detections?all=true");
+      const res = await fetch("/api/detections?all=true&geoOnly=true");
       if (!res.ok) {
         throw new Error(`Failed to fetch detections: ${res.status}`);
       }

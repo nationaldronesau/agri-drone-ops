@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -13,6 +13,7 @@ import { ClassSelector, DEFAULT_WEED_CLASSES, getClassByHotkey, getClassColor } 
 import { AnnotationList } from "@/components/annotation/AnnotationList";
 import { HotkeyReference } from "@/components/annotation/HotkeyReference";
 import { useAnnotationHotkeys, type AnnotationMode } from "@/lib/hooks/useAnnotationHotkeys";
+import { BatchProgress } from "@/components/review/BatchProgress";
 
 // SAM3 types
 interface SAM3StatusResponse {
@@ -149,6 +150,21 @@ interface DrawingBox {
   endY: number;
 }
 
+type ReviewSource = "manual" | "pending" | "detection";
+
+interface HighlightOverlay {
+  type: "bbox" | "polygon";
+  bbox?: [number, number, number, number];
+  polygon?: [number, number][];
+}
+
+interface EditContext {
+  sessionId: string;
+  source: ReviewSource;
+  originalItemId: string;
+  returnTo?: string | null;
+}
+
 const CONFIDENCE_LEVELS = ["CERTAIN", "LIKELY", "UNCERTAIN"] as const;
 
 interface AnnotateClientProps {
@@ -157,6 +173,26 @@ interface AnnotateClientProps {
 
 export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const reviewSessionId = searchParams.get("reviewSessionId");
+  const highlightId = searchParams.get("highlightId");
+  const highlightSource = searchParams.get("source");
+  const returnToParam = searchParams.get("returnTo");
+  const returnTo = returnToParam ? decodeURIComponent(returnToParam) : null;
+
+  const editContext = useMemo<EditContext | null>(() => {
+    if (!reviewSessionId || !highlightId) return null;
+    if (highlightSource !== "manual" && highlightSource !== "pending" && highlightSource !== "detection") {
+      return null;
+    }
+    return {
+      sessionId: reviewSessionId,
+      source: highlightSource,
+      originalItemId: highlightId,
+      returnTo,
+    };
+  }, [highlightId, highlightSource, reviewSessionId, returnTo]);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
@@ -176,6 +212,8 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const [currentPolygon, setCurrentPolygon] = useState<DrawingPolygon>({ points: [], isComplete: false });
   const [annotations, setAnnotations] = useState<ManualAnnotation[]>([]);
   const [selectedAnnotation, setSelectedAnnotation] = useState<string | null>(null);
+  const [highlightOverlay, setHighlightOverlay] = useState<HighlightOverlay | null>(null);
+  const [pendingHighlightId, setPendingHighlightId] = useState<string | null>(null);
   const [aiSuggestions, setAiSuggestions] = useState<AiSuggestion[]>([]);
   const [showAiSuggestions] = useState(true);
 
@@ -216,7 +254,18 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
 
   // Batch processing state
   const [batchProcessing, setBatchProcessing] = useState(false);
-  const [, setBatchJobId] = useState<string | null>(null);
+  const [batchJobId, setBatchJobId] = useState<string | null>(null);
+  const [batchJobStatus, setBatchJobStatus] = useState<{
+    status: string;
+    processedImages: number;
+    totalImages: number;
+  } | null>(null);
+  const [batchSummary, setBatchSummary] = useState<{
+    total: number;
+    pending: number;
+    accepted: number;
+    rejected: number;
+  } | null>(null);
 
   // Load project assets for filmstrip
   useEffect(() => {
@@ -388,7 +437,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         const response = await fetch(`/api/detections?assetId=${assetId}&all=true`);
         if (response.ok) {
           const data = await response.json();
-          const mapped: AiSuggestion[] = (data || []).map((det: {
+          const mapped: AiSuggestion[] = (data || []).filter((det: { type?: string }) => det.type !== 'YOLO_LOCAL').map((det: {
             id: string;
             className?: string;
             confidence?: number;
@@ -413,6 +462,52 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     };
     fetchAiDetections();
   }, [assetId]);
+
+  // Highlight review item when editing from unified review
+  useEffect(() => {
+    if (!editContext || !assetId) {
+      setHighlightOverlay(null);
+      return;
+    }
+
+    const fetchHighlight = async () => {
+      try {
+        const response = await fetch(`/api/review/${editContext.sessionId}/items?assetId=${assetId}`);
+        if (!response.ok) return;
+        const data = await response.json();
+        const matched = (data.items || []).find(
+          (item: { sourceId: string; id: string }) =>
+            item.sourceId === editContext.originalItemId || item.id === editContext.originalItemId
+        );
+
+        if (!matched) return;
+
+        if (matched.source === "manual") {
+          setPendingHighlightId(matched.sourceId);
+          setHighlightOverlay(null);
+        } else if (matched.geometry?.bbox) {
+          setHighlightOverlay({ type: "bbox", bbox: matched.geometry.bbox });
+        } else if (matched.geometry?.polygon) {
+          setHighlightOverlay({ type: "polygon", polygon: matched.geometry.polygon });
+        }
+
+        setAnnotationMode("manual");
+      } catch (err) {
+        console.error("Failed to load highlight item:", err);
+      }
+    };
+
+    fetchHighlight();
+  }, [assetId, editContext]);
+
+  useEffect(() => {
+    if (!pendingHighlightId) return;
+    const found = annotations.find((annotation) => annotation.id === pendingHighlightId);
+    if (found) {
+      setSelectedAnnotation(pendingHighlightId);
+      setPendingHighlightId(null);
+    }
+  }, [annotations, pendingHighlightId]);
 
   // SAM3 prediction
   const runSam3Prediction = useCallback(async (points: SAM3Point[]) => {
@@ -495,9 +590,14 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const navigateToAsset = useCallback((index: number) => {
     if (index >= 0 && index < projectAssets.length) {
       const asset = projectAssets[index];
-      router.push(`/annotate/${asset.id}`);
+      const params = new URLSearchParams();
+      if (reviewSessionId) {
+        params.set("reviewSessionId", reviewSessionId);
+      }
+      const suffix = params.toString() ? `?${params.toString()}` : "";
+      router.push(`/annotate/${asset.id}${suffix}`);
     }
-  }, [projectAssets, router]);
+  }, [projectAssets, reviewSessionId, router]);
 
   const goToPreviousImage = useCallback(() => {
     if (currentAssetIndex > 0) navigateToAsset(currentAssetIndex - 1);
@@ -521,6 +621,40 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     if (weedClass) setSelectedClass(weedClass.name);
   }, []);
 
+  const handleEditWriteBack = useCallback(async (newAnnotationId: string) => {
+    if (!editContext) return false;
+
+    try {
+      const response = await fetch(`/api/review/${editContext.sessionId}/action`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "edit",
+          source: editContext.source,
+          originalItemId: editContext.originalItemId,
+          newAnnotationId,
+        }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to apply edit");
+      }
+
+      if (editContext.returnTo) {
+        router.push(editContext.returnTo);
+      } else {
+        router.push(`/review?sessionId=${editContext.sessionId}`);
+      }
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to apply edit";
+      setSam3Error(message);
+      setTimeout(() => setSam3Error(null), 4000);
+      return false;
+    }
+  }, [editContext, router]);
+
   // Accept annotation
   const acceptAnnotation = useCallback(async () => {
     if (!session) return;
@@ -541,6 +675,9 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
 
         if (response.ok) {
           const newAnnotation = await response.json();
+          if (await handleEditWriteBack(newAnnotation.id)) {
+            return;
+          }
           setAnnotations(prev => [...prev, newAnnotation]);
           clearSam3();
         }
@@ -566,6 +703,9 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
 
         if (response.ok) {
           const newAnnotation = await response.json();
+          if (await handleEditWriteBack(newAnnotation.id)) {
+            return;
+          }
           setAnnotations(prev => [...prev, newAnnotation]);
           cancelDrawing();
         }
@@ -602,6 +742,9 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
 
           if (response.ok) {
             const newAnnotation = await response.json();
+            if (await handleEditWriteBack(newAnnotation.id)) {
+              return;
+            }
             newAnnotations.push(newAnnotation);
           }
         }
@@ -613,7 +756,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         console.error('Failed to save box exemplar annotations:', err);
       }
     }
-  }, [session, annotationMode, sam3PreviewPolygon, currentPolygon, boxExemplars, selectedClass, confidence, clearSam3, cancelDrawing, clearBoxExemplars]);
+  }, [session, annotationMode, sam3PreviewPolygon, currentPolygon, boxExemplars, selectedClass, confidence, clearSam3, cancelDrawing, clearBoxExemplars, handleEditWriteBack]);
 
   // Cancel current action
   const handleCancel = useCallback(() => {
@@ -766,6 +909,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     const exemplarsToProcess = [...boxExemplars];
 
     setBatchProcessing(true);
+    setBatchSummary(null);
     setSam3Error(null);
     try {
       // Use direct SAM3 predict endpoint with box prompts
@@ -883,8 +1027,11 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       if (response.ok) {
         const data = await response.json();
         setBatchJobId(data.batchJobId);
-        // Redirect to review page
-        window.location.href = `/training-hub/review/${data.batchJobId}`;
+        setBatchJobStatus({
+          status: data.status || 'QUEUED',
+          processedImages: data.processedImages || 0,
+          totalImages: data.totalImages || 0,
+        });
       } else {
         const errorData = await response.json();
         // Provide clearer error for Redis unavailability
@@ -901,6 +1048,93 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       setBatchProcessing(false);
     }
   }, [session, boxExemplars, selectedClass, useVisualCrops]);
+
+  useEffect(() => {
+    if (!batchJobId) return;
+
+    const MAX_STATUS_ERRORS = 5;
+    let cancelled = false;
+    let intervalId: ReturnType<typeof setInterval> | undefined;
+    let failureCount = 0;
+
+    const stopPolling = (message: string) => {
+      if (intervalId) clearInterval(intervalId);
+      if (!cancelled) {
+        setSam3Error(message);
+      }
+    };
+
+    const fetchStatus = async () => {
+      try {
+        const response = await fetch(`/api/sam3/batch/${batchJobId}`);
+        if (!response.ok) {
+          failureCount += 1;
+          if (failureCount >= MAX_STATUS_ERRORS) {
+            stopPolling('Stopped polling batch status after repeated failures.');
+          }
+          return;
+        }
+        const data = await response.json();
+        if (!data?.batchJob || cancelled) return;
+
+        failureCount = 0;
+        setBatchJobStatus({
+          status: data.batchJob.status,
+          processedImages: data.batchJob.processedImages,
+          totalImages: data.batchJob.totalImages,
+        });
+        setBatchSummary(data.summary || null);
+
+        if (["COMPLETED", "FAILED", "CANCELLED"].includes(data.batchJob.status)) {
+          if (intervalId) clearInterval(intervalId);
+        }
+      } catch (err) {
+        console.error("Failed to fetch batch job status:", err);
+        failureCount += 1;
+        if (failureCount >= MAX_STATUS_ERRORS) {
+          stopPolling('Stopped polling batch status after repeated failures.');
+        }
+      }
+    };
+
+    fetchStatus();
+    intervalId = setInterval(fetchStatus, 3000);
+
+    return () => {
+      cancelled = true;
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [batchJobId]);
+
+  const handleReviewBatch = useCallback(async () => {
+    if (!batchJobId || !session?.asset?.project?.id) return;
+
+    try {
+      const response = await fetch("/api/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: session.asset.project.id,
+          workflowType: "batch_review",
+          targetType: "both",
+          batchJobIds: [batchJobId],
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to create review session");
+      }
+
+      if (data?.session?.id) {
+        router.push(`/review?sessionId=${data.session.id}`);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to create review session";
+      setSam3Error(message);
+      setTimeout(() => setSam3Error(null), 4000);
+    }
+  }, [batchJobId, router, session?.asset?.project?.id]);
 
   // Zoom controls
   const handleZoomIn = useCallback(() => setZoomLevel(prev => Math.min(prev * 1.2, 5)), []);
@@ -980,6 +1214,32 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         ctx.fillRect(startX, startY, boxWidth, boxHeight);
         ctx.restore();
       });
+      ctx.setLineDash([]);
+    }
+
+    if (highlightOverlay) {
+      ctx.save();
+      ctx.setLineDash([6, 4]);
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 3 / zoomLevel;
+
+      if (highlightOverlay.type === 'bbox' && highlightOverlay.bbox) {
+        const [x1, y1, x2, y2] = highlightOverlay.bbox;
+        const width = (x2 - x1) * scale;
+        const height = (y2 - y1) * scale;
+        ctx.strokeRect(x1 * scale, y1 * scale, width, height);
+      }
+
+      if (highlightOverlay.type === 'polygon' && highlightOverlay.polygon) {
+        ctx.beginPath();
+        const [startX, startY] = highlightOverlay.polygon[0];
+        ctx.moveTo(startX * scale, startY * scale);
+        highlightOverlay.polygon.forEach(([x, y]) => ctx.lineTo(x * scale, y * scale));
+        ctx.closePath();
+        ctx.stroke();
+      }
+
+      ctx.restore();
       ctx.setLineDash([]);
     }
 
@@ -1127,7 +1387,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     }
 
     ctx.restore();
-  }, [annotations, currentPolygon, selectedAnnotation, hoveredAnnotation, scale, imageLoaded, zoomLevel, panOffset, aiSuggestions, showAiSuggestions, annotationMode, sam3Points, sam3PreviewPolygon, boxExemplars, currentBox]);
+  }, [annotations, currentPolygon, selectedAnnotation, hoveredAnnotation, scale, imageLoaded, zoomLevel, panOffset, aiSuggestions, showAiSuggestions, highlightOverlay, annotationMode, sam3Points, sam3PreviewPolygon, boxExemplars, currentBox]);
 
   useEffect(() => { redrawCanvas(); }, [redrawCanvas]);
 
@@ -1307,6 +1567,9 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     (annotationMode === 'box-exemplar' && boxExemplars.length > 0);
   const canUndo = annotationMode === 'sam3' && sam3Points.length > 0;
   const canDelete = !!selectedAnnotation;
+  const batchInProgress =
+    batchJobStatus &&
+    !["COMPLETED", "FAILED", "CANCELLED"].includes(batchJobStatus.status);
   const readyToPushCount = annotations.filter(a => a.verified && !a.pushedToTraining).length;
 
   if (loading) {
@@ -1555,6 +1818,25 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
             className="mt-3"
           />
 
+          {batchJobStatus && (
+            <div className="mt-3">
+              <BatchProgress
+                processed={batchJobStatus.processedImages}
+                total={batchJobStatus.totalImages}
+                status={batchJobStatus.status}
+                onReview={
+                  batchJobStatus.status === "COMPLETED" ? handleReviewBatch : undefined
+                }
+              />
+              {batchSummary && (
+                <div className="mt-2 text-xs text-gray-500">
+                  {batchSummary.pending} pending · {batchSummary.accepted} accepted ·{" "}
+                  {batchSummary.rejected} rejected
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Few-Shot Batch Actions */}
           {annotationMode === 'box-exemplar' && boxExemplars.length > 0 && (
             <div className="mt-3 bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200 rounded-lg p-3">
@@ -1577,7 +1859,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
                 </Button>
                 <Button
                   onClick={applyToAllImages}
-                  disabled={batchProcessing}
+                  disabled={batchProcessing || Boolean(batchInProgress)}
                   size="sm"
                   variant="outline"
                   className="w-full border-purple-300 text-purple-700 hover:bg-purple-50 text-xs h-8"

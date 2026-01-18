@@ -23,6 +23,7 @@ export async function GET(request: NextRequest) {
     const needsReview = searchParams.get('needsReview');
     const maxConfidence = searchParams.get('maxConfidence');
     const customModelId = searchParams.get('customModelId');
+    const geoOnly = searchParams.get('geoOnly') === 'true';
 
     // If projectId specified, verify user has access
     if (projectId) {
@@ -89,8 +90,9 @@ export async function GET(request: NextRequest) {
       }
     };
     if (projectId) {
-      where.job = {
-        projectId: projectId
+      where.asset = {
+        ...(where.asset as Record<string, unknown>),
+        projectId,
       };
     }
     if (assetId) {
@@ -105,6 +107,10 @@ export async function GET(request: NextRequest) {
       where.confidence = {
         lt: maxConfidence ? parseFloat(maxConfidence) : 0.7
       };
+    }
+    if (geoOnly) {
+      where.centerLat = { not: null };
+      where.centerLon = { not: null };
     }
 
     // Get total count for pagination metadata

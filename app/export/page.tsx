@@ -45,10 +45,8 @@ export default function ExportPage() {
   const [includeMetadata, setIncludeMetadata] = useState(true);
   const [includeAI, setIncludeAI] = useState(true);
   const [includeManual, setIncludeManual] = useState(true);
-  const [includeSam3, setIncludeSam3] = useState(true);
+  const [includeSam3, setIncludeSam3] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [useStreaming, setUseStreaming] = useState(false);
-
   // Threshold for when to recommend/require streaming export
   const LARGE_DATASET_THRESHOLD = 1000;
 
@@ -314,17 +312,7 @@ export default function ExportPage() {
   };
 
   const handleExport = async () => {
-    // Use streaming for large datasets to avoid memory issues
-    const isLargeDataset = filteredDetections.length > LARGE_DATASET_THRESHOLD;
-
-    // Shapefile always requires server-side generation
-    if (exportFormat === 'shapefile' || useStreaming || isLargeDataset) {
-      await exportWithStreaming();
-    } else if (exportFormat === 'csv') {
-      exportAsCSV();
-    } else {
-      exportAsKML();
-    }
+    await exportWithStreaming();
   };
 
   const exportWithStreaming = async () => {
@@ -358,9 +346,7 @@ export default function ExportPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      // Shapefile exports as ZIP, other formats use their extension
-      const fileExtension = exportFormat === 'shapefile' ? 'zip' : exportFormat;
-      a.download = `weed-detections-${new Date().toISOString().split("T")[0]}.${fileExtension}`;
+      a.download = `weed-detections-${new Date().toISOString().split("T")[0]}.zip`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (error) {
@@ -539,10 +525,11 @@ export default function ExportPage() {
                     <Checkbox 
                       id="includeSam3"
                       checked={includeSam3}
+                      disabled
                       onCheckedChange={(checked) => setIncludeSam3(checked as boolean)}
                     />
-                    <Label htmlFor="includeSam3" className="cursor-pointer">
-                      Include SAM3 Pending Annotations
+                    <Label htmlFor="includeSam3" className="cursor-not-allowed text-gray-400">
+                      Include SAM3 Pending Annotations (disabled)
                     </Label>
                   </div>
                 </div>

@@ -58,6 +58,8 @@ export default function NewSpeciesWorkflowPage() {
   );
   const [projectImages, setProjectImages] = useState<number>(0);
   const [loadingImages, setLoadingImages] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
 
   // Fetch local projects
   useEffect(() => {
@@ -105,18 +107,48 @@ export default function NewSpeciesWorkflowPage() {
 
   const canProceed = selectedProjectId && selectedRoboflowProjectId && projectImages > 0;
 
-  const handleStartLabeling = () => {
-    // Store selected project info in session storage for the labeling page
-    sessionStorage.setItem(
-      'trainingSession',
-      JSON.stringify({
-        workflowType: 'NEW_SPECIES',
-        localProjectId: selectedProjectId,
-        roboflowProjectId: selectedRoboflowProjectId,
-        roboflowProject: selectedRoboflowProject,
-      })
-    );
-    router.push(`/training-hub/new-species/label?project=${selectedProjectId}`);
+  const handleStartLabeling = async () => {
+    if (!selectedProjectId) return;
+    setStarting(true);
+    setStartError(null);
+    try {
+      const response = await fetch('/api/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: selectedProjectId,
+          workflowType: 'new_species',
+          targetType: 'roboflow',
+          roboflowProjectId: selectedRoboflowProject?.project?.roboflowId || selectedRoboflowProjectId,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create review session');
+      }
+
+      const sessionId = data.session?.id;
+      if (!sessionId) {
+        throw new Error('Review session missing from response');
+      }
+
+      const assetsResponse = await fetch(`/api/assets?projectId=${selectedProjectId}`);
+      const assetsData = await assetsResponse.json().catch(() => ({}));
+      const assets = assetsData.assets || [];
+      const firstAsset =
+        assets.find((asset: { annotationCount?: number }) => !asset.annotationCount) || assets[0];
+
+      if (!firstAsset) {
+        throw new Error('No assets available to annotate');
+      }
+
+      router.push(`/annotate/${firstAsset.id}?reviewSessionId=${sessionId}`);
+    } catch (err) {
+      setStartError(err instanceof Error ? err.message : 'Failed to start workflow');
+    } finally {
+      setStarting(false);
+    }
   };
 
   return (
@@ -314,13 +346,28 @@ export default function NewSpeciesWorkflowPage() {
 
             <Button
               onClick={handleStartLabeling}
-              disabled={!canProceed}
+              disabled={!canProceed || starting}
               className="bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700"
             >
-              Start Labeling
-              <ArrowRight className="w-4 h-4 ml-2" />
+              {starting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Starting...
+                </>
+              ) : (
+                <>
+                  Start Labeling
+                  <ArrowRight className="w-4 h-4 ml-2" />
+                </>
+              )}
             </Button>
           </div>
+
+          {startError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {startError}
+            </div>
+          )}
 
           {!canProceed && selectedProjectId && projectImages === 0 && (
             <p className="text-center text-sm text-amber-600">
