@@ -1,17 +1,18 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 
 export default function LegacyNewSpeciesLabelRedirect() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const bootstrap = async () => {
-      const projectId = searchParams.get('project');
+      const projectId = typeof window !== 'undefined'
+        ? new URLSearchParams(window.location.search).get('project')
+        : null;
       const stored = typeof window !== 'undefined' ? sessionStorage.getItem('trainingSession') : null;
       let parsed: any = null;
       try {
@@ -65,7 +66,7 @@ export default function LegacyNewSpeciesLabelRedirect() {
     };
 
     bootstrap();
-  }, [router, searchParams]);
+  }, [router]);
 
   if (error) {
     return (
