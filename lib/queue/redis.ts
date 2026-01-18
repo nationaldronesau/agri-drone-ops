@@ -18,14 +18,6 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
  */
 export const QUEUE_PREFIX = '{agridrone}';
 
-// Connection options for BullMQ
-export const redisConnection = {
-  connection: new IORedis(REDIS_URL, {
-    maxRetriesPerRequest: null, // Required for BullMQ
-    enableReadyCheck: false,
-  }),
-};
-
 // Create a new connection for workers (BullMQ requires separate connections)
 export function createRedisConnection() {
   return new IORedis(REDIS_URL, {
