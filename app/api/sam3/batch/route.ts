@@ -225,10 +225,9 @@ async function processSynchronously(
   let resolvedSourceAssetId = sourceAssetId || batchJobRecord?.sourceAssetId || null;
   let resolvedExemplarCrops = normalizeExemplarCrops(exemplarCrops);
   const conceptConfigured = sam3ConceptService.isConfigured();
-  const useConceptForVisualCrops = useVisualCrops && conceptConfigured;
-  const allowConcept = conceptConfigured && !useVisualCrops;
-  const useConceptService = useConceptForVisualCrops || allowConcept;
-  const useSegmentCrops = useVisualCrops && !conceptConfigured;
+  const useVisualCropsOnly = Boolean(useVisualCrops);
+  const useConceptService = conceptConfigured && !useVisualCropsOnly;
+  const useSegmentCrops = useVisualCropsOnly;
   let useConcept = false;
   let sourceImageBuffer: Buffer | null = null;
 
@@ -260,7 +259,7 @@ async function processSynchronously(
     }
   }
 
-  if (useConceptForVisualCrops && !conceptExemplarId && !sourceImageBuffer) {
+  if (useConceptService && !conceptExemplarId && !sourceImageBuffer) {
     const message = 'Visual crops requested but the source image could not be loaded to create exemplars.';
     await prisma.batchJob.update({
       where: { id: batchJobId },
@@ -280,10 +279,10 @@ async function processSynchronously(
     };
   }
 
-  if (useConceptForVisualCrops) {
-    console.log(`[Sync] Job ${batchJobId}: Visual crops requested - using concept service`);
-  } else if (conceptConfigured && useVisualCrops) {
-    console.log(`[Sync] Job ${batchJobId}: Visual crops requested - concept service not configured, using segment crops`);
+  if (useVisualCropsOnly) {
+    console.log(`[Sync] Job ${batchJobId}: Visual crops requested - using exemplar crops`);
+  } else if (useConceptService) {
+    console.log(`[Sync] Job ${batchJobId}: Using concept service`);
   }
 
   if (useConceptService) {
@@ -317,26 +316,6 @@ async function processSynchronously(
       }
     }
     useConcept = Boolean(conceptExemplarId);
-  }
-
-  if (useConceptForVisualCrops && !useConcept) {
-    const message = 'Visual crops requested but concept exemplar could not be created.';
-    await prisma.batchJob.update({
-      where: { id: batchJobId },
-      data: {
-        status: 'FAILED',
-        processedImages: 0,
-        detectionsFound: 0,
-        completedAt: new Date(),
-        errorMessage: message,
-      },
-    });
-    return {
-      processedImages: 0,
-      detectionsFound: 0,
-      errors: [message],
-      status: 'FAILED',
-    };
   }
 
   if (useSegmentCrops && !resolvedExemplarCrops.length && sourceImageBuffer) {

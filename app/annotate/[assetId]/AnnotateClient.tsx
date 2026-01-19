@@ -378,6 +378,11 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
           setSam3Error('No SAM3 backend configured');
         }
 
+        if (useVisualCrops) {
+          setSam3ConceptStatus(null);
+          return;
+        }
+
         try {
           const conceptResponse = await fetch('/api/sam3/concept/status');
           const conceptStatus: SAM3ConceptStatusResponse | null = await conceptResponse
@@ -413,12 +418,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         }
       } catch {
         setSam3Health({ available: false, mode: 'unavailable', device: null, latencyMs: null });
-        setSam3ConceptStatus({
-          configured: false,
-          ready: false,
-          sam3Loaded: false,
-          dinoLoaded: false,
-        });
+        setSam3ConceptStatus(null);
         setAnnotationMode('manual');
       }
     };
@@ -426,7 +426,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     checkSam3Status();
     const interval = setInterval(checkSam3Status, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [useVisualCrops]);
 
   // Fetch AI detections
   useEffect(() => {
@@ -1627,7 +1627,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
                 : 'SAM3 Unavailable'}
             </Badge>
           )}
-          {sam3ConceptStatus && (
+          {!useVisualCrops && sam3ConceptStatus && (
             <Badge variant={sam3ConceptStatus.ready ? "default" : "secondary"} className="text-xs">
               {sam3ConceptStatus.configured
                 ? (sam3ConceptStatus.ready ? 'Concept Ready' : 'Concept Warming')
