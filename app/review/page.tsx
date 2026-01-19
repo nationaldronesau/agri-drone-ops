@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import { ReviewViewer, type ReviewItem } from '@/components/review/ReviewViewer';
 import { YOLOConfigModal, type YOLOTrainingConfig } from '@/components/review/YOLOConfigModal';
@@ -39,6 +40,10 @@ function ReviewPageContent() {
   const [pendingOnly, setPendingOnly] = useState(false);
   const [pendingOnlyInitialized, setPendingOnlyInitialized] = useState(false);
   const [minConfidence, setMinConfidence] = useState<number>(0);
+  const [exportFormat, setExportFormat] = useState<'csv' | 'kml' | 'shapefile'>('csv');
+  const [exportIncludeAI, setExportIncludeAI] = useState(true);
+  const [exportIncludeManual, setExportIncludeManual] = useState(true);
+  const [exportDefaultsInitialized, setExportDefaultsInitialized] = useState(false);
 
   const [showYoloModal, setShowYoloModal] = useState(false);
   const [pushMessage, setPushMessage] = useState<string | null>(null);
@@ -100,6 +105,14 @@ function ReviewPageContent() {
     }
     setPendingOnlyInitialized(true);
   }, [pendingOnlyInitialized, session?.workflowType]);
+
+  useEffect(() => {
+    if (exportDefaultsInitialized || !session?.workflowType) return;
+    if (session.workflowType === 'batch_review') {
+      setExportIncludeAI(false);
+    }
+    setExportDefaultsInitialized(true);
+  }, [exportDefaultsInitialized, session?.workflowType]);
 
   const filteredItems = useMemo(() => {
     const min = minConfidence > 0 ? minConfidence / 100 : null;
@@ -195,6 +208,14 @@ function ReviewPageContent() {
     },
     [session?.roboflowProjectId, sessionId]
   );
+
+  const handleExport = useCallback(() => {
+    if (!sessionId) return;
+    const params = new URLSearchParams({ format: exportFormat, sessionId });
+    if (!exportIncludeAI) params.set('includeAI', 'false');
+    if (!exportIncludeManual) params.set('includeManual', 'false');
+    window.location.href = `/api/export/stream?${params.toString()}`;
+  }, [exportFormat, exportIncludeAI, exportIncludeManual, sessionId]);
 
   if (loading) {
     return (
@@ -294,6 +315,40 @@ function ReviewPageContent() {
             </div>
           </div>
           {actionLoading && <span className="text-xs text-gray-400">Saving changes...</span>}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3 text-sm text-gray-600">
+          <span className="text-xs uppercase tracking-wide text-gray-500">Export</span>
+          <Select
+            value={exportFormat}
+            onValueChange={(value) => setExportFormat(value as 'csv' | 'kml' | 'shapefile')}
+          >
+            <SelectTrigger className="h-8 w-36">
+              <SelectValue placeholder="Format" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="csv">CSV</SelectItem>
+              <SelectItem value="kml">KML</SelectItem>
+              <SelectItem value="shapefile">Shapefile</SelectItem>
+            </SelectContent>
+          </Select>
+          <label className="flex items-center gap-2">
+            <Checkbox
+              checked={exportIncludeManual}
+              onCheckedChange={(value) => setExportIncludeManual(Boolean(value))}
+            />
+            Include manual
+          </label>
+          <label className="flex items-center gap-2">
+            <Checkbox
+              checked={exportIncludeAI}
+              onCheckedChange={(value) => setExportIncludeAI(Boolean(value))}
+            />
+            Include AI
+          </label>
+          <Button variant="outline" size="sm" onClick={handleExport}>
+            Export ZIP
+          </Button>
         </div>
 
         <ReviewViewer items={filteredItems} onAction={handleAction} onEdit={handleEdit} />
