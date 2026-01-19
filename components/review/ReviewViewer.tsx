@@ -94,7 +94,7 @@ export function ReviewViewer({ items, onAction, onEdit }: ReviewViewerProps) {
     }));
 
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr_360px]">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[240px_minmax(0,1fr)_320px] xl:grid-cols-[280px_minmax(0,1fr)_360px]">
       <div className="space-y-3">
         <div className="text-sm font-semibold text-gray-700">Assets</div>
         <div className="space-y-2">
