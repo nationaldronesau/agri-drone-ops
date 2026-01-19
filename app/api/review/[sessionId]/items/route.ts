@@ -144,6 +144,8 @@ export async function GET(
     const assetIds = toStringArray(session.assetIds);
     const inferenceJobIds = toStringArray(session.inferenceJobIds);
     const batchJobIds = toStringArray(session.batchJobIds);
+    const isBatchReview = session.workflowType === 'batch_review';
+    const isNewSpecies = session.workflowType === 'new_species';
 
     if (assetIds.length === 0) {
       return NextResponse.json({ items: [] });
@@ -176,57 +178,70 @@ export async function GET(
       imageHeight: true,
     };
 
-    const [manualAnnotations, aiDetections, yoloDetections, pendingAnnotations] = await Promise.all([
-      prisma.manualAnnotation.findMany({
-        where: {
-          session: {
+    const manualAnnotationsPromise = !isBatchReview
+      ? prisma.manualAnnotation.findMany({
+          where: {
+            session: {
+              assetId: { in: filteredAssetIds },
+            },
+            ...(isNewSpecies ? { createdAt: { gte: session.createdAt } } : {}),
+          },
+          include: {
+            session: {
+              select: {
+                asset: { select: assetSelect },
+              },
+            },
+          },
+        })
+      : Promise.resolve([]);
+
+    const aiDetectionsPromise = !isBatchReview
+      ? prisma.detection.findMany({
+          where: {
             assetId: { in: filteredAssetIds },
+            type: 'AI',
           },
-        },
-        include: {
-          session: {
-            select: {
-              asset: { select: assetSelect },
+          include: {
+            asset: { select: assetSelect },
+            customModel: {
+              select: { id: true, name: true, version: true, displayName: true },
             },
           },
-        },
-      }),
-      prisma.detection.findMany({
-        where: {
-          assetId: { in: filteredAssetIds },
-          type: 'AI',
-        },
-        include: {
-          asset: { select: assetSelect },
-          customModel: {
-            select: { id: true, name: true, version: true, displayName: true },
+        })
+      : Promise.resolve([]);
+
+    const yoloDetectionsPromise = !isBatchReview && inferenceJobIds.length > 0
+      ? prisma.detection.findMany({
+          where: {
+            assetId: { in: filteredAssetIds },
+            type: 'YOLO_LOCAL',
+            inferenceJobId: { in: inferenceJobIds },
           },
-        },
-      }),
-      inferenceJobIds.length > 0
-        ? prisma.detection.findMany({
-            where: {
-              assetId: { in: filteredAssetIds },
-              type: 'YOLO_LOCAL',
-              inferenceJobId: { in: inferenceJobIds },
-            },
-            include: {
-              asset: { select: assetSelect },
-            },
-          })
-        : Promise.resolve([]),
-      batchJobIds.length > 0
-        ? prisma.pendingAnnotation.findMany({
-            where: {
-              assetId: { in: filteredAssetIds },
-              batchJobId: { in: batchJobIds },
-            },
-            include: {
-              asset: { select: assetSelect },
-              batchJob: { select: { id: true, exemplarId: true, weedType: true } },
-            },
-          })
-        : Promise.resolve([]),
+          include: {
+            asset: { select: assetSelect },
+          },
+        })
+      : Promise.resolve([]);
+
+    const pendingAnnotationsPromise = batchJobIds.length > 0
+      ? prisma.pendingAnnotation.findMany({
+          where: {
+            assetId: { in: filteredAssetIds },
+            batchJobId: { in: batchJobIds },
+          },
+          include: {
+            asset: { select: assetSelect },
+            batchJob: { select: { id: true, exemplarId: true, weedType: true } },
+          },
+        })
+      : Promise.resolve([]);
+
+    const [manualAnnotations, aiDetections, yoloDetections, pendingAnnotations] = await Promise.all([
+      manualAnnotationsPromise,
+      aiDetectionsPromise,
+      yoloDetectionsPromise,
+      pendingAnnotationsPromise,
     ]);
 
     const items = [
