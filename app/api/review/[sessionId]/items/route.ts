@@ -145,7 +145,7 @@ export async function GET(
     const inferenceJobIds = toStringArray(session.inferenceJobIds);
     const batchJobIds = toStringArray(session.batchJobIds);
     const isBatchReview = session.workflowType === 'batch_review';
-    const isNewSpecies = session.workflowType === 'new_species';
+    const createdAfter = session.createdAt;
 
     if (assetIds.length === 0) {
       return NextResponse.json({ items: [] });
@@ -184,7 +184,7 @@ export async function GET(
             session: {
               assetId: { in: filteredAssetIds },
             },
-            ...(isNewSpecies ? { createdAt: { gte: session.createdAt } } : {}),
+            createdAt: { gte: createdAfter },
           },
           include: {
             session: {
@@ -201,6 +201,7 @@ export async function GET(
           where: {
             assetId: { in: filteredAssetIds },
             type: 'AI',
+            createdAt: { gte: createdAfter },
           },
           include: {
             asset: { select: assetSelect },
