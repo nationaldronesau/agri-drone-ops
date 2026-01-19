@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import { Slider } from '@/components/ui/slider';
 import { ReviewViewer, type ReviewItem } from '@/components/review/ReviewViewer';
 import { YOLOConfigModal, type YOLOTrainingConfig } from '@/components/review/YOLOConfigModal';
 
@@ -35,7 +36,7 @@ function ReviewPageContent() {
   const [actionError, setActionError] = useState<string | null>(null);
 
   const [pendingOnly, setPendingOnly] = useState(false);
-  const [minConfidence, setMinConfidence] = useState<string>('');
+  const [minConfidence, setMinConfidence] = useState<number>(0);
 
   const [showYoloModal, setShowYoloModal] = useState(false);
   const [pushMessage, setPushMessage] = useState<string | null>(null);
@@ -85,13 +86,13 @@ function ReviewPageContent() {
   }, [refresh, sessionId]);
 
   useEffect(() => {
-    if (session?.confidenceThreshold != null && minConfidence.trim() === '') {
-      setMinConfidence(String(session.confidenceThreshold));
+    if (session?.confidenceThreshold != null && minConfidence === 0) {
+      setMinConfidence(Math.round(session.confidenceThreshold * 100));
     }
   }, [minConfidence, session?.confidenceThreshold]);
 
   const filteredItems = useMemo(() => {
-    const min = minConfidence.trim() === '' ? null : Number(minConfidence);
+    const min = minConfidence > 0 ? minConfidence / 100 : null;
     return items.filter((item) => {
       if (pendingOnly && item.status !== 'pending') return false;
       if (min != null && Number.isFinite(min) && item.confidence < min) return false;
@@ -202,8 +203,8 @@ function ReviewPageContent() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 px-4 py-6">
-      <div className="mx-auto max-w-6xl space-y-6">
+    <div className="min-h-screen bg-gray-50 px-3 py-6">
+      <div className="mx-auto max-w-[1500px] space-y-6">
         <Card>
           <CardContent className="flex flex-col gap-4 py-6 md:flex-row md:items-center md:justify-between">
             <div>
@@ -252,18 +253,36 @@ function ReviewPageContent() {
             <Checkbox checked={pendingOnly} onCheckedChange={(value) => setPendingOnly(Boolean(value))} />
             Show pending only
           </label>
-          <label className="flex items-center gap-2">
-            Min confidence
-            <Input
-              type="number"
-              min={0}
-              max={1}
-              step={0.05}
-              value={minConfidence}
-              onChange={(event) => setMinConfidence(event.target.value)}
-              className="h-8 w-24"
-            />
-          </label>
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <span>Min confidence (%)</span>
+              <Input
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                value={minConfidence}
+                onChange={(event) => {
+                  const next = Number(event.target.value);
+                  if (!Number.isFinite(next)) return;
+                  const clamped = Math.min(100, Math.max(0, next));
+                  setMinConfidence(clamped);
+                }}
+                className="h-8 w-20"
+              />
+            </div>
+            <div className="flex items-center gap-3">
+              <Slider
+                value={[minConfidence]}
+                min={0}
+                max={100}
+                step={1}
+                onValueChange={(value) => setMinConfidence(value[0] ?? 0)}
+                className="w-56"
+              />
+              <span className="text-xs text-gray-500 w-10 text-right">{minConfidence}%</span>
+            </div>
+          </div>
           {actionLoading && <span className="text-xs text-gray-400">Saving changes...</span>}
         </div>
 

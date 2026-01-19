@@ -102,7 +102,7 @@ export function InteractiveDetectionOverlay({
   return (
     <div
       ref={containerRef}
-      className="relative w-full bg-gray-900 rounded-lg overflow-hidden"
+      className="relative w-full min-h-[360px] sm:min-h-[420px] lg:min-h-[520px] bg-gray-900 rounded-lg overflow-hidden"
       style={{ aspectRatio: `${actualImageSize.width} / ${actualImageSize.height}` }}
     >
       {/* Base Image */}
