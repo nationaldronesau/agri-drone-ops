@@ -416,11 +416,6 @@ async function processSynchronously(
           }));
         } else {
           console.warn(`[Sync] Job ${batchJobId}, Asset ${asset.id}: Concept apply failed (${conceptResult.error})`);
-          if (useConceptForVisualCrops) {
-            errors.push(`Asset ${asset.id}: ${conceptResult.error || 'Visual exemplar concept apply failed'}`);
-            fatalError = true;
-            break;
-          }
           console.warn(`[Sync] Job ${batchJobId}, Asset ${asset.id}: Falling back after concept apply failure`);
         }
       }

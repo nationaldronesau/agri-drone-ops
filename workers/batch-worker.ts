@@ -174,10 +174,9 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
   let resolvedSourceAssetId = sourceAssetId || batchJobRecord?.sourceAssetId || null;
   let resolvedExemplarCrops = normalizeExemplarCrops(exemplarCrops);
   const conceptConfigured = sam3ConceptService.isConfigured();
-  const useConceptForVisualCrops = useVisualCrops && conceptConfigured;
-  const allowConcept = conceptConfigured && !useVisualCrops;
-  const useConceptService = useConceptForVisualCrops || allowConcept;
-  const useSegmentCrops = useVisualCrops && !conceptConfigured;
+  const useVisualCropsOnly = Boolean(useVisualCrops);
+  const useConceptService = conceptConfigured && !useVisualCropsOnly;
+  const useSegmentCrops = useVisualCropsOnly;
   let useConcept = false;
   let sourceImageBuffer: Buffer | null = null;
 
@@ -209,8 +208,8 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
     }
   }
 
-  if (useConceptForVisualCrops && !conceptExemplarId && !sourceImageBuffer) {
-    const message = 'Visual crops requested but the source image could not be loaded to create exemplars.';
+  if (useConceptService && !conceptExemplarId && !sourceImageBuffer) {
+    const message = 'Concept service requested but the source image could not be loaded to create exemplars.';
     await prisma.batchJob.update({
       where: { id: batchJobId },
       data: {
@@ -228,10 +227,10 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
     };
   }
 
-  if (useConceptForVisualCrops) {
-    console.log(`[Worker] Job ${batchJobId}: Visual crops requested - using concept service`);
-  } else if (conceptConfigured && useVisualCrops) {
-    console.log(`[Worker] Job ${batchJobId}: Visual crops requested - concept service not configured, using segment crops`);
+  if (useVisualCropsOnly) {
+    console.log(`[Worker] Job ${batchJobId}: Visual crops requested - using exemplar crops`);
+  } else if (useConceptService) {
+    console.log(`[Worker] Job ${batchJobId}: Using concept service`);
   }
 
   if (useConceptService) {
@@ -267,8 +266,8 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
     useConcept = Boolean(conceptExemplarId);
   }
 
-  if (useConceptForVisualCrops && !useConcept) {
-    const message = 'Visual crops requested but concept exemplar could not be created.';
+  if (useConceptService && !useConcept) {
+    const message = 'Concept exemplar could not be created.';
     await prisma.batchJob.update({
       where: { id: batchJobId },
       data: {
@@ -378,11 +377,6 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
           }
         } else {
           console.warn(`[Worker] Job ${batchJobId}, Asset ${asset.id}: Concept apply failed (${conceptResult.error})`);
-          if (useConceptForVisualCrops) {
-            errors.push(`Asset ${asset.id}: ${conceptResult.error || 'Visual exemplar concept apply failed'}`);
-            fatalError = true;
-            break;
-          }
           console.warn(`[Worker] Job ${batchJobId}, Asset ${asset.id}: Falling back after concept apply failure`);
         }
       }
