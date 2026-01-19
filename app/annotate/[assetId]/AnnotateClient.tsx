@@ -98,6 +98,8 @@ interface Asset {
 interface AnnotationSession {
   id: string;
   status: string;
+  createdAt?: string;
+  updatedAt?: string;
   asset: Asset;
   annotations: ManualAnnotation[];
 }
@@ -201,6 +203,8 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const [session, setSession] = useState<AnnotationSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reviewSessionMeta, setReviewSessionMeta] = useState<{ workflowType?: string; createdAt?: string } | null>(null);
+  const [reviewSessionLoaded, setReviewSessionLoaded] = useState(true);
 
   // Project assets for filmstrip navigation
   const [projectAssets, setProjectAssets] = useState<Asset[]>([]);
@@ -239,6 +243,48 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const [selectedClass, setSelectedClass] = useState(DEFAULT_WEED_CLASSES[0].name);
   const [confidence, setConfidence] = useState<typeof CONFIDENCE_LEVELS[number]>("LIKELY");
 
+  const isNewSpeciesWorkflow = reviewSessionMeta?.workflowType === 'new_species';
+  const reviewSessionCutoff = reviewSessionMeta?.createdAt
+    ? new Date(reviewSessionMeta.createdAt).getTime()
+    : null;
+
+  useEffect(() => {
+    if (!reviewSessionId) {
+      setReviewSessionMeta(null);
+      setReviewSessionLoaded(true);
+      return;
+    }
+
+    let cancelled = false;
+    const loadReviewSession = async () => {
+      setReviewSessionLoaded(false);
+      try {
+        const response = await fetch(`/api/review/${reviewSessionId}`);
+        if (!response.ok) {
+          return;
+        }
+        const data = await response.json();
+        if (!cancelled) {
+          setReviewSessionMeta({
+            workflowType: data?.workflowType,
+            createdAt: data?.createdAt,
+          });
+        }
+      } catch (err) {
+        console.warn('[Annotate] Failed to load review session context:', err);
+      } finally {
+        if (!cancelled) {
+          setReviewSessionLoaded(true);
+        }
+      }
+    };
+
+    loadReviewSession();
+    return () => {
+      cancelled = true;
+    };
+  }, [reviewSessionId]);
+
   // Canvas scaling and viewport
   const [scale, setScale] = useState(1);
   const [zoomLevel, setZoomLevel] = useState(1);
@@ -260,6 +306,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     processedImages: number;
     totalImages: number;
   } | null>(null);
+  const [batchJobError, setBatchJobError] = useState<string | null>(null);
   const [batchSummary, setBatchSummary] = useState<{
     total: number;
     pending: number;
@@ -271,6 +318,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   useEffect(() => {
     const loadProjectAssets = async () => {
       if (!session?.asset?.project?.id) return;
+      if (reviewSessionId && !reviewSessionLoaded) return;
 
       try {
         const response = await fetch(`/api/assets?projectId=${session.asset.project.id}&limit=500`);
@@ -289,8 +337,17 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
               const sessionsRes = await fetch(`/api/annotations/sessions?assetId=${asset.id}`);
               if (sessionsRes.ok) {
                 const sessions = await sessionsRes.json();
-                const total = sessions.reduce((sum: number, s: { annotations?: unknown[] }) =>
-                  sum + (s.annotations?.length || 0), 0);
+                const scopedSessions = isNewSpeciesWorkflow && reviewSessionCutoff
+                  ? sessions.filter((s: { createdAt?: string }) => {
+                      if (!s?.createdAt) return false;
+                      const createdAt = Date.parse(s.createdAt);
+                      return Number.isFinite(createdAt) && createdAt >= reviewSessionCutoff;
+                    })
+                  : sessions;
+                const total = scopedSessions.reduce(
+                  (sum: number, s: { annotations?: unknown[] }) => sum + (s.annotations?.length || 0),
+                  0
+                );
                 counts[asset.id] = total;
               }
             } catch {
@@ -305,11 +362,22 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     };
 
     loadProjectAssets();
-  }, [session?.asset?.project?.id, assetId]);
+  }, [
+    session?.asset?.project?.id,
+    assetId,
+    isNewSpeciesWorkflow,
+    reviewSessionCutoff,
+    reviewSessionId,
+    reviewSessionLoaded,
+  ]);
 
   // Load annotation session
   useEffect(() => {
     const loadSession = async () => {
+      if (reviewSessionId && !reviewSessionLoaded) {
+        return;
+      }
+
       try {
         setLoading(true);
         const getResponse = await fetch(`/api/annotations/sessions?assetId=${assetId}`);
@@ -319,15 +387,31 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         }
 
         const sessions = await getResponse.json();
-        let currentSession = Array.isArray(sessions)
-          ? sessions.find((s: { status: string }) => s.status === 'IN_PROGRESS')
-          : null;
+        let currentSession: AnnotationSession | null = null;
+        if (Array.isArray(sessions)) {
+          if (isNewSpeciesWorkflow && reviewSessionCutoff) {
+            const candidates = sessions.filter((s: { createdAt?: string }) => {
+              if (!s?.createdAt) return false;
+              const createdAt = Date.parse(s.createdAt);
+              return Number.isFinite(createdAt) && createdAt >= reviewSessionCutoff;
+            });
+            currentSession =
+              candidates.find((s: { status: string }) => s.status === 'IN_PROGRESS') ||
+              candidates[0] ||
+              null;
+          } else {
+            currentSession = sessions.find((s: { status: string }) => s.status === 'IN_PROGRESS') || null;
+          }
+        }
 
         if (!currentSession) {
           const postResponse = await fetch('/api/annotations/sessions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ assetId }),
+            body: JSON.stringify({
+              assetId,
+              forceNewSession: Boolean(isNewSpeciesWorkflow && reviewSessionCutoff),
+            }),
           });
 
           if (!postResponse.ok) {
@@ -352,7 +436,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     };
 
     if (assetId) loadSession();
-  }, [assetId]);
+  }, [assetId, isNewSpeciesWorkflow, reviewSessionCutoff, reviewSessionId, reviewSessionLoaded]);
 
   // Check SAM3 service status
   useEffect(() => {
@@ -1083,6 +1167,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
           processedImages: data.batchJob.processedImages,
           totalImages: data.batchJob.totalImages,
         });
+        setBatchJobError(data.batchJob.errorMessage || null);
         setBatchSummary(data.summary || null);
 
         if (["COMPLETED", "FAILED", "CANCELLED"].includes(data.batchJob.status)) {
@@ -1824,6 +1909,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
                 processed={batchJobStatus.processedImages}
                 total={batchJobStatus.totalImages}
                 status={batchJobStatus.status}
+                errorMessage={batchJobError}
                 onReview={
                   batchJobStatus.status === "COMPLETED" ? handleReviewBatch : undefined
                 }

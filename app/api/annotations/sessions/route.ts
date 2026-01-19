@@ -112,7 +112,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { assetId } = body;
+    const { assetId, forceNewSession } = body;
 
     if (!assetId) {
       return NextResponse.json(
@@ -169,42 +169,56 @@ export async function POST(request: NextRequest) {
 
     try {
       const session = await prisma.$transaction(async (tx) => {
-        // Check if there's already an active session for this asset
-        const existingSession = await tx.annotationSession.findFirst({
-          where: {
-            assetId,
-            status: 'IN_PROGRESS'
-          },
-          include: {
-            asset: {
-              select: {
-                id: true,
-                fileName: true,
-                storageUrl: true,
-                imageWidth: true,
-                imageHeight: true,
-                gpsLatitude: true,
-                gpsLongitude: true,
-                altitude: true,
-                gimbalPitch: true,
-                gimbalRoll: true,
-                gimbalYaw: true,
-                project: {
-                  select: {
-                    id: true,
-                    name: true,
-                    location: true,
+        if (!forceNewSession) {
+          // Check if there's already an active session for this asset
+          const existingSession = await tx.annotationSession.findFirst({
+            where: {
+              assetId,
+              status: 'IN_PROGRESS'
+            },
+            include: {
+              asset: {
+                select: {
+                  id: true,
+                  fileName: true,
+                  storageUrl: true,
+                  imageWidth: true,
+                  imageHeight: true,
+                  gpsLatitude: true,
+                  gpsLongitude: true,
+                  altitude: true,
+                  gimbalPitch: true,
+                  gimbalRoll: true,
+                  gimbalYaw: true,
+                  project: {
+                    select: {
+                      id: true,
+                      name: true,
+                      location: true,
+                    }
                   }
                 }
-              }
-            },
-            annotations: true,
-          }
-        });
+              },
+              annotations: true,
+            }
+          });
 
-        if (existingSession) {
-          // Return existing session - no need to create a new one
-          return existingSession;
+          if (existingSession) {
+            // Return existing session - no need to create a new one
+            return existingSession;
+          }
+        } else {
+          // Close any active sessions before creating a fresh one
+          await tx.annotationSession.updateMany({
+            where: {
+              assetId,
+              status: 'IN_PROGRESS',
+            },
+            data: {
+              status: 'COMPLETED',
+              completedAt: new Date(),
+            },
+          });
         }
 
         // Create new annotation session within the transaction
