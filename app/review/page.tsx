@@ -13,6 +13,7 @@ import { YOLOConfigModal, type YOLOTrainingConfig } from '@/components/review/YO
 interface ReviewSession {
   id: string;
   projectId: string;
+  workflowType: string;
   assetCount: number;
   itemsReviewed: number;
   itemsAccepted: number;
@@ -36,6 +37,7 @@ function ReviewPageContent() {
   const [actionError, setActionError] = useState<string | null>(null);
 
   const [pendingOnly, setPendingOnly] = useState(false);
+  const [pendingOnlyInitialized, setPendingOnlyInitialized] = useState(false);
   const [minConfidence, setMinConfidence] = useState<number>(0);
 
   const [showYoloModal, setShowYoloModal] = useState(false);
@@ -90,6 +92,14 @@ function ReviewPageContent() {
       setMinConfidence(Math.round(session.confidenceThreshold * 100));
     }
   }, [minConfidence, session?.confidenceThreshold]);
+
+  useEffect(() => {
+    if (pendingOnlyInitialized || !session?.workflowType) return;
+    if (session.workflowType === 'batch_review') {
+      setPendingOnly(true);
+    }
+    setPendingOnlyInitialized(true);
+  }, [pendingOnlyInitialized, session?.workflowType]);
 
   const filteredItems = useMemo(() => {
     const min = minConfidence > 0 ? minConfidence / 100 : null;
@@ -293,6 +303,7 @@ function ReviewPageContent() {
         open={showYoloModal}
         onClose={() => setShowYoloModal(false)}
         availableClasses={availableClasses}
+        minConfidence={minConfidence / 100}
         onConfirm={(config) => {
           setShowYoloModal(false);
           handlePush('yolo', config);

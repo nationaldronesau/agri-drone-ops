@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -32,6 +32,7 @@ interface YOLOConfigModalProps {
   open: boolean;
   onClose: () => void;
   availableClasses: AvailableClass[];
+  minConfidence?: number;
   onConfirm: (config: YOLOTrainingConfig) => void;
 }
 
@@ -39,12 +40,20 @@ export function YOLOConfigModal({
   open,
   onClose,
   availableClasses,
+  minConfidence,
   onConfirm,
 }: YOLOConfigModalProps) {
   const [datasetName, setDatasetName] = useState('review-session');
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.5);
   const [splitRatio, setSplitRatio] = useState({ train: 0.7, val: 0.2, test: 0.1 });
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const confidenceLocked = typeof minConfidence === 'number' && Number.isFinite(minConfidence);
+
+  useEffect(() => {
+    if (typeof minConfidence === 'number' && Number.isFinite(minConfidence)) {
+      setConfidenceThreshold(Math.min(1, Math.max(0, minConfidence)));
+    }
+  }, [minConfidence]);
 
   const classOptions = useMemo(() => {
     const map = new Map<string, string[]>();
@@ -186,15 +195,23 @@ export function YOLOConfigModal({
           </div>
 
           <div className="space-y-1">
-            <label className="text-sm font-medium text-gray-700">Min Confidence</label>
-            <Input
-              type="number"
-              min={0}
-              max={1}
-              step={0.05}
-              value={confidenceThreshold}
-              onChange={(e) => setConfidenceThreshold(Number(e.target.value))}
-            />
+            <label className="text-sm font-medium text-gray-700">
+              Min Confidence{confidenceLocked ? ' (from review filter)' : ''}
+            </label>
+            {confidenceLocked ? (
+              <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
+                {Math.round(confidenceThreshold * 100)}%
+              </div>
+            ) : (
+              <Input
+                type="number"
+                min={0}
+                max={1}
+                step={0.05}
+                value={confidenceThreshold}
+                onChange={(e) => setConfidenceThreshold(Number(e.target.value))}
+              />
+            )}
           </div>
         </div>
 
