@@ -8,11 +8,13 @@ interface BatchProgressProps {
   total: number;
   status: string;
   onReview?: () => void;
+  errorMessage?: string | null;
 }
 
-export function BatchProgress({ processed, total, status, onReview }: BatchProgressProps) {
+export function BatchProgress({ processed, total, status, onReview, errorMessage }: BatchProgressProps) {
   const progress = total > 0 ? Math.round((processed / total) * 100) : 0;
   const isComplete = status === 'COMPLETED';
+  const showError = status === 'FAILED' && errorMessage;
 
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
@@ -21,6 +23,11 @@ export function BatchProgress({ processed, total, status, onReview }: BatchProgr
         {processed}/{total} images processed · {status.toLowerCase()}
       </div>
       <Progress value={progress} className="mt-2" />
+      {showError && (
+        <div className="mt-2 text-xs text-red-600">
+          {errorMessage}
+        </div>
+      )}
       {isComplete && onReview && (
         <Button className="mt-3" onClick={onReview}>
           Review predictions
