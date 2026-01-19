@@ -12,6 +12,34 @@ function confidenceToEnum(confidence: number): 'CERTAIN' | 'LIKELY' | 'UNCERTAIN
   return 'UNCERTAIN';
 }
 
+function parseCornerBox(value: unknown): [number, number, number, number] | null {
+  if (!value) return null;
+  let parsed: unknown = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (Array.isArray(parsed) && parsed.length >= 4) {
+    const [x1, y1, x2, y2] = parsed as number[];
+    if (![x1, y1, x2, y2].every((val) => Number.isFinite(val))) return null;
+    return [x1, y1, x2, y2];
+  }
+  return null;
+}
+
+function bboxToPolygon(bbox: [number, number, number, number]): number[][] {
+  const [x1, y1, x2, y2] = bbox;
+  return [
+    [x1, y1],
+    [x2, y1],
+    [x2, y2],
+    [x1, y2],
+  ];
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: { sessionId: string } }
@@ -234,12 +262,23 @@ export async function POST(
             });
           }
 
+          const pendingPolygon = Array.isArray(pending.polygon)
+            ? (pending.polygon as number[][])
+            : [];
+          let polygon = pendingPolygon;
+          if (polygon.length < 3) {
+            const bbox = parseCornerBox(pending.bbox);
+            if (bbox) {
+              polygon = bboxToPolygon(bbox);
+            }
+          }
+
           await tx.manualAnnotation.create({
             data: {
               sessionId: annotationSession.id,
               weedType: correctedClass ?? pending.weedType,
               confidence: confidenceToEnum(pending.confidence),
-              coordinates: pending.polygon,
+              coordinates: polygon,
               geoCoordinates: pending.geoPolygon,
               centerLat: pending.centerLat,
               centerLon: pending.centerLon,
