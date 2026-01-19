@@ -280,6 +280,7 @@ export async function POST(
         includeAIDetections: true,
         includeManualAnnotations: true,
         minConfidence: yoloConfig.confidenceThreshold ?? 0.5,
+        createdAfter: session.createdAt,
         createdById: auth.userId,
       });
 

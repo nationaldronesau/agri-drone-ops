@@ -33,6 +33,8 @@ interface YOLOConfigModalProps {
   onClose: () => void;
   availableClasses: AvailableClass[];
   minConfidence?: number;
+  pendingOnly?: boolean;
+  onPendingOnlyChange?: (value: boolean) => void;
   onConfirm: (config: YOLOTrainingConfig) => void;
 }
 
@@ -41,6 +43,8 @@ export function YOLOConfigModal({
   onClose,
   availableClasses,
   minConfidence,
+  pendingOnly,
+  onPendingOnlyChange,
   onConfirm,
 }: YOLOConfigModalProps) {
   const [datasetName, setDatasetName] = useState('review-session');
@@ -109,6 +113,23 @@ export function YOLOConfigModal({
         </DialogHeader>
 
         <div className="space-y-4">
+          {typeof pendingOnly === 'boolean' && onPendingOnlyChange && (
+            <div className="flex items-center justify-between rounded-md border border-gray-200 px-3 py-2 text-sm">
+              <div className="flex flex-col">
+                <span className="font-medium text-gray-700">Review filter</span>
+                <span className="text-xs text-gray-500">
+                  Adjust what you see before pushing to YOLO.
+                </span>
+              </div>
+              <label className="flex items-center gap-2">
+                <Checkbox
+                  checked={pendingOnly}
+                  onCheckedChange={(value) => onPendingOnlyChange(Boolean(value))}
+                />
+                <span className="text-sm text-gray-700">Pending only</span>
+              </label>
+            </div>
+          )}
           <div className="space-y-1">
             <label className="text-sm font-medium text-gray-700">Dataset Name</label>
             <Input value={datasetName} onChange={(e) => setDatasetName(e.target.value)} />

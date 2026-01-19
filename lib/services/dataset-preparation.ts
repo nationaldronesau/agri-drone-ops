@@ -38,6 +38,7 @@ export interface DatasetConfig {
   includeAIDetections?: boolean;
   includeManualAnnotations?: boolean;
   minConfidence?: number;
+  createdAfter?: Date;
   createdById?: string;
 }
 
@@ -305,6 +306,7 @@ class DatasetPreparationService {
                 type: { in: ['AI', 'YOLO_LOCAL'] },
                 rejected: false,
                 OR: [{ verified: true }, { userCorrected: true }],
+                ...(config.createdAfter ? { createdAt: { gte: config.createdAfter } } : {}),
               },
             }
           : false,
@@ -313,7 +315,10 @@ class DatasetPreparationService {
               where: config.sessionIds ? { id: { in: config.sessionIds } } : undefined,
               include: {
                 annotations: {
-                  where: { verified: true },
+                  where: {
+                    verified: true,
+                    ...(config.createdAfter ? { createdAt: { gte: config.createdAfter } } : {}),
+                  },
                 },
               },
             }

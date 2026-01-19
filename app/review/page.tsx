@@ -123,6 +123,11 @@ function ReviewPageContent() {
     });
   }, [items, minConfidence, pendingOnly]);
 
+  const bulkCandidates = useMemo(
+    () => filteredItems.filter((item) => item.status === 'pending'),
+    [filteredItems]
+  );
+
   const availableClasses = useMemo(() => {
     const counts = new Map<string, number>();
     for (const item of items) {
@@ -208,6 +213,38 @@ function ReviewPageContent() {
     },
     [session?.roboflowProjectId, sessionId]
   );
+
+  const handleBulkAccept = useCallback(async () => {
+    if (!sessionId || bulkCandidates.length === 0) return;
+    if (!window.confirm(`Accept ${bulkCandidates.length} filtered predictions?`)) return;
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      const response = await fetch(`/api/review/${sessionId}/bulk-action`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'accept',
+          items: bulkCandidates.map((item) => ({
+            source: item.source,
+            itemId: item.sourceId,
+          })),
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = data.error || 'Failed to accept filtered items';
+        throw new Error(message);
+      }
+
+      await Promise.all([loadItems(), loadSession()]);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to accept filtered items');
+    } finally {
+      setActionLoading(false);
+    }
+  }, [bulkCandidates, loadItems, loadSession, sessionId]);
 
   const handleExport = useCallback(() => {
     if (!sessionId) return;
@@ -315,6 +352,14 @@ function ReviewPageContent() {
             </div>
           </div>
           {actionLoading && <span className="text-xs text-gray-400">Saving changes...</span>}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleBulkAccept}
+            disabled={actionLoading || bulkCandidates.length === 0}
+          >
+            Accept filtered ({bulkCandidates.length})
+          </Button>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 text-sm text-gray-600">
@@ -359,6 +404,8 @@ function ReviewPageContent() {
         onClose={() => setShowYoloModal(false)}
         availableClasses={availableClasses}
         minConfidence={minConfidence / 100}
+        pendingOnly={pendingOnly}
+        onPendingOnlyChange={setPendingOnly}
         onConfirm={(config) => {
           setShowYoloModal(false);
           handlePush('yolo', config);

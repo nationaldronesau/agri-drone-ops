@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, XCircle, Pencil } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, XCircle, Pencil, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Select,
@@ -68,6 +68,8 @@ export function ReviewViewer({ items, onAction, onEdit }: ReviewViewerProps) {
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [corrections, setCorrections] = useState<Record<string, string>>({});
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
 
   useEffect(() => {
     if (currentIndex >= groupedAssets.length) {
@@ -77,6 +79,18 @@ export function ReviewViewer({ items, onAction, onEdit }: ReviewViewerProps) {
 
   const currentGroup = groupedAssets[currentIndex];
   const currentItems = currentGroup?.items || [];
+
+  useEffect(() => {
+    setZoomLevel(1);
+    setPanOffset({ x: 0, y: 0 });
+  }, [currentGroup?.asset.id]);
+
+  const handleZoomIn = () => setZoomLevel((prev) => Math.min(prev * 1.2, 5));
+  const handleZoomOut = () => setZoomLevel((prev) => Math.max(prev / 1.2, 0.1));
+  const handleResetView = () => {
+    setZoomLevel(1);
+    setPanOffset({ x: 0, y: 0 });
+  };
 
   const classOptions = useMemo(() => {
     const unique = new Set(items.map((item) => item.className));
@@ -128,13 +142,31 @@ export function ReviewViewer({ items, onAction, onEdit }: ReviewViewerProps) {
             }}
             imageWidth={currentGroup.asset.imageWidth || undefined}
             imageHeight={currentGroup.asset.imageHeight || undefined}
+            zoomLevel={zoomLevel}
+            panOffset={panOffset}
+            onPanOffsetChange={setPanOffset}
           />
         ) : (
           <div className="rounded-lg border border-dashed p-6 text-center text-sm text-gray-500">
             No assets in this review session.
           </div>
         )}
-        <div className="flex items-center justify-between text-sm text-gray-500">
+        <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm text-gray-500">
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={handleZoomOut} className="h-8 w-8 p-0">
+              <ZoomOut className="h-4 w-4" />
+            </Button>
+            <span className="text-xs text-gray-500 w-12 text-center">
+              {Math.round(zoomLevel * 100)}%
+            </span>
+            <Button variant="ghost" size="sm" onClick={handleZoomIn} className="h-8 w-8 p-0">
+              <ZoomIn className="h-4 w-4" />
+            </Button>
+            <Button variant="ghost" size="sm" onClick={handleResetView} className="h-8 px-2">
+              <RotateCcw className="h-4 w-4 mr-1" />
+              <span className="text-xs">Fit</span>
+            </Button>
+          </div>
           <span>
             {currentIndex + 1} of {groupedAssets.length} assets
           </span>

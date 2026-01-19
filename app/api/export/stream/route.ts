@@ -151,10 +151,11 @@ export async function GET(request: NextRequest) {
     };
 
     let assetIds: string[] | null = null;
+    let createdAfter: Date | null = null;
     if (sessionId) {
       const session = await prisma.reviewSession.findUnique({
         where: { id: sessionId },
-        select: { assetIds: true, teamId: true },
+        select: { assetIds: true, teamId: true, createdAt: true },
       });
       if (!session) {
         return NextResponse.json({ error: 'Review session not found' }, { status: 404 });
@@ -165,6 +166,7 @@ export async function GET(request: NextRequest) {
       assetIds = Array.isArray(session.assetIds)
         ? (session.assetIds as string[]).filter((id) => typeof id === 'string')
         : [];
+      createdAfter = session.createdAt;
       baseWhere.asset = {
         ...(baseWhere.asset as Record<string, unknown>),
         id: { in: assetIds },
@@ -183,6 +185,7 @@ export async function GET(request: NextRequest) {
               type: { in: ['AI', 'YOLO_LOCAL'] },
               rejected: false,
               OR: [{ verified: true }, { userCorrected: true }],
+              ...(createdAfter ? { createdAt: { gte: createdAfter } } : {}),
               ...(classFilter.length > 0 ? { className: { in: classFilter } } : {}),
             },
             include: {
@@ -220,6 +223,7 @@ export async function GET(request: NextRequest) {
               session: {
                 asset: baseWhere.asset,
               },
+              ...(createdAfter ? { createdAt: { gte: createdAfter } } : {}),
               ...(classFilter.length > 0 ? { weedType: { in: classFilter } } : {}),
             },
             include: {
