@@ -3,6 +3,13 @@
  *
  * TypeScript client for the EC2-hosted YOLO training and inference service.
  */
+import { awsSam3Service } from '@/lib/services/aws-sam3';
+
+const YOLO_PORT = process.env.YOLO_PORT || '8001';
+const YOLO_DISCOVERY_TTL_MS = Number.parseInt(
+  process.env.YOLO_DISCOVERY_TTL_MS || '60000',
+  10
+);
 
 export interface TrainingConfig {
   dataset_s3_path: string;
@@ -102,24 +109,90 @@ class YOLOServiceError extends Error {
 }
 
 export class YOLOService {
-  private baseUrl: string;
+  private explicitBaseUrl: string | null;
+  private cachedBaseUrl: string | null = null;
+  private lastResolvedAt = 0;
+  private resolvePromise: Promise<string | null> | null = null;
+  private lastResolveError: string | null = null;
+  private port: string;
+  private discoveryTtlMs: number;
   private timeout: number;
   private apiKey?: string;
 
   constructor(options?: { baseUrl?: string; timeout?: number; apiKey?: string }) {
-    this.baseUrl = (options?.baseUrl ||
-      process.env.YOLO_SERVICE_URL ||
-      'http://localhost:8001').replace(/\/$/, '');
+    const configuredUrl = options?.baseUrl || process.env.YOLO_SERVICE_URL || null;
+    this.explicitBaseUrl = configuredUrl ? configuredUrl.replace(/\/$/, '') : null;
     this.timeout = options?.timeout || 30000;
     this.apiKey = options?.apiKey || process.env.YOLO_SERVICE_API_KEY;
+    this.port = YOLO_PORT;
+    this.discoveryTtlMs = Number.isFinite(YOLO_DISCOVERY_TTL_MS) ? YOLO_DISCOVERY_TTL_MS : 60000;
+  }
+
+  private async resolveBaseUrl(forceRefresh: boolean = false): Promise<string | null> {
+    if (this.explicitBaseUrl) {
+      return this.explicitBaseUrl;
+    }
+
+    const now = Date.now();
+    if (!forceRefresh && this.cachedBaseUrl && now - this.lastResolvedAt < this.discoveryTtlMs) {
+      return this.cachedBaseUrl;
+    }
+
+    if (this.resolvePromise) {
+      return this.resolvePromise;
+    }
+
+    this.resolvePromise = this.resolveBaseUrlInternal();
+    try {
+      return await this.resolvePromise;
+    } finally {
+      this.resolvePromise = null;
+    }
+  }
+
+  private async resolveBaseUrlInternal(): Promise<string | null> {
+    if (!awsSam3Service.isConfigured()) {
+      const configError = awsSam3Service.getConfigError();
+      this.lastResolveError = configError
+        ? `YOLO auto-discovery unavailable: ${configError}`
+        : 'YOLO service URL not configured';
+      return null;
+    }
+
+    let ip = awsSam3Service.getStatus().ipAddress;
+    if (!ip) {
+      ip = await awsSam3Service.discoverInstanceIp();
+    }
+    if (!ip) {
+      this.lastResolveError = 'Unable to discover EC2 IP for YOLO service';
+      return null;
+    }
+
+    const baseUrl = `http://${ip}:${this.port}`;
+    this.cachedBaseUrl = baseUrl;
+    this.lastResolvedAt = Date.now();
+    this.lastResolveError = null;
+    return baseUrl;
   }
 
   private async request<T>(
     endpoint: string,
     options: RequestInit = {},
-    timeoutOverride?: number
+    timeoutOverride?: number,
+    retryAttempted: boolean = false
   ): Promise<T> {
-    const url = `${this.baseUrl}${endpoint}`;
+    const method = (options.method || 'GET').toUpperCase();
+    const canRetry = !retryAttempted && !this.explicitBaseUrl && (method === 'GET' || method === 'HEAD');
+
+    const baseUrl = await this.resolveBaseUrl();
+    if (!baseUrl) {
+      throw new YOLOServiceError(
+        this.lastResolveError || 'YOLO service URL not configured',
+        503
+      );
+    }
+
+    const url = `${baseUrl}${endpoint}`;
     const controller = new AbortController();
     const timeoutMs = timeoutOverride ?? this.timeout;
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -162,6 +235,17 @@ export class YOLOService {
 
       if (error instanceof Error && error.name === 'AbortError') {
         throw new YOLOServiceError('Request timeout', 408);
+      }
+
+      let refreshedBaseUrl: string | null = null;
+      if (!this.explicitBaseUrl) {
+        refreshedBaseUrl = await this.resolveBaseUrl(true);
+      }
+
+      if (canRetry) {
+        if (refreshedBaseUrl && refreshedBaseUrl !== baseUrl) {
+          return this.request(endpoint, options, timeoutOverride, true);
+        }
       }
 
       throw new YOLOServiceError(
