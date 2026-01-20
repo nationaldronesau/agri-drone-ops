@@ -21,10 +21,14 @@ class Settings(BaseSettings):
 
     # Model configuration
     model_checkpoint: str = "facebook/sam2-hiera-large"
+    preload_model: bool = False  # Preload model at startup
 
     # API configuration
     max_image_size: int = 8192  # Max dimension in pixels
     max_points: int = 20  # Max click points per request
+
+    # CORS configuration
+    cors_origins: list = ["*"]  # Allow all origins by default
 
     # Cache configuration
     image_cache_size: int = 5  # Number of images to keep in memory
