@@ -534,6 +534,100 @@ class SAM3Orchestrator {
   }
 
   /**
+   * Ensure the GPU is available for YOLO training by stopping SAM3 if running.
+   *
+   * This method is critical for preventing GPU memory conflicts when YOLO training
+   * needs to run on the same T4 GPU that SAM3 uses. SAM3 holds ~14GB of GPU memory,
+   * leaving no room for YOLO training on the 16GB T4.
+   *
+   * @param timeoutMs Maximum time to wait for instance to stop (default 2 minutes)
+   * @returns Success status and message for user feedback
+   */
+  async ensureGPUAvailable(timeoutMs: number = 120000): Promise<{ success: boolean; message: string }> {
+    // If AWS SAM3 is not configured, GPU is available
+    if (!awsSam3Service.isConfigured()) {
+      console.log('[Orchestrator] SAM3 not configured, GPU available for YOLO');
+      return { success: true, message: 'SAM3 not configured, GPU available' };
+    }
+
+    // Check current instance state
+    const status = await awsSam3Service.refreshStatus();
+
+    // If already stopped, we're good
+    if (status.instanceState === 'stopped') {
+      console.log('[Orchestrator] SAM3 instance already stopped, GPU available for YOLO');
+      return { success: true, message: 'SAM3 instance already stopped' };
+    }
+
+    // If the instance is running/ready/warming, we need to stop it
+    if (['running', 'ready', 'warming', 'starting'].includes(status.instanceState)) {
+      console.log(`[Orchestrator] SAM3 instance is ${status.instanceState}, stopping for YOLO training...`);
+
+      try {
+        // Initiate the stop
+        await awsSam3Service.stopInstance();
+
+        // Poll until the instance is fully stopped
+        const startTime = Date.now();
+        const pollInterval = 5000; // Check every 5 seconds
+
+        while (Date.now() - startTime < timeoutMs) {
+          await new Promise(resolve => setTimeout(resolve, pollInterval));
+
+          const currentStatus = await awsSam3Service.refreshStatus();
+          console.log(`[Orchestrator] Waiting for SAM3 to stop... Current state: ${currentStatus.instanceState}`);
+
+          if (currentStatus.instanceState === 'stopped') {
+            console.log('[Orchestrator] SAM3 instance stopped, GPU now available for YOLO');
+            return { success: true, message: 'SAM3 instance stopped successfully' };
+          }
+
+          if (currentStatus.instanceState === 'error') {
+            console.error('[Orchestrator] SAM3 instance entered error state while stopping');
+            return { success: false, message: 'SAM3 instance entered error state while stopping' };
+          }
+        }
+
+        // Timeout reached
+        console.error(`[Orchestrator] Timeout waiting for SAM3 to stop (${timeoutMs}ms)`);
+        return { success: false, message: `Timeout waiting for SAM3 to stop after ${timeoutMs / 1000} seconds` };
+
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        console.error('[Orchestrator] Error stopping SAM3 instance:', errorMsg);
+        return { success: false, message: `Failed to stop SAM3 instance: ${errorMsg}` };
+      }
+    }
+
+    // If stopping, wait for it to complete
+    if (status.instanceState === 'stopping') {
+      console.log('[Orchestrator] SAM3 instance already stopping, waiting for it to complete...');
+
+      const startTime = Date.now();
+      const pollInterval = 5000;
+
+      while (Date.now() - startTime < timeoutMs) {
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+
+        const currentStatus = await awsSam3Service.refreshStatus();
+        console.log(`[Orchestrator] Waiting for SAM3 to finish stopping... Current state: ${currentStatus.instanceState}`);
+
+        if (currentStatus.instanceState === 'stopped') {
+          console.log('[Orchestrator] SAM3 instance stopped, GPU now available for YOLO');
+          return { success: true, message: 'SAM3 instance stopped successfully' };
+        }
+      }
+
+      console.error(`[Orchestrator] Timeout waiting for SAM3 to finish stopping (${timeoutMs}ms)`);
+      return { success: false, message: `Timeout waiting for SAM3 to finish stopping` };
+    }
+
+    // Unknown state - assume it's okay
+    console.log(`[Orchestrator] SAM3 in unknown state: ${status.instanceState}, proceeding with YOLO`);
+    return { success: true, message: `SAM3 in state: ${status.instanceState}` };
+  }
+
+  /**
    * Predict using visual exemplar crops for cross-image detection
    *
    * This is the key method for batch processing where exemplar boxes
