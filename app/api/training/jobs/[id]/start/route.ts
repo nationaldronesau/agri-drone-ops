@@ -99,7 +99,7 @@ export async function POST(
     console.log(`[Training Start] Config: epochs=${job.epochs}, batch=${job.batchSize}, imageSize=${job.imageSize}`);
 
     try {
-      // Ensure GPU is available by stopping SAM3 if running
+      // Ensure GPU is available by unloading SAM3 if needed
       // SAM3 holds ~14GB GPU memory, leaving no room for YOLO training on the 16GB T4
       const gpuResult = await sam3Orchestrator.ensureGPUAvailable();
       if (!gpuResult.success) {
