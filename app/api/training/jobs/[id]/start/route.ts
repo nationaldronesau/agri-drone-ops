@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { yoloService, formatModelId } from '@/lib/services/yolo';
+import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
 import { TrainingStatus } from '@prisma/client';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
 
@@ -98,6 +99,23 @@ export async function POST(
     console.log(`[Training Start] Config: epochs=${job.epochs}, batch=${job.batchSize}, imageSize=${job.imageSize}`);
 
     try {
+      // Ensure GPU is available by stopping SAM3 if running
+      // SAM3 holds ~14GB GPU memory, leaving no room for YOLO training on the 16GB T4
+      const gpuResult = await sam3Orchestrator.ensureGPUAvailable();
+      if (!gpuResult.success) {
+        await prisma.trainingJob.update({
+          where: { id: jobId },
+          data: {
+            status: TrainingStatus.FAILED,
+            errorMessage: `GPU not available: ${gpuResult.message}`,
+          },
+        });
+        return NextResponse.json(
+          { error: `Cannot start YOLO training: ${gpuResult.message}` },
+          { status: 503 }
+        );
+      }
+
       const ec2Response = await yoloService.startTraining({
         dataset_s3_path: job.dataset.s3Path,
         model_name: modelName,

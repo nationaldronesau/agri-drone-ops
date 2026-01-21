@@ -4,6 +4,7 @@ import { getAuthenticatedUser } from '@/lib/auth/api-auth';
 import { datasetPreparation, sanitizeClassName } from '@/lib/services/dataset-preparation';
 import { roboflowTrainingService } from '@/lib/services/roboflow-training';
 import { yoloService, estimateTrainingTime, formatModelId } from '@/lib/services/yolo';
+import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
 import { S3Service } from '@/lib/services/s3';
 import { fetchImageSafely, isUrlAllowed } from '@/lib/utils/security';
 import { rescaleToOriginalWithMeta } from '@/lib/utils/georeferencing';
@@ -317,6 +318,24 @@ export async function POST(
           trainingConfig: JSON.stringify({ modelName }),
         },
       });
+
+      // Ensure GPU is available by stopping SAM3 if running
+      // SAM3 holds ~14GB GPU memory, leaving no room for YOLO training on the 16GB T4
+      const gpuResult = await sam3Orchestrator.ensureGPUAvailable();
+      if (!gpuResult.success) {
+        // Update job status to failed
+        await prisma.trainingJob.update({
+          where: { id: trainingJob.id },
+          data: {
+            status: 'FAILED',
+            errorMessage: `GPU not available: ${gpuResult.message}`,
+          },
+        });
+        return NextResponse.json(
+          { error: `Cannot start YOLO training: ${gpuResult.message}` },
+          { status: 503 }
+        );
+      }
 
       const ec2Response = await yoloService.startTraining({
         dataset_s3_path: dataset.s3Path,
