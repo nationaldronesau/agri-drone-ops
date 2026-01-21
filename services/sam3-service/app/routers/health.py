@@ -5,6 +5,7 @@ import logging
 
 from ..sam3_predictor import get_predictor
 from ..config import get_device
+from .segment import unload_model as unload_segment_model
 
 logger = logging.getLogger(__name__)
 
@@ -125,31 +126,18 @@ async def warmup_model():
 @router.post("/unload")
 async def unload_model():
     """
-    Unload the SAM3 model from GPU memory.
-
-    This releases GPU memory so other services (like YOLO training)
-    can use it. The model will be automatically reloaded on the next
-    prediction request.
+    Unload SAM3 models to free GPU memory for YOLO training.
     """
     predictor = get_predictor()
+    predictor_result = predictor.unload_model()
+    segment_result = unload_segment_model()
 
-    if not predictor.model_loaded:
-        return {
-            "success": True,
-            "message": "Model already unloaded",
-        }
-
-    logger.info("Unloading SAM3 model to free GPU memory...")
-    success = predictor.unload_model()
-
-    if not success:
-        logger.error("Failed to unload model")
-        return {
-            "success": False,
-            "message": "Failed to unload model",
-        }
+    success = predictor_result.get("success") and segment_result.get("success")
+    message = "Models unloaded" if success else "Failed to unload one or more models"
 
     return {
-        "success": True,
-        "message": "Model unloaded",
+        "success": success,
+        "message": message,
+        "predictor": predictor_result,
+        "segment": segment_result,
     }

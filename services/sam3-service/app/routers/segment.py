@@ -11,6 +11,7 @@ Supports three modes:
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import List, Optional
+import gc
 import torch
 import base64
 import io
@@ -103,6 +104,28 @@ def get_model():
             )
 
     return _model, _processor, _device
+
+
+def unload_model() -> dict:
+    """Unload the segment model to free GPU resources."""
+    global _model, _processor, _device
+
+    if _model is None:
+        return {"success": True, "message": "Segment model not loaded"}
+
+    try:
+        _model = None
+        _processor = None
+        _device = None
+
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        return {"success": True, "message": "Segment model unloaded"}
+    except Exception as exc:
+        logger.error(f"Failed to unload segment model: {exc}")
+        return {"success": False, "message": str(exc)}
 
 
 def decode_base64_image(b64_string: str) -> Image.Image:

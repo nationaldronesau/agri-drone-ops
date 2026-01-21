@@ -1,4 +1,5 @@
 """SAM3 Model Predictor - Singleton wrapper for Segment Anything Model 3."""
+import gc
 import time
 import logging
 from typing import Optional, Tuple, List, Dict, Any
@@ -294,6 +295,32 @@ class SAM3Predictor:
             "current_image_id": self._current_image_id,
             "scale_factor": self._current_scale_factor,
         }
+
+    def unload_model(self) -> Dict[str, Any]:
+        """Unload SAM3 model from memory to free GPU resources."""
+        if not self.model_loaded and self.sam3 is None:
+            return {"success": True, "message": "Model not loaded"}
+
+        try:
+            self.sam3 = None
+            self.model_loaded = False
+            self.load_time_ms = None
+            self._current_image_id = None
+            self._current_image_path = None
+            self._current_scale_factor = 1.0
+
+            gc.collect()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception as exc:
+                logger.warning(f"Failed to clear CUDA cache: {exc}")
+
+            return {"success": True, "message": "Model unloaded"}
+        except Exception as exc:
+            logger.error(f"Failed to unload model: {exc}")
+            return {"success": False, "message": str(exc)}
 
 
 # Global singleton instance

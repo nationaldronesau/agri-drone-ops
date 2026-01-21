@@ -494,6 +494,96 @@ class AWSSAM3Service {
   }
 
   /**
+   * Unload the SAM3 model to free GPU memory.
+   */
+  async unloadModel(timeoutMs: number = 30000): Promise<{ success: boolean; message: string }> {
+    if (!this.configured) {
+      return { success: true, message: 'SAM3 not configured' };
+    }
+
+    if (!this.instanceIp) {
+      await this.discoverInstanceIp();
+    }
+
+    if (!this.instanceIp) {
+      return { success: true, message: 'SAM3 instance not running' };
+    }
+
+    const baseUrl = `http://${this.instanceIp}:${SAM3_PORT}`;
+    const attemptUnload = async (path: string, flavor: SAM3ApiFlavor) => {
+      const response = await fetch(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text().catch(() => '');
+        return {
+          ok: false as const,
+          status: response.status,
+          message: errorBody || response.statusText,
+          flavor,
+        };
+      }
+
+      let payload: unknown = null;
+      try {
+        payload = await response.json();
+      } catch {
+        payload = null;
+      }
+
+      this.apiFlavor = flavor;
+      this.modelLoaded = false;
+      if (this.instanceState === 'ready') {
+        this.instanceState = 'running';
+      }
+
+      const message =
+        payload && typeof payload === 'object' && 'message' in payload
+          ? String((payload as { message?: string }).message)
+          : 'Model unloaded';
+
+      return { ok: true as const, message };
+    };
+
+    const paths: Array<{ path: string; flavor: SAM3ApiFlavor }> = [];
+    if (this.apiFlavor === 'modern') {
+      paths.push({ path: '/api/v1/unload', flavor: 'modern' });
+    } else if (this.apiFlavor === 'legacy') {
+      paths.push({ path: '/unload', flavor: 'legacy' });
+    } else {
+      paths.push(
+        { path: '/api/v1/unload', flavor: 'modern' },
+        { path: '/unload', flavor: 'legacy' }
+      );
+    }
+
+    let lastError = 'Unload failed';
+    for (const { path, flavor } of paths) {
+      try {
+        const result = await attemptUnload(path, flavor);
+        if (result.ok) {
+          return { success: true, message: result.message };
+        }
+
+        if (result.status === 404 || result.status === 405) {
+          lastError = `Unload endpoint not available (${path})`;
+          continue;
+        }
+
+        return { success: false, message: `Unload failed (${path}): ${result.message}` };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return { success: false, message: `Unload error: ${message}` };
+      }
+    }
+
+    return { success: false, message: lastError };
+  }
+
+  /**
    * Resize an image to fit within the T4 GPU memory limits
    */
   async resizeImage(imageBuffer: Buffer): Promise<{ buffer: Buffer; scaling: ScalingInfo }> {
