@@ -46,6 +46,42 @@ class SAM3Predictor:
         logger.info(f"SAM3Predictor initialized (device: {self.device})")
         SAM3Predictor._initialized = True
 
+    def unload_model(self) -> bool:
+        """
+        Unload SAM3 model from memory and release GPU resources.
+
+        Returns:
+            True if model unloaded successfully, False otherwise.
+        """
+        try:
+            logger.info("Unloading SAM3 model...")
+
+            # Clear model reference
+            self.sam3 = None
+            self.model_loaded = False
+            self.load_time_ms = None
+
+            # Clear image cache
+            self._current_image_id = None
+            self._current_image_path = None
+            self._current_scale_factor = 1.0
+
+            # Release CUDA memory
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    logger.info("CUDA cache cleared")
+            except ImportError:
+                pass
+
+            logger.info("SAM3 model unloaded successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to unload SAM3 model: {e}")
+            return False
+
     def load_model(self) -> bool:
         """
         Load SAM3 model into memory.

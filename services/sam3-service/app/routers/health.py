@@ -120,3 +120,36 @@ async def warmup_model():
         "warmup_time_ms": warmup_time_ms,
         "device": get_device(),
     }
+
+
+@router.post("/unload")
+async def unload_model():
+    """
+    Unload the SAM3 model from GPU memory.
+
+    This releases GPU memory so other services (like YOLO training)
+    can use it. The model will be automatically reloaded on the next
+    prediction request.
+    """
+    predictor = get_predictor()
+
+    if not predictor.model_loaded:
+        return {
+            "success": True,
+            "message": "Model already unloaded",
+        }
+
+    logger.info("Unloading SAM3 model to free GPU memory...")
+    success = predictor.unload_model()
+
+    if not success:
+        logger.error("Failed to unload model")
+        return {
+            "success": False,
+            "message": "Failed to unload model",
+        }
+
+    return {
+        "success": True,
+        "message": "Model unloaded",
+    }
