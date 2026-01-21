@@ -1,6 +1,7 @@
 'use client';
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -10,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Slider } from '@/components/ui/slider';
 import { ReviewViewer, type ReviewItem } from '@/components/review/ReviewViewer';
 import { YOLOConfigModal, type YOLOTrainingConfig } from '@/components/review/YOLOConfigModal';
+import { ArrowLeft, Brain, Download, ExternalLink, Sparkles } from 'lucide-react';
 
 interface ReviewSession {
   id: string;
@@ -49,6 +51,7 @@ function ReviewPageContent() {
   const [pushMessage, setPushMessage] = useState<string | null>(null);
   const [pushError, setPushError] = useState<string | null>(null);
   const [pushLoading, setPushLoading] = useState(false);
+  const [yoloTrainingJobId, setYoloTrainingJobId] = useState<string | null>(null);
 
   const loadSession = useCallback(async () => {
     if (!sessionId) return;
@@ -204,7 +207,13 @@ function ReviewPageContent() {
           throw new Error(data.error || 'Failed to push review session');
         }
 
-        setPushMessage('Push started successfully.');
+        // Capture YOLO training job ID if available
+        if (target === 'yolo' && data.results?.yolo?.trainingJobId) {
+          setYoloTrainingJobId(data.results.yolo.trainingJobId);
+          setPushMessage(`YOLO training started! Model: ${data.results.yolo.modelName}`);
+        } else {
+          setPushMessage('Push started successfully.');
+        }
       } catch (err) {
         setPushError(err instanceof Error ? err.message : 'Failed to push review session');
       } finally {
@@ -273,6 +282,29 @@ function ReviewPageContent() {
   return (
     <div className="min-h-screen bg-gray-50 px-3 py-6">
       <div className="mx-auto max-w-[1500px] space-y-6">
+        {/* Navigation Header */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Link href="/training-hub">
+              <Button variant="ghost" size="sm" className="gap-2">
+                <ArrowLeft className="h-4 w-4" />
+                Training Hub
+              </Button>
+            </Link>
+            <span className="text-gray-300">/</span>
+            <span className="text-sm font-medium text-gray-600">Review Session</span>
+          </div>
+          {yoloTrainingJobId && (
+            <Link href="/training">
+              <Button variant="outline" size="sm" className="gap-2 border-blue-200 text-blue-600 hover:bg-blue-50">
+                <Brain className="h-4 w-4" />
+                View YOLO Training Progress
+                <ExternalLink className="h-3 w-3" />
+              </Button>
+            </Link>
+          )}
+        </div>
+
         <Card>
           <CardContent className="flex flex-col gap-4 py-6 md:flex-row md:items-center md:justify-between">
             <div>
@@ -397,6 +429,45 @@ function ReviewPageContent() {
         </div>
 
         <ReviewViewer items={filteredItems} onAction={handleAction} onEdit={handleEdit} />
+
+        {/* Next Steps Card - shown when there are accepted items */}
+        {(session?.itemsAccepted ?? 0) > 0 && (
+          <Card className="border-green-200 bg-gradient-to-r from-green-50 to-blue-50">
+            <CardContent className="py-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-medium text-green-700">
+                    <Sparkles className="h-4 w-4" />
+                    Ready for next steps
+                  </div>
+                  <p className="text-xs text-gray-600 mt-1">
+                    {session?.itemsAccepted} accepted annotations can be exported or used for training.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleExport}
+                    className="gap-2 border-orange-200 text-orange-600 hover:bg-orange-50"
+                  >
+                    <Download className="h-4 w-4" />
+                    Export for Spray Drones
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => setShowYoloModal(true)}
+                    disabled={availableClasses.length === 0}
+                    className="gap-2 bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600"
+                  >
+                    <Brain className="h-4 w-4" />
+                    Train YOLO Model
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       <YOLOConfigModal

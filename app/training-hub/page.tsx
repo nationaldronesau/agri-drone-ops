@@ -17,6 +17,8 @@ import {
   Wand2,
   Clock,
   Eye,
+  Brain,
+  Activity,
 } from 'lucide-react';
 import { CreateProjectDialog } from '@/components/training/CreateProjectDialog';
 
@@ -336,6 +338,30 @@ export default function TrainingHubPage() {
               </div>
             </CardContent>
           </Link>
+        </Card>
+
+        {/* YOLO Training Quick Link */}
+        <Card className="mb-8 border-blue-200 bg-gradient-to-r from-blue-50 to-green-50">
+          <CardContent className="py-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-gradient-to-r from-blue-500 to-green-500 flex items-center justify-center">
+                  <Brain className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-900">YOLO Training Dashboard</h3>
+                  <p className="text-sm text-gray-600">Monitor training progress and manage trained models</p>
+                </div>
+              </div>
+              <Link href="/training">
+                <Button className="gap-2 bg-gradient-to-r from-blue-500 to-green-500 hover:from-blue-600 hover:to-green-600">
+                  <Activity className="w-4 h-4" />
+                  View Training Jobs
+                  <ArrowRight className="w-4 h-4" />
+                </Button>
+              </Link>
+            </div>
+          </CardContent>
         </Card>
 
         {/* Pending Reviews Section */}
