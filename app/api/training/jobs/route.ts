@@ -11,6 +11,7 @@ import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
 import { TrainingStatus } from '@prisma/client';
 import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
 import { checkRateLimit } from '@/lib/utils/security';
+import { syncJobWithEC2 } from '@/lib/services/training-sync';
 
 const ALLOWED_BASE_MODELS = ['yolo11n', 'yolo11s', 'yolo11m', 'yolo11l', 'yolo11x'] as const;
 
@@ -238,6 +239,7 @@ export async function GET(request: NextRequest) {
             select: {
               name: true,
               imageCount: true,
+              s3Path: true,
               classes: true,
             },
           },
@@ -257,7 +259,50 @@ export async function GET(request: NextRequest) {
       prisma.trainingJob.count({ where }),
     ]);
 
-    const formattedJobs = jobs.map((job) => ({
+    const activeStatuses = new Set([
+      TrainingStatus.QUEUED,
+      TrainingStatus.PREPARING,
+      TrainingStatus.RUNNING,
+      TrainingStatus.UPLOADING,
+    ]);
+    const syncCandidates = jobs.filter((job) =>
+      job.ec2JobId &&
+      activeStatuses.has(job.status) &&
+      (!job.updatedAt || Date.now() - new Date(job.updatedAt).getTime() > 10000)
+    );
+
+    if (syncCandidates.length > 0) {
+      await Promise.allSettled(syncCandidates.slice(0, 10).map((job) => syncJobWithEC2(job)));
+    }
+
+    const refreshedJobs = syncCandidates.length
+      ? await prisma.trainingJob.findMany({
+          where,
+          include: {
+            dataset: {
+              select: {
+                name: true,
+                imageCount: true,
+                s3Path: true,
+                classes: true,
+              },
+            },
+            trainedModel: {
+              select: {
+                id: true,
+                name: true,
+                version: true,
+                mAP50: true,
+              },
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+          skip: offset,
+        })
+      : jobs;
+
+    const formattedJobs = refreshedJobs.map((job) => ({
       ...job,
       dataset: job.dataset
         ? {

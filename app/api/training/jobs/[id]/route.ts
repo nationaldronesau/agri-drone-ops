@@ -6,30 +6,9 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import { yoloService } from '@/lib/services/yolo';
-import { TrainingStatus, ModelStatus } from '@prisma/client';
+import { TrainingStatus } from '@prisma/client';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
-
-function mapEC2Status(ec2Status: string): TrainingStatus {
-  const statusMap: Record<string, TrainingStatus> = {
-    queued: TrainingStatus.QUEUED,
-    preparing: TrainingStatus.PREPARING,
-    running: TrainingStatus.RUNNING,
-    uploading: TrainingStatus.UPLOADING,
-    completed: TrainingStatus.COMPLETED,
-    failed: TrainingStatus.FAILED,
-    cancelled: TrainingStatus.CANCELLED,
-  };
-  return statusMap[ec2Status] || TrainingStatus.RUNNING;
-}
-
-function parseS3Path(path: string): { bucket: string; keyPrefix: string } | null {
-  if (!path.startsWith('s3://')) return null;
-  const withoutScheme = path.replace('s3://', '');
-  const [bucket, ...rest] = withoutScheme.split('/');
-  if (!bucket) return null;
-  return { bucket, keyPrefix: rest.join('/') };
-}
+import { syncJobWithEC2 } from '@/lib/services/training-sync';
 
 export async function GET(
   request: NextRequest,
@@ -78,95 +57,22 @@ export async function GET(
       return NextResponse.json({ error: 'Training job not found' }, { status: 404 });
     }
 
-    const activeStatuses = [
-      TrainingStatus.QUEUED,
-      TrainingStatus.PREPARING,
-      TrainingStatus.RUNNING,
-      TrainingStatus.UPLOADING,
-    ];
-
     let updatedJob = job;
     let syncStatus: 'ok' | 'failed' | null = null;
     let syncError: string | null = null;
     let syncUpdatedAt: string | null = null;
 
-    if (activeStatuses.includes(job.status) && job.ec2JobId) {
-      try {
-        const ec2Status = await yoloService.getTrainingStatus(job.ec2JobId);
-        syncStatus = 'ok';
+    if (job.ec2JobId) {
+      const syncResult = await syncJobWithEC2(job);
+      if (syncResult.syncStatus !== 'skipped') {
+        syncStatus = syncResult.syncStatus === 'ok' ? 'ok' : 'failed';
         syncUpdatedAt = new Date().toISOString();
-        const updateData: Record<string, unknown> = {
-          status: mapEC2Status(ec2Status.status),
-          currentEpoch: ec2Status.current_epoch,
-          progress: ec2Status.progress,
-        };
+        syncError = syncResult.syncError || null;
+      }
 
-        if (ec2Status.metrics) {
-          updateData.currentMetrics = JSON.stringify(ec2Status.metrics);
-        }
-
-        if (ec2Status.error_message) {
-          updateData.errorMessage = ec2Status.error_message;
-        }
-
-        if (ec2Status.status === 'running' && !job.startedAt) {
-          updateData.startedAt = new Date();
-        }
-
-        if (ec2Status.status === 'failed' || ec2Status.status === 'cancelled') {
-          updateData.completedAt = new Date();
-        }
-
-        if (ec2Status.status === 'completed') {
-          updateData.completedAt = new Date();
-          updateData.finalMAP50 = ec2Status.metrics?.mAP50;
-          updateData.finalMAP5095 = ec2Status.metrics?.mAP5095;
-          updateData.finalPrecision = ec2Status.metrics?.precision;
-          updateData.finalRecall = ec2Status.metrics?.recall;
-
-          if (ec2Status.metrics?.precision && ec2Status.metrics?.recall) {
-            updateData.finalF1 =
-              (2 * ec2Status.metrics.precision * ec2Status.metrics.recall) /
-              (ec2Status.metrics.precision + ec2Status.metrics.recall);
-          }
-
-          if (ec2Status.s3_output_path && !job.trainedModelId) {
-            const config = job.trainingConfig ? JSON.parse(job.trainingConfig) : {};
-            const modelName = config.modelName || `model-${job.id}`;
-            const [baseName, versionStr] = modelName.split('-v');
-            const version = parseInt(versionStr, 10) || 1;
-            const parsedPath = parseS3Path(ec2Status.s3_output_path);
-
-            const trainedModel = await prisma.trainedModel.create({
-              data: {
-                name: baseName,
-                version,
-                displayName: `${job.dataset.name} (v${version})`,
-                s3Path: ec2Status.s3_output_path,
-                s3Bucket: parsedPath?.bucket || job.dataset.s3Path.split('/')[2] || 'agridrone-ops',
-                classes: job.dataset.classes,
-                classCount: JSON.parse(job.dataset.classes).length,
-                mAP50: ec2Status.metrics?.mAP50,
-                mAP5095: ec2Status.metrics?.mAP5095,
-                precision: ec2Status.metrics?.precision,
-                recall: ec2Status.metrics?.recall,
-                f1Score: updateData.finalF1 as number | undefined,
-                baseModel: job.baseModel,
-                trainedOnImages: job.dataset.imageCount,
-                trainedEpochs: job.epochs,
-                status: ModelStatus.READY,
-                teamId: job.teamId,
-                createdById: job.createdById,
-              },
-            });
-
-            updateData.trainedModelId = trainedModel.id;
-          }
-        }
-
-        updatedJob = await prisma.trainingJob.update({
+      if (syncResult.job.id !== updatedJob.id || syncResult.syncStatus !== 'skipped') {
+        updatedJob = await prisma.trainingJob.findUniqueOrThrow({
           where: { id: jobId },
-          data: updateData,
           include: {
             dataset: {
               select: {
@@ -188,11 +94,6 @@ export async function GET(
             },
           },
         });
-      } catch (ec2Error) {
-        console.error('Failed to sync with EC2:', ec2Error);
-        syncStatus = 'failed';
-        syncUpdatedAt = new Date().toISOString();
-        syncError = ec2Error instanceof Error ? ec2Error.message : 'Failed to sync with EC2';
       }
     }
 
