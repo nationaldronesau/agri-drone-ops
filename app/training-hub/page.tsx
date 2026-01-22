@@ -17,7 +17,20 @@ import {
   Wand2,
   Clock,
   Eye,
+  Brain,
+  Activity,
+  Trash2,
 } from 'lucide-react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { CreateProjectDialog } from '@/components/training/CreateProjectDialog';
 
 interface RoboflowClass {
@@ -78,6 +91,8 @@ export default function TrainingHubPage() {
   const [error, setError] = useState<string | null>(null);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [sam3WarmupMessage, setSam3WarmupMessage] = useState<string | null>(null);
+  const [deletingBatchId, setDeletingBatchId] = useState<string | null>(null);
+  const [batchToDelete, setBatchToDelete] = useState<BatchJob | null>(null);
 
   const fetchProjects = async (sync = false) => {
     try {
@@ -174,6 +189,24 @@ export default function TrainingHubPage() {
   const handleProjectCreated = () => {
     setShowCreateDialog(false);
     fetchProjects(true);
+  };
+
+  const handleDeleteBatch = async (batchId: string) => {
+    setDeletingBatchId(batchId);
+    try {
+      const res = await fetch(`/api/sam3/batch/${batchId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to delete batch');
+      }
+      await fetchBatchJobs();
+      setBatchToDelete(null);
+    } catch (err) {
+      console.error('[Training Hub] Error deleting batch:', err);
+      alert(err instanceof Error ? err.message : 'Failed to delete batch');
+    } finally {
+      setDeletingBatchId(null);
+    }
   };
 
   return (
@@ -338,6 +371,30 @@ export default function TrainingHubPage() {
           </Link>
         </Card>
 
+        {/* YOLO Training Quick Link */}
+        <Card className="mb-8 border-blue-200 bg-gradient-to-r from-blue-50 to-green-50">
+          <CardContent className="py-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-gradient-to-r from-blue-500 to-green-500 flex items-center justify-center">
+                  <Brain className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-900">YOLO Training Dashboard</h3>
+                  <p className="text-sm text-gray-600">Monitor training progress and manage trained models</p>
+                </div>
+              </div>
+              <Link href="/training">
+                <Button className="gap-2 bg-gradient-to-r from-blue-500 to-green-500 hover:from-blue-600 hover:to-green-600">
+                  <Activity className="w-4 h-4" />
+                  View Training Jobs
+                  <ArrowRight className="w-4 h-4" />
+                </Button>
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Pending Reviews Section */}
         {batchJobs.length > 0 && (
           <div className="mb-8">
@@ -349,16 +406,16 @@ export default function TrainingHubPage() {
               </span>
             </div>
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {batchJobs.filter(j => j._count.pendingAnnotations > 0 || j.status === 'PROCESSING' || j.status === 'QUEUED').slice(0, 6).map((job) => (
-                <Link key={job.id} href={`/training-hub/review/${job.id}`}>
-                  <Card className="hover:shadow-md transition-shadow cursor-pointer">
+              {batchJobs.filter(j => j._count.pendingAnnotations > 0 || j.status === 'PROCESSING' || j.status === 'QUEUED' || j.status === 'FAILED').slice(0, 6).map((job) => (
+                <Card key={job.id} className="hover:shadow-md transition-shadow cursor-pointer relative group">
+                  <Link href={`/training-hub/review/${job.id}`} className="block">
                     <CardContent className="py-4">
                       <div className="flex items-start justify-between mb-2">
-                        <div>
+                        <div className="flex-1 min-w-0 pr-8">
                           <p className="font-medium text-gray-900">{job.weedType}</p>
                           <p className="text-xs text-gray-500">{job.project?.name || 'Unknown Project'}</p>
                         </div>
-                        <span className={`px-2 py-1 text-xs rounded-full ${
+                        <span className={`px-2 py-1 text-xs rounded-full shrink-0 ${
                           job.status === 'COMPLETED' ? 'bg-green-100 text-green-700' :
                           job.status === 'PROCESSING' ? 'bg-blue-100 text-blue-700' :
                           job.status === 'FAILED' ? 'bg-red-100 text-red-700' :
@@ -390,8 +447,26 @@ export default function TrainingHubPage() {
                         </div>
                       )}
                     </CardContent>
-                  </Card>
-                </Link>
+                  </Link>
+                  {/* Delete button - positioned absolutely */}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="absolute top-2 right-2 h-7 w-7 text-gray-400 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setBatchToDelete(job);
+                    }}
+                    disabled={deletingBatchId === job.id}
+                  >
+                    {deletingBatchId === job.id ? (
+                      <RefreshCw className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-4 w-4" />
+                    )}
+                  </Button>
+                </Card>
               ))}
             </div>
           </div>
@@ -523,6 +598,36 @@ export default function TrainingHubPage() {
           )}
         </div>
       </main>
+
+      {/* Delete Batch Confirmation Dialog */}
+      <AlertDialog open={!!batchToDelete} onOpenChange={(open) => !open && setBatchToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this batch?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete the batch &ldquo;{batchToDelete?.weedType}&rdquo; and all{' '}
+              {batchToDelete?._count.pendingAnnotations || 0} pending annotations. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={!!deletingBatchId}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => batchToDelete && handleDeleteBatch(batchToDelete.id)}
+              disabled={!!deletingBatchId}
+              className="bg-red-500 hover:bg-red-600 focus:ring-red-500"
+            >
+              {deletingBatchId ? (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                'Delete'
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Create Project Dialog - only render when open to avoid portal issues */}
       {showCreateDialog && (

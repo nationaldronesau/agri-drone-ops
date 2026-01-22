@@ -42,9 +42,10 @@ function bboxToPolygon(bbox: [number, number, number, number]): number[][] {
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { sessionId: string } }
+  { params }: { params: Promise<{ sessionId: string }> }
 ) {
   try {
+    const { sessionId } = await params;
     const auth = await getAuthenticatedUser();
     if (!auth.authenticated || !auth.userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -66,7 +67,7 @@ export async function POST(
     }
 
     const session = await prisma.reviewSession.findUnique({
-      where: { id: params.sessionId },
+      where: { id: sessionId },
     });
 
     if (!session) {
@@ -256,6 +257,13 @@ export async function POST(
               });
             } else {
               nextStatus = 'accepted';
+
+              // Handle class correction if provided
+              const correctedClass = item.correctedClass
+                ? normalizeDetectionType(item.correctedClass)
+                : null;
+              const isClassCorrected = correctedClass && correctedClass !== detection.className;
+
               await tx.detection.update({
                 where: { id: itemId },
                 data: {
@@ -263,6 +271,15 @@ export async function POST(
                   rejected: false,
                   reviewedAt: now,
                   reviewedBy: auth.userId,
+                  // If class is being corrected, update className and preserve original
+                  ...(isClassCorrected
+                    ? {
+                        className: correctedClass,
+                        userCorrected: true,
+                        // Only set originalClass if not already set (first correction)
+                        originalClass: detection.originalClass || detection.className,
+                      }
+                    : {}),
                 },
               });
             }
@@ -281,7 +298,7 @@ export async function POST(
 
       if (reviewedInc > 0 || acceptedInc > 0 || rejectedInc > 0) {
         await tx.reviewSession.update({
-          where: { id: params.sessionId },
+          where: { id: sessionId },
           data: {
             ...(reviewedInc > 0 ? { itemsReviewed: { increment: reviewedInc } } : {}),
             ...(acceptedInc > 0 ? { itemsAccepted: { increment: acceptedInc } } : {}),

@@ -30,11 +30,13 @@ import {
 import {
   Activity,
   AlertTriangle,
+  ArrowLeft,
   Download,
   RefreshCw,
   Rocket,
   Settings,
   ShieldCheck,
+  Sparkles,
   XCircle,
   PlayCircle,
 } from "lucide-react";
@@ -935,6 +937,12 @@ export default function TrainingPage() {
       <header className="bg-white border-b border-gray-200">
         <div className="container mx-auto px-4 py-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
+            <Link href="/training-hub">
+              <Button variant="ghost" size="sm" className="gap-2 -ml-2">
+                <ArrowLeft className="h-4 w-4" />
+                Training Hub
+              </Button>
+            </Link>
             <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-green-500 to-blue-500 flex items-center justify-center text-white">
               <Activity className="h-5 w-5" />
             </div>
