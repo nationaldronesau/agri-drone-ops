@@ -43,6 +43,8 @@ export default function ImagesPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>('all');
   const [loading, setLoading] = useState(true);
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
+  const [assetsError, setAssetsError] = useState<string | null>(null);
 
   // Fetch projects on mount
   useEffect(() => {
@@ -56,29 +58,36 @@ export default function ImagesPage() {
 
   const fetchProjects = async () => {
     try {
+      setProjectsError(null);
       const response = await fetch('/api/projects');
-      if (response.ok) {
-        const data = await response.json();
-        setProjects(data.projects || []);
+      if (!response.ok) {
+        throw new Error('Failed to load projects');
       }
+      const data = await response.json();
+      setProjects(data.projects || []);
     } catch (error) {
       console.error('Failed to fetch projects:', error);
+      setProjectsError(error instanceof Error ? error.message : 'Failed to load projects');
     }
   };
 
   const fetchAssets = async (projectId: string) => {
     try {
       setLoading(true);
+      setAssetsError(null);
       const url = projectId && projectId !== 'all'
         ? `/api/assets?projectId=${projectId}`
         : '/api/assets';
       const response = await fetch(url);
-      if (response.ok) {
-        const data = await response.json();
-        setAssets(data.assets || []);
+      if (!response.ok) {
+        throw new Error('Failed to load images');
       }
+      const data = await response.json();
+      setAssets(data.assets || []);
     } catch (error) {
       console.error('Failed to fetch assets:', error);
+      setAssetsError(error instanceof Error ? error.message : 'Failed to load images');
+      setAssets([]);
     } finally {
       setLoading(false);
     }
@@ -166,10 +175,25 @@ export default function ImagesPage() {
           </div>
         </div>
 
+        {projectsError && (
+          <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+            {projectsError}
+          </div>
+        )}
+
         {loading ? (
           <div className="text-center py-12">
             <p className="text-gray-500">Loading images...</p>
           </div>
+        ) : assetsError ? (
+          <Card className="text-center py-12">
+            <CardContent className="space-y-3">
+              <p className="text-sm text-red-600">{assetsError}</p>
+              <Button variant="outline" onClick={() => fetchAssets(selectedProjectId)}>
+                Retry
+              </Button>
+            </CardContent>
+          </Card>
         ) : assets.length === 0 ? (
           <Card className="text-center py-12">
             <CardContent>

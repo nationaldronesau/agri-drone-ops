@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { z } from "zod";
 import { logAudit } from "@/lib/utils/audit";
+import { checkProjectAccess, getAuthenticatedUser } from "@/lib/auth/api-auth";
 
 const bodySchema = z.object({
   reason: z.string().optional(),
@@ -12,6 +13,14 @@ export async function POST(
   { params }: { params: { id: string } },
 ) {
   try {
+    const auth = await getAuthenticatedUser();
+    if (!auth.authenticated || !auth.userId) {
+      return NextResponse.json(
+        { error: auth.error || "Unauthorized" },
+        { status: 401 },
+      );
+    }
+
     const body = await request.json().catch(() => ({}));
     const parsed = bodySchema.safeParse(body);
 
@@ -24,12 +33,27 @@ export async function POST(
 
     const existing = await prisma.detection.findUnique({
       where: { id: params.id },
+      include: {
+        asset: {
+          select: {
+            projectId: true,
+          },
+        },
+      },
     });
 
     if (!existing) {
       return NextResponse.json(
         { error: "Detection not found" },
         { status: 404 },
+      );
+    }
+
+    const projectAuth = await checkProjectAccess(existing.asset.projectId);
+    if (!projectAuth.hasAccess) {
+      return NextResponse.json(
+        { error: projectAuth.error || "Access denied" },
+        { status: 403 },
       );
     }
 

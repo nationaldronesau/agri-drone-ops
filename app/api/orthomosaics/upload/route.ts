@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth/config";
+import { checkProjectAccess, getAuthenticatedUser } from "@/lib/auth/api-auth";
 import { z } from "zod";
 import prisma from "@/lib/db";
 import { promisify } from "util";
 import { exec } from "child_process";
 import { S3Service } from "@/lib/services/s3";
+import { getProjectIdFromS3Key } from "@/lib/utils/s3-key";
 import os from "os";
 import path from "path";
 import { mkdtemp, rm, writeFile } from "fs/promises";
@@ -30,9 +30,12 @@ const requestSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const auth = await getAuthenticatedUser();
+    if (!auth.authenticated) {
+      return NextResponse.json(
+        { error: auth.error || "Unauthorized" },
+        { status: 401 }
+      );
     }
 
     const payload = await request.json();
@@ -47,6 +50,14 @@ export async function POST(request: NextRequest) {
 
     const { file, projectId, name, description } = parsed.data;
 
+    const projectAuth = await checkProjectAccess(projectId);
+    if (!projectAuth.hasAccess) {
+      return NextResponse.json(
+        { error: projectAuth.error || "Access denied to this project" },
+        { status: 403 },
+      );
+    }
+
     let bucket = file.bucket || null;
     let key = file.key || null;
 
@@ -60,6 +71,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: "Missing S3 location for orthomosaic file" },
         { status: 400 },
+      );
+    }
+
+    const keyProjectId = getProjectIdFromS3Key(key);
+    if (!keyProjectId) {
+      return NextResponse.json(
+        { error: "Invalid S3 key format" },
+        { status: 400 },
+      );
+    }
+
+    if (keyProjectId !== projectId) {
+      return NextResponse.json(
+        { error: "S3 key does not match the target project" },
+        { status: 403 },
       );
     }
 

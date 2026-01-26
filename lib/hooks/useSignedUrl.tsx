@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface SignedUrlResponse {
   url: string;
@@ -27,9 +27,9 @@ export function useSignedUrl(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
-  const timerRef = { current: null as NodeJS.Timeout | null };
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  const fetchSignedUrl = async (): Promise<void> => {
+  const fetchSignedUrl = useCallback(async (): Promise<void> => {
     if (!assetId) {
       setUrl(null);
       return;
@@ -55,7 +55,7 @@ export function useSignedUrl(
       // If URL expires, set a timer to refresh it
       if (data.expiresIn && data.storageType === 's3') {
         // Refresh 5 minutes before expiry
-        const refreshTime = (data.expiresIn - 300) * 1000;
+        const refreshTime = Math.max((data.expiresIn - 300) * 1000, 0);
         if (timerRef.current) {
           clearTimeout(timerRef.current);
         }
@@ -72,17 +72,17 @@ export function useSignedUrl(
     } finally {
       setLoading(false);
     }
-  };
+  }, [assetId, initialUrl, type]);
 
   useEffect(() => {
     fetchSignedUrl();
     return () => {
       if (timerRef.current) {
         clearTimeout(timerRef.current);
+        timerRef.current = null;
       }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assetId, type]);
+  }, [fetchSignedUrl]);
 
   return { url, loading, error, refresh: fetchSignedUrl };
 }
@@ -101,12 +101,20 @@ export function S3Image({
   className,
   ...props 
 }: S3ImageProps) {
-  const { url, loading } = useSignedUrl(assetId || null, 'asset', src);
+  const { url, loading, error } = useSignedUrl(assetId || null, 'asset', src);
 
   if (loading) {
     return (
       <div className={`animate-pulse bg-gray-200 ${className}`}>
         <span className="sr-only">Loading image...</span>
+      </div>
+    );
+  }
+
+  if (error && !url && !src) {
+    return (
+      <div className={`flex items-center justify-center bg-gray-100 text-xs text-gray-500 ${className}`}>
+        Image unavailable
       </div>
     );
   }

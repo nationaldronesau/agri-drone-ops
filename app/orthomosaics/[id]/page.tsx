@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { Button } from "@/components/ui/button";
@@ -48,9 +48,11 @@ interface Orthomosaic {
 
 export default function OrthomosaicViewerPage() {
   const params = useParams();
-  const router = useRouter();
   const [orthomosaic, setOrthomosaic] = useState<Orthomosaic | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
   const [mapControls, setMapControls] = useState({
     showLayers: true,
     showMeasurement: false,
@@ -65,18 +67,38 @@ export default function OrthomosaicViewerPage() {
 
   const fetchOrthomosaic = async (id: string) => {
     try {
+      setLoading(true);
+      setError(null);
       const response = await fetch(`/api/orthomosaics/${id}`);
-      if (response.ok) {
-        const data = await response.json();
-        setOrthomosaic(data);
-      } else {
-        router.push('/orthomosaics');
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to load orthomosaic');
       }
+      setOrthomosaic(data);
     } catch (error) {
       console.error('Error fetching orthomosaic:', error);
-      router.push('/orthomosaics');
+      setOrthomosaic(null);
+      setError(error instanceof Error ? error.message : 'Failed to load orthomosaic');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDownload = async () => {
+    if (!orthomosaic) return;
+    setActionError(null);
+    setDownloading(true);
+    try {
+      const response = await fetch(`/api/orthomosaics/${orthomosaic.id}/signed-url`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.url) {
+        throw new Error(data.error || 'Failed to fetch download URL');
+      }
+      window.open(data.url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to download file');
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -96,7 +118,9 @@ export default function OrthomosaicViewerPage() {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
           <Mountain className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-          <p className="text-gray-500 mb-4">Orthomosaic not found</p>
+          <p className="text-gray-500 mb-4">
+            {error || 'Orthomosaic not found'}
+          </p>
           <Link href="/orthomosaics">
             <Button>Back to Orthomosaics</Button>
           </Link>
@@ -104,6 +128,13 @@ export default function OrthomosaicViewerPage() {
       </div>
     );
   }
+
+  const statusMeta = {
+    COMPLETED: { label: 'Ready', className: 'bg-green-100 text-green-800' },
+    PROCESSING: { label: 'Processing', className: 'bg-blue-100 text-blue-800' },
+    FAILED: { label: 'Failed', className: 'bg-red-100 text-red-800' },
+    PENDING: { label: 'Pending', className: 'bg-gray-100 text-gray-800' },
+  }[orthomosaic.status] || { label: orthomosaic.status, className: 'bg-gray-100 text-gray-800' };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -217,8 +248,8 @@ export default function OrthomosaicViewerPage() {
               <CardContent className="space-y-4">
                 <div>
                   <div className="text-sm text-gray-600 mb-1">Status</div>
-                  <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
-                    Ready
+                  <Badge className={statusMeta.className}>
+                    {statusMeta.label}
                   </Badge>
                 </div>
 
@@ -259,6 +290,11 @@ export default function OrthomosaicViewerPage() {
                 <CardTitle className="text-lg">Actions</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
+                {actionError && (
+                  <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    {actionError}
+                  </div>
+                )}
                 <Link href={`/map?orthomosaic=${orthomosaic.id}`} className="block">
                   <Button className="w-full bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600 text-white shadow-lg">
                     <Layers className="w-4 h-4 mr-2" />
@@ -266,12 +302,17 @@ export default function OrthomosaicViewerPage() {
                   </Button>
                 </Link>
                 
-                <Button variant="outline" className="w-full border-green-500 text-green-600 hover:bg-green-50">
+                <Button
+                  variant="outline"
+                  className="w-full border-green-500 text-green-600 hover:bg-green-50"
+                  onClick={handleDownload}
+                  disabled={downloading}
+                >
                   <Mountain className="w-4 h-4 mr-2" />
-                  Download Original
+                  {downloading ? "Preparing download..." : "Download Original"}
                 </Button>
                 
-                <Button variant="outline" className="w-full">
+                <Button variant="outline" className="w-full" disabled title="Reprocessing not yet available">
                   <RotateCcw className="w-4 h-4 mr-2" />
                   Reprocess Tiles
                 </Button>

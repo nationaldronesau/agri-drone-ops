@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
+import Link from 'next/link';
+import { Button } from '@/components/ui/button';
 
 export default function LegacyImproveReviewRedirect() {
   const router = useRouter();
@@ -61,8 +63,18 @@ export default function LegacyImproveReviewRedirect() {
 
   if (error) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-sm text-red-600">
-        {error}
+      <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
+        <div className="max-w-md text-center space-y-4">
+          <p className="text-sm text-red-600">{error}</p>
+          <div className="flex flex-wrap justify-center gap-2">
+            <Button asChild variant="outline">
+              <Link href="/training-hub">Back to Training Hub</Link>
+            </Button>
+            <Button asChild>
+              <Link href="/dashboard">Go to Dashboard</Link>
+            </Button>
+          </div>
+        </div>
       </div>
     );
   }

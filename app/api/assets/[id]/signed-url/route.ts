@@ -1,12 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { S3Service } from "@/lib/services/s3";
+import { checkProjectAccess, getAuthenticatedUser } from "@/lib/auth/api-auth";
 
 export async function GET(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
+    const auth = await getAuthenticatedUser();
+    if (!auth.authenticated) {
+      return NextResponse.json(
+        { error: auth.error || "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
     const assetId = params.id;
 
     // Fetch the asset from database
@@ -18,6 +27,14 @@ export async function GET(
       return NextResponse.json(
         { error: "Asset not found" },
         { status: 404 }
+      );
+    }
+
+    const projectAuth = await checkProjectAccess(asset.projectId);
+    if (!projectAuth.hasAccess) {
+      return NextResponse.json(
+        { error: projectAuth.error || "Access denied" },
+        { status: 403 }
       );
     }
 

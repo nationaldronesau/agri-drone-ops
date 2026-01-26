@@ -84,6 +84,8 @@ export function ImageUpload() {
       .join(", ");
   }, [runDetection, selectedModels]);
 
+  const detectionReady = !runDetection || selectedModels.length > 0;
+
   const onProcessingStart = useCallback(() => {
     setProcessing(true);
     setProcessingError(null);
@@ -190,11 +192,18 @@ export function ImageUpload() {
           </div>
         )}
 
+        {!detectionReady && (
+          <div className="flex items-center space-x-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+            <AlertCircle className="h-4 w-4 flex-shrink-0" />
+            <span>Select at least one model or disable AI detection to upload.</span>
+          </div>
+        )}
+
         <UppyUploader
           projectId={selectedProject || null}
           runDetection={runDetection}
           detectionModels={selectedModels}
-          disabled={!selectedProject}
+          disabled={!selectedProject || !detectionReady}
           onProcessingStart={onProcessingStart}
           onProcessingComplete={onProcessingComplete}
           onProcessingError={onProcessingError}

@@ -3,6 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -273,8 +274,22 @@ function ReviewPageContent() {
 
   if (error) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-sm text-red-600">
-        {error}
+      <div className="min-h-screen bg-gray-50 px-3 py-6">
+        <div className="mx-auto max-w-xl">
+          <Card>
+            <CardContent className="space-y-4 py-8 text-center">
+              <p className="text-sm text-red-600">{error}</p>
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button asChild variant="outline">
+                  <Link href="/training-hub">Back to Training Hub</Link>
+                </Button>
+                <Button asChild>
+                  <Link href="/dashboard">Go to Dashboard</Link>
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     );
   }

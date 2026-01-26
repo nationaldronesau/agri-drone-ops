@@ -606,6 +606,10 @@ export default function TrainingPage() {
       setError("Select at least one class to preview.");
       return;
     }
+    if (splitTotal !== 100) {
+      setError("Train/val/test splits must total 100%.");
+      return;
+    }
     setPreviewLoading(true);
     setError(null);
     try {
@@ -641,6 +645,10 @@ export default function TrainingPage() {
   const handleCreateDataset = async () => {
     if (!datasetForm.projectId || datasetForm.classes.length === 0) {
       setError("Project and classes are required.");
+      return;
+    }
+    if (splitTotal !== 100) {
+      setError("Train/val/test splits must total 100%.");
       return;
     }
 
@@ -1173,7 +1181,7 @@ export default function TrainingPage() {
                     <CardTitle className="text-base">Preview counts</CardTitle>
                     <CardDescription>
                       {splitTotal !== 100
-                        ? `Split totals ${splitTotal}% (normalized on export).`
+                        ? `Split totals ${splitTotal}% (must equal 100%).`
                         : "Counts reflect your current class selection."}
                     </CardDescription>
                   </CardHeader>
@@ -1216,7 +1224,7 @@ export default function TrainingPage() {
                     <Button
                       variant="outline"
                       onClick={handlePreview}
-                      disabled={previewLoading || datasetForm.classes.length === 0}
+                      disabled={previewLoading || datasetForm.classes.length === 0 || splitTotal !== 100}
                     >
                       {previewLoading ? "Previewing..." : "Preview counts"}
                     </Button>
@@ -1237,7 +1245,8 @@ export default function TrainingPage() {
                       creatingDataset ||
                       !datasetForm.name ||
                       !datasetForm.projectId ||
-                      datasetForm.classes.length === 0
+                      datasetForm.classes.length === 0 ||
+                      splitTotal !== 100
                     }
                   >
                     {creatingDataset ? "Creating..." : "Create Dataset"}
@@ -1539,8 +1548,19 @@ export default function TrainingPage() {
         )}
 
         {error && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-            {error}
+          <div className="fixed bottom-6 right-6 z-50 max-w-md rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 shadow-lg">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 mt-0.5" />
+              <span className="flex-1">{error}</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setError(null)}
+                className="h-6 px-2 text-red-700 hover:bg-red-100"
+              >
+                Dismiss
+              </Button>
+            </div>
           </div>
         )}
 

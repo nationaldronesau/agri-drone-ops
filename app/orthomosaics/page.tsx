@@ -48,6 +48,8 @@ export default function OrthomosaicsPage() {
   const [processing, setProcessing] = useState<boolean>(false);
   const [processingError, setProcessingError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [orthomosaicsError, setOrthomosaicsError] = useState<string | null>(null);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchOrthomosaics();
@@ -56,13 +58,16 @@ export default function OrthomosaicsPage() {
 
   const fetchOrthomosaics = async () => {
     try {
+      setOrthomosaicsError(null);
       const response = await fetch('/api/orthomosaics');
-      if (response.ok) {
-        const data = await response.json();
-        setOrthomosaics(data.orthomosaics || []);
+      if (!response.ok) {
+        throw new Error('Failed to load orthomosaics');
       }
+      const data = await response.json();
+      setOrthomosaics(data.orthomosaics || []);
     } catch (error) {
       console.error('Error fetching orthomosaics:', error);
+      setOrthomosaicsError(error instanceof Error ? error.message : 'Failed to load orthomosaics');
     } finally {
       setLoading(false);
     }
@@ -70,13 +75,16 @@ export default function OrthomosaicsPage() {
 
   const fetchProjects = async () => {
     try {
+      setProjectsError(null);
       const response = await fetch('/api/projects');
-      if (response.ok) {
-        const data = await response.json();
-        setProjects(data.projects || []);
+      if (!response.ok) {
+        throw new Error('Failed to load projects');
       }
+      const data = await response.json();
+      setProjects(data.projects || []);
     } catch (error) {
       console.error('Error fetching projects:', error);
+      setProjectsError(error instanceof Error ? error.message : 'Failed to load projects');
     }
   };
 
@@ -167,6 +175,11 @@ export default function OrthomosaicsPage() {
                 </SelectContent>
               </Select>
             </div>
+            {projectsError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                {projectsError}
+              </div>
+            )}
 
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-4">
@@ -246,6 +259,15 @@ export default function OrthomosaicsPage() {
         <div className="flex items-center justify-center py-12">
           <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
         </div>
+      ) : orthomosaicsError ? (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-12 space-y-3">
+            <p className="text-sm text-red-600">{orthomosaicsError}</p>
+            <Button variant="outline" onClick={fetchOrthomosaics}>
+              Retry
+            </Button>
+          </CardContent>
+        </Card>
       ) : orthomosaics.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">

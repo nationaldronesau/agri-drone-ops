@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import { useEffect, useMemo, useState } from "react";
+import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Layers, AlertTriangle } from "lucide-react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 
@@ -57,6 +58,17 @@ interface Detection {
   };
 }
 
+interface Orthomosaic {
+  id: string;
+  name: string;
+  projectId: string;
+  bounds: any;
+  centerLat: number;
+  centerLon: number;
+  minZoom: number;
+  maxZoom: number;
+}
+
 // Create custom detection marker icon
 const createDetectionIcon = (color: string) => {
   return L.divIcon({
@@ -67,7 +79,33 @@ const createDetectionIcon = (color: string) => {
   });
 };
 
+function MapViewUpdater({
+  bounds,
+  center,
+  zoom,
+}: {
+  bounds: L.LatLngBoundsExpression | null;
+  center: [number, number];
+  zoom: number;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (bounds) {
+      map.fitBounds(bounds, { padding: [20, 20] });
+      return;
+    }
+    map.setView(center, zoom);
+  }, [bounds, center, map, zoom]);
+
+  return null;
+}
+
 export default function MapComponent() {
+  const searchParams = useSearchParams();
+  const projectParam = searchParams.get("project");
+  const orthomosaicParam = searchParams.get("orthomosaic");
+
   const [assets, setAssets] = useState<Asset[]>([]);
   const [detections, setDetections] = useState<Detection[]>([]);
   const [loading, setLoading] = useState(true);
@@ -76,6 +114,8 @@ export default function MapComponent() {
   const [satelliteLayer, setSatelliteLayer] = useState(true);
   const [showDroneImages, setShowDroneImages] = useState(true);
   const [showDetections, setShowDetections] = useState(true);
+  const [focusedOrthomosaic, setFocusedOrthomosaic] = useState<Orthomosaic | null>(null);
+  const [orthomosaicError, setOrthomosaicError] = useState<string | null>(null);
 
   // Filters
   const [selectedLocation, setSelectedLocation] = useState<string>("all");
@@ -86,6 +126,49 @@ export default function MapComponent() {
     fetchAssets();
     fetchDetections();
   }, []);
+
+  useEffect(() => {
+    if (projectParam) {
+      setSelectedProject(projectParam);
+    }
+  }, [projectParam]);
+
+  useEffect(() => {
+    if (!orthomosaicParam) {
+      setFocusedOrthomosaic(null);
+      setOrthomosaicError(null);
+      return;
+    }
+
+    let active = true;
+    const loadOrthomosaic = async () => {
+      try {
+        const res = await fetch(`/api/orthomosaics/${orthomosaicParam}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to load orthomosaic");
+        }
+        if (!active) return;
+        setFocusedOrthomosaic(data);
+        setOrthomosaicError(null);
+        if (!projectParam && data.projectId) {
+          setSelectedProject(data.projectId);
+        }
+        if (Number.isFinite(data.centerLat) && Number.isFinite(data.centerLon)) {
+          setMapCenter([data.centerLat, data.centerLon]);
+        }
+      } catch (err) {
+        if (!active) return;
+        setFocusedOrthomosaic(null);
+        setOrthomosaicError(err instanceof Error ? err.message : "Failed to load orthomosaic");
+      }
+    };
+
+    loadOrthomosaic();
+    return () => {
+      active = false;
+    };
+  }, [orthomosaicParam, projectParam]);
 
   const fetchAssets = async () => {
     try {
@@ -132,24 +215,51 @@ export default function MapComponent() {
   };
 
   // Filtered list
-  const filteredAssets = assets.filter(a => {
-    if (selectedLocation !== "all" && a.project.location !== selectedLocation) return false;
-    if (selectedProject !== "all" && a.project.id !== selectedProject) return false;
-    if (selectedPurpose !== "all" && a.project.purpose !== selectedPurpose) return false;
-    return true;
-  });
+  const filteredAssets = useMemo(() => {
+    return assets.filter(a => {
+      if (selectedLocation !== "all" && a.project.location !== selectedLocation) return false;
+      if (selectedProject !== "all" && a.project.id !== selectedProject) return false;
+      if (selectedPurpose !== "all" && a.project.purpose !== selectedPurpose) return false;
+      return true;
+    });
+  }, [assets, selectedLocation, selectedProject, selectedPurpose]);
+
+  const orthomosaicBounds = useMemo(() => {
+    const coords = focusedOrthomosaic?.bounds?.coordinates?.[0];
+    if (!coords || coords.length === 0) return null;
+    return L.latLngBounds(
+      coords.map((coord: [number, number]) => [coord[1], coord[0]])
+    );
+  }, [focusedOrthomosaic]);
+
+  const assetBounds = useMemo(() => {
+    const assetsToUse = filteredAssets.length > 0 ? filteredAssets : assets;
+    if (assetsToUse.length === 0) return null;
+    return L.latLngBounds(
+      assetsToUse.map(a => [a.gpsLatitude!, a.gpsLongitude!])
+    );
+  }, [assets, filteredAssets]);
+
+  const boundsToFit = orthomosaicBounds || assetBounds;
 
   const calculateMapBounds = () => {
-    const assetsToUse = filteredAssets.length > 0 ? filteredAssets : assets;
-    if (assetsToUse.length === 0) return { center: mapCenter, zoom: 13 };
+    if (
+      focusedOrthomosaic &&
+      Number.isFinite(focusedOrthomosaic.centerLat) &&
+      Number.isFinite(focusedOrthomosaic.centerLon)
+    ) {
+      return {
+        center: [focusedOrthomosaic.centerLat, focusedOrthomosaic.centerLon] as [number, number],
+        zoom: 15,
+      };
+    }
 
-    const lat = assetsToUse.map(a => a.gpsLatitude!);
-    const lon = assetsToUse.map(a => a.gpsLongitude!);
+    if (assetBounds) {
+      const center = assetBounds.getCenter();
+      return { center: [center.lat, center.lng] as [number, number], zoom: 15 };
+    }
 
-    const centerLat = lat.reduce((a, b) => a + b, 0) / lat.length;
-    const centerLon = lon.reduce((a, b) => a + b, 0) / lon.length;
-
-    return { center: [centerLat, centerLon] as [number, number], zoom: 15 };
+    return { center: mapCenter, zoom: 13 };
   };
 
   const { center, zoom } = calculateMapBounds();
@@ -172,6 +282,19 @@ export default function MapComponent() {
 
       {/* Map Section */}
       <main className="container mx-auto px-4 py-8">
+        {orthomosaicError && (
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+            {orthomosaicError}
+          </div>
+        )}
+        {focusedOrthomosaic && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-700">
+            <span>Orthomosaic overlay: {focusedOrthomosaic.name}</span>
+            <Link href={`/orthomosaics/${focusedOrthomosaic.id}`} className="font-medium underline">
+              Open details
+            </Link>
+          </div>
+        )}
         {loading ? (
           <p>Loading map data...</p>
         ) : error ? (
@@ -196,6 +319,7 @@ export default function MapComponent() {
           </div>
         ) : (
           <MapContainer center={center} zoom={zoom} style={{ height: "600px", width: "100%" }}>
+            <MapViewUpdater bounds={boundsToFit} center={center} zoom={zoom} />
             <TileLayer
               attribution={satelliteLayer ? "&copy; Esri" : "&copy; OpenStreetMap"}
               url={
@@ -204,6 +328,23 @@ export default function MapComponent() {
                   : "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               }
             />
+            {focusedOrthomosaic && (
+              <TileLayer
+                attribution={`© ${focusedOrthomosaic.name}`}
+                url={`/api/tiles/${focusedOrthomosaic.id}/{z}/{x}/{y}.png`}
+                opacity={0.75}
+                maxZoom={focusedOrthomosaic.maxZoom}
+                minZoom={focusedOrthomosaic.minZoom}
+              />
+            )}
+            {focusedOrthomosaic && (
+              <Marker position={[focusedOrthomosaic.centerLat, focusedOrthomosaic.centerLon]}>
+                <Popup>
+                  <p className="font-medium">{focusedOrthomosaic.name}</p>
+                  <p className="text-xs text-gray-500">Orthomosaic center</p>
+                </Popup>
+              </Marker>
+            )}
             {showDroneImages &&
               filteredAssets.map(a => (
                 <Marker key={a.id} position={[a.gpsLatitude!, a.gpsLongitude!]}>

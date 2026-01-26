@@ -47,6 +47,9 @@ export default function ExportPage() {
   const [includeManual, setIncludeManual] = useState(true);
   const [includeSam3, setIncludeSam3] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
+  const [detectionsError, setDetectionsError] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   // Threshold for when to recommend/require streaming export
   const LARGE_DATASET_THRESHOLD = 1000;
 
@@ -118,35 +121,47 @@ export default function ExportPage() {
 
   const fetchProjects = async () => {
     try {
+      setProjectsError(null);
       const response = await fetch('/api/projects');
-      if (response.ok) {
-        const data = await response.json();
-        setProjects(data.projects || []);
+      if (!response.ok) {
+        throw new Error('Failed to load projects');
       }
+      const data = await response.json();
+      setProjects(data.projects || []);
     } catch (error) {
       console.error('Failed to fetch projects:', error);
+      setProjectsError(error instanceof Error ? error.message : 'Failed to load projects');
     }
   };
 
   const fetchAllDetections = async () => {
-    try {
-      const allDetections: Detection[] = [];
+    const allDetections: Detection[] = [];
+    const failures: string[] = [];
 
-      // Fetch AI detections if enabled (use all=true to bypass pagination for export)
-      if (includeAI) {
+    setDetectionsError(null);
+
+    // Fetch AI detections if enabled (use all=true to bypass pagination for export)
+    if (includeAI) {
+      try {
         const aiUrl = selectedProject !== "all"
           ? `/api/detections?projectId=${selectedProject}&all=true`
           : '/api/detections?all=true';
         const aiResponse = await fetch(aiUrl);
-        if (aiResponse.ok) {
-          const aiData = await aiResponse.json();
-          const aiDetections = aiData.map((d: any) => ({ ...d, type: 'ai' }));
-          allDetections.push(...aiDetections);
+        if (!aiResponse.ok) {
+          throw new Error(`AI detections request failed (${aiResponse.status})`);
         }
+        const aiData = await aiResponse.json();
+        const aiDetections = aiData.map((d: any) => ({ ...d, type: 'ai' }));
+        allDetections.push(...aiDetections);
+      } catch (error) {
+        console.error('Failed to fetch AI detections:', error);
+        failures.push('AI detections');
       }
+    }
 
-      // Fetch manual + optional SAM3 annotations (use all=true to bypass pagination for export)
-      if (includeManual || includeSam3) {
+    // Fetch manual + optional SAM3 annotations (use all=true to bypass pagination for export)
+    if (includeManual || includeSam3) {
+      try {
         const params = new URLSearchParams({ all: 'true' });
         if (selectedProject !== "all") {
           params.set('projectId', selectedProject);
@@ -159,19 +174,25 @@ export default function ExportPage() {
         }
 
         const manualResponse = await fetch(`/api/annotations/export?${params.toString()}`);
-        if (manualResponse.ok) {
-          const manualData = await manualResponse.json();
-          allDetections.push(...manualData);
+        if (!manualResponse.ok) {
+          throw new Error(`Manual annotations request failed (${manualResponse.status})`);
         }
+        const manualData = await manualResponse.json();
+        allDetections.push(...manualData);
+      } catch (error) {
+        console.error('Failed to fetch manual annotations:', error);
+        failures.push('manual annotations');
       }
-      
-      setDetections(allDetections);
-      
-      // Extract unique classes
-      const classes = [...new Set(allDetections.map((d: Detection) => d.className))];
-      setSelectedClasses(classes);
-    } catch (error) {
-      console.error('Failed to fetch detections:', error);
+    }
+
+    setDetections(allDetections);
+
+    // Extract unique classes
+    const classes = [...new Set(allDetections.map((d: Detection) => d.className))];
+    setSelectedClasses(classes);
+
+    if (failures.length > 0) {
+      setDetectionsError(`Some data failed to load: ${failures.join(', ')}`);
     }
   };
 
@@ -317,6 +338,7 @@ export default function ExportPage() {
 
   const exportWithStreaming = async () => {
     setLoading(true);
+    setExportError(null);
     try {
       const params = new URLSearchParams({
         format: exportFormat,
@@ -351,7 +373,8 @@ export default function ExportPage() {
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error("Streaming export failed:", error);
-      alert("Export failed. Please try again.");
+      const message = error instanceof Error ? error.message : "Export failed. Please try again.";
+      setExportError(message);
     } finally {
       setLoading(false);
     }
@@ -396,6 +419,28 @@ export default function ExportPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
+              {(projectsError || detectionsError || exportError) && (
+                <div className="space-y-2">
+                  {projectsError && (
+                    <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                      <AlertTriangle className="h-4 w-4" />
+                      <span>{projectsError}</span>
+                    </div>
+                  )}
+                  {detectionsError && (
+                    <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                      <AlertTriangle className="h-4 w-4" />
+                      <span>{detectionsError}</span>
+                    </div>
+                  )}
+                  {exportError && (
+                    <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                      <AlertTriangle className="h-4 w-4" />
+                      <span>{exportError}</span>
+                    </div>
+                  )}
+                </div>
+              )}
               {/* Project Filter */}
               <div className="space-y-2">
                 <Label htmlFor="project">Filter by Project</Label>
@@ -418,21 +463,27 @@ export default function ExportPage() {
               <div className="space-y-2">
                 <Label>Filter by Weed Type</Label>
                 <div className="grid grid-cols-2 gap-2 p-4 bg-gray-50 rounded-lg">
-                  {uniqueClasses.map(className => (
-                    <div key={className} className="flex items-center space-x-2">
-                      <Checkbox 
-                        id={className}
-                        checked={selectedClasses.includes(className)}
-                        onCheckedChange={() => toggleClass(className)}
-                      />
-                      <Label 
-                        htmlFor={className} 
-                        className="text-sm cursor-pointer"
-                      >
-                        {className}
-                      </Label>
+                  {uniqueClasses.length === 0 ? (
+                    <div className="col-span-2 text-sm text-gray-500">
+                      No detections available for the current filters.
                     </div>
-                  ))}
+                  ) : (
+                    uniqueClasses.map(className => (
+                      <div key={className} className="flex items-center space-x-2">
+                        <Checkbox 
+                          id={className}
+                          checked={selectedClasses.includes(className)}
+                          onCheckedChange={() => toggleClass(className)}
+                        />
+                        <Label 
+                          htmlFor={className} 
+                          className="text-sm cursor-pointer"
+                        >
+                          {className}
+                        </Label>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
 

@@ -21,10 +21,28 @@ export default function SignUp() {
     setError("");
 
     const formData = new FormData(e.currentTarget);
-    const email = formData.get("email") as string;
-    const password = formData.get("password") as string;
-    const confirmPassword = formData.get("confirmPassword") as string;
-    const name = formData.get("name") as string;
+    const email = String(formData.get("email") || "").trim();
+    const password = String(formData.get("password") || "");
+    const confirmPassword = String(formData.get("confirmPassword") || "");
+    const name = String(formData.get("name") || "").trim();
+
+    if (!name) {
+      setError("Name is required");
+      setLoading(false);
+      return;
+    }
+
+    if (!email) {
+      setError("Email is required");
+      setLoading(false);
+      return;
+    }
+
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters");
+      setLoading(false);
+      return;
+    }
 
     if (password !== confirmPassword) {
       setError("Passwords do not match");
