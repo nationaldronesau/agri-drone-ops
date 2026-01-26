@@ -43,14 +43,22 @@ function UploadPageContent() {
   const [availableModels, setAvailableModels] = useState<RoboflowModel[]>([]);
   const [processing, setProcessing] = useState<boolean>(false);
   const [processingError, setProcessingError] = useState<string | null>(null);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
+  const [modelsError, setModelsError] = useState<string | null>(null);
   const [uploadResponse, setUploadResponse] = useState<UploadApiResponse | null>(
     null,
   );
 
   // Fetch available models
   useEffect(() => {
+    setModelsError(null);
     fetch("/api/roboflow/models")
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error("Failed to load models");
+        }
+        return res.json();
+      })
       .then((data) => {
         if (data.models) {
           setAvailableModels(data.models);
@@ -58,12 +66,19 @@ function UploadPageContent() {
       })
       .catch((error) => {
         console.error("Failed to load models:", error);
+        setModelsError(error instanceof Error ? error.message : "Unable to load models.");
       });
   }, []);
 
   useEffect(() => {
+    setProjectsError(null);
     fetch("/api/projects")
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error("Failed to load projects");
+        }
+        return res.json();
+      })
       .then((data) => {
         const projectList = data.projects || [];
         setProjects(projectList);
@@ -75,7 +90,7 @@ function UploadPageContent() {
       })
       .catch((error) => {
         console.error("Failed to load projects:", error);
-        setProcessingError("Unable to load projects. Please try again later.");
+        setProjectsError(error instanceof Error ? error.message : "Unable to load projects.");
       });
   }, [projectParam]);
 
@@ -150,6 +165,22 @@ function UploadPageContent() {
             </CardHeader>
 
             <CardContent className="space-y-6">
+              {(projectsError || modelsError) && (
+                <div className="space-y-2">
+                  {projectsError && (
+                    <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                      <AlertCircle className="h-4 w-4" />
+                      <span>{projectsError}</span>
+                    </div>
+                  )}
+                  {modelsError && (
+                    <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                      <AlertCircle className="h-4 w-4" />
+                      <span>{modelsError}</span>
+                    </div>
+                  )}
+                </div>
+              )}
               <section className="grid gap-6 md:grid-cols-2">
                 <div className="space-y-4">
                   <div className="space-y-2">
@@ -331,7 +362,7 @@ function UploadPageContent() {
                           <ArrowRight className="ml-auto h-4 w-4 text-blue-400" />
                         </Button>
                       </Link>
-                      <Link href="/map">
+                      <Link href={selectedProject ? `/map?project=${selectedProject}` : "/map"}>
                         <Button
                           variant="outline"
                           className="h-auto w-full justify-start gap-3 border-2 border-green-200 bg-white p-4 hover:border-green-400 hover:bg-green-50"

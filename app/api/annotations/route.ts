@@ -4,6 +4,20 @@ import { pixelToGeo } from '@/lib/utils/georeferencing';
 import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
 import { parsePaginationParams, paginatedResponse } from '@/lib/utils/pagination';
 
+function isValidCoordinateArray(value: unknown): value is [number, number][] {
+  return (
+    Array.isArray(value) &&
+    value.length >= 3 &&
+    value.every(
+      (point) =>
+        Array.isArray(point) &&
+        point.length === 2 &&
+        Number.isFinite(point[0]) &&
+        Number.isFinite(point[1])
+    )
+  );
+}
+
 export async function GET(request: NextRequest) {
   try {
     // Authenticate user
@@ -135,9 +149,9 @@ export async function POST(request: NextRequest) {
       notes
     } = body;
 
-    if (!sessionId || !weedType || !coordinates || !Array.isArray(coordinates)) {
+    if (!sessionId || !weedType || !isValidCoordinateArray(coordinates)) {
       return NextResponse.json(
-        { error: 'Session ID, weed type, and coordinates are required' },
+        { error: 'Session ID, weed type, and valid coordinates are required' },
         { status: 400 }
       );
     }
@@ -208,7 +222,11 @@ export async function POST(request: NextRequest) {
     let geoConversionWarning: string | null = null;
 
     // Convert pixel coordinates to geographic coordinates if asset has GPS data
-    if (session.asset.gpsLatitude && session.asset.gpsLongitude) {
+    const hasGps =
+      Number.isFinite(session.asset.gpsLatitude) &&
+      Number.isFinite(session.asset.gpsLongitude);
+
+    if (hasGps) {
       try {
         // Convert each point in the polygon
         const geoPoints = coordinates.map(([x, y]: [number, number]) => {

@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth/config";
 import prisma from "@/lib/db";
 import { z } from "zod";
+import { getAuthenticatedUser } from "@/lib/auth/api-auth";
+import { isAuthBypassed } from "@/lib/utils/auth-bypass";
 
 const updateSchema = z.object({
   verified: z.boolean().optional(),
@@ -38,22 +38,25 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    // Skip auth check in development mode (auth is disabled)
-    const isDev = process.env.NODE_ENV === "development";
+    // Skip auth check only when explicitly bypassed
+    const bypassAuth = isAuthBypassed();
     let userId: string | null = null;
 
-    if (!isDev) {
-      const session = await getServerSession(authOptions);
-      if (!session?.user?.id) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!bypassAuth) {
+      const auth = await getAuthenticatedUser();
+      if (!auth.authenticated || !auth.userId) {
+        return NextResponse.json(
+          { error: auth.error || "Unauthorized" },
+          { status: 401 },
+        );
       }
-      userId = session.user.id;
+      userId = auth.userId;
     }
 
     const { id } = await params;
 
-    // In production, verify user has access to this detection
-    if (!isDev && userId) {
+    // When auth is enforced, verify user has access to this detection
+    if (!bypassAuth && userId) {
       const hasAccess = await checkDetectionAccess(id, userId);
       if (!hasAccess) {
         return NextResponse.json(
@@ -104,22 +107,25 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    // Skip auth check in development mode (auth is disabled)
-    const isDev = process.env.NODE_ENV === "development";
+    // Skip auth check only when explicitly bypassed
+    const bypassAuth = isAuthBypassed();
     let userId: string | null = null;
 
-    if (!isDev) {
-      const session = await getServerSession(authOptions);
-      if (!session?.user?.id) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!bypassAuth) {
+      const auth = await getAuthenticatedUser();
+      if (!auth.authenticated || !auth.userId) {
+        return NextResponse.json(
+          { error: auth.error || "Unauthorized" },
+          { status: 401 },
+        );
       }
-      userId = session.user.id;
+      userId = auth.userId;
     }
 
     const { id } = await params;
 
-    // In production, verify user has access to this detection
-    if (!isDev && userId) {
+    // When auth is enforced, verify user has access to this detection
+    if (!bypassAuth && userId) {
       const hasAccess = await checkDetectionAccess(id, userId);
       if (!hasAccess) {
         return NextResponse.json(

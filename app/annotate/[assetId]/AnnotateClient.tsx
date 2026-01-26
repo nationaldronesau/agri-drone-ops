@@ -181,7 +181,22 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const highlightId = searchParams.get("highlightId");
   const highlightSource = searchParams.get("source");
   const returnToParam = searchParams.get("returnTo");
-  const returnTo = returnToParam ? decodeURIComponent(returnToParam) : null;
+  const returnTo = useMemo(() => {
+    if (!returnToParam) return null;
+    let decoded = returnToParam;
+    try {
+      decoded = decodeURIComponent(returnToParam);
+    } catch {
+      decoded = returnToParam;
+    }
+    if (!decoded.startsWith("/") || decoded.startsWith("//")) {
+      return null;
+    }
+    return decoded;
+  }, [returnToParam]);
+
+  const fallbackHref = returnTo || "/images";
+  const backLabel = returnTo?.startsWith("/review") ? "Back to Review" : "Return to Images";
 
   const editContext = useMemo<EditContext | null>(() => {
     if (!reviewSessionId || !highlightId) return null;
@@ -678,10 +693,13 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       if (reviewSessionId) {
         params.set("reviewSessionId", reviewSessionId);
       }
+      if (returnTo) {
+        params.set("returnTo", returnTo);
+      }
       const suffix = params.toString() ? `?${params.toString()}` : "";
       router.push(`/annotate/${asset.id}${suffix}`);
     }
-  }, [projectAssets, reviewSessionId, router]);
+  }, [projectAssets, reviewSessionId, returnTo, router]);
 
   const goToPreviousImage = useCallback(() => {
     if (currentAssetIndex > 0) navigateToAsset(currentAssetIndex - 1);
@@ -1640,7 +1658,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'COMPLETED' }),
       });
-      router.push('/images');
+      router.push(fallbackHref);
     } catch (err) {
       console.error('Failed to complete session:', err);
     }
@@ -1673,8 +1691,8 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       <div className="h-screen flex items-center justify-center bg-gray-100">
         <div className="bg-white p-6 rounded-lg shadow-lg max-w-md text-center">
           <p className="text-red-600 mb-4">{error || 'Session not found'}</p>
-          <Link href="/images">
-            <Button>Return to Images</Button>
+          <Link href={fallbackHref}>
+            <Button>{backLabel}</Button>
           </Link>
         </div>
       </div>
@@ -1686,7 +1704,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       {/* Compact Header */}
       <header className="h-12 bg-white border-b border-gray-200 flex items-center justify-between px-4 flex-shrink-0">
         <div className="flex items-center gap-3">
-          <Link href="/images">
+          <Link href={fallbackHref}>
             <Button variant="ghost" size="sm" className="h-8 px-2">
               <ArrowLeft className="w-4 h-4" />
             </Button>

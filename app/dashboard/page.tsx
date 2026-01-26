@@ -1,5 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { SignOutButton } from "@/components/auth/sign-out-button";
 import { Upload, Zap, Map, Plus, Users, Settings, Folder, Download, Mountain, Sparkles, Brain } from "lucide-react";
 import Link from "next/link";
 
@@ -17,17 +18,19 @@ export default function Dashboard() {
               </span>
             </div>
             <div className="flex items-center space-x-4">
-              <Button variant="ghost" size="sm">
-                <Users className="w-4 h-4 mr-2" />
-                My Team
+              <Button asChild variant="ghost" size="sm">
+                <Link href="/projects">
+                  <Users className="w-4 h-4 mr-2" />
+                  My Team
+                </Link>
               </Button>
-              <Button variant="ghost" size="sm">
-                <Settings className="w-4 h-4 mr-2" />
-                Settings
+              <Button asChild variant="ghost" size="sm">
+                <Link href="/projects">
+                  <Settings className="w-4 h-4 mr-2" />
+                  Settings
+                </Link>
               </Button>
-              <Button variant="outline" size="sm">
-                Sign Out
-              </Button>
+              <SignOutButton />
             </div>
           </div>
         </div>
@@ -175,25 +178,31 @@ export default function Dashboard() {
               <CardContent>
                 <div className="space-y-4">
                   <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                    <div>
-                      <h3 className="font-medium text-gray-900">Farm Block A - Wattle Detection</h3>
-                      <p className="text-sm text-gray-600">1,245 images • 89 detections • 2 days ago</p>
-                    </div>
-                    <Button variant="ghost" size="sm">View</Button>
+                  <div>
+                    <h3 className="font-medium text-gray-900">Farm Block A - Wattle Detection</h3>
+                    <p className="text-sm text-gray-600">1,245 images • 89 detections • 2 days ago</p>
+                  </div>
+                    <Button asChild variant="ghost" size="sm">
+                      <Link href="/projects">View</Link>
+                    </Button>
                   </div>
                   <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
                     <div>
                       <h3 className="font-medium text-gray-900">Southern Paddock Survey</h3>
                       <p className="text-sm text-gray-600">856 images • 156 detections • 5 days ago</p>
                     </div>
-                    <Button variant="ghost" size="sm">View</Button>
+                    <Button asChild variant="ghost" size="sm">
+                      <Link href="/projects">View</Link>
+                    </Button>
                   </div>
                   <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
                     <div>
                       <h3 className="font-medium text-gray-900">Lantana Mapping Project</h3>
                       <p className="text-sm text-gray-600">2,103 images • 234 detections • 1 week ago</p>
                     </div>
-                    <Button variant="ghost" size="sm">View</Button>
+                    <Button asChild variant="ghost" size="sm">
+                      <Link href="/projects">View</Link>
+                    </Button>
                   </div>
                 </div>
               </CardContent>

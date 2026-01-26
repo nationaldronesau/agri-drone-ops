@@ -185,9 +185,11 @@ export async function POST(request: NextRequest) {
       null;
 
     for (const file of files) {
+      let bucket: string | null = null;
+      let key: string | null = null;
       try {
-        let bucket = file.bucket || null;
-        let key = file.key || null;
+        bucket = file.bucket || null;
+        key = file.key || null;
 
         if (!bucket || !key) {
           const parsedUrl = S3Service.parseS3Url(file.url);
@@ -204,14 +206,8 @@ export async function POST(request: NextRequest) {
         }
 
         // Check for duplicate files by S3 key
-        const existingAsset = await prisma.asset.findFirst({
-          where: {
-            OR: [
-              { s3Key: key },
-              // Also check by filename + project to catch re-uploads
-              { fileName: file.name, projectId }
-            ]
-          }
+        const existingAsset = await prisma.asset.findUnique({
+          where: { s3Key: key },
         });
 
         if (existingAsset) {
@@ -413,7 +409,7 @@ export async function POST(request: NextRequest) {
 
         // Run AI detection before transaction (external API call)
         let detectionResults: any[] = [];
-        if (runDetection && extractedData.gpsLatitude && extractedData.gpsLongitude) {
+        if (runDetection && isValidGPSCoordinate(extractedData.gpsLatitude, extractedData.gpsLongitude)) {
           try {
             const imageBase64 = buffer.toString("base64");
             const result = useDynamicModels
@@ -581,7 +577,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Add GPS warning to the list if coordinates are missing
-        if (!extractedData.gpsLatitude || !extractedData.gpsLongitude) {
+        if (!isValidGPSCoordinate(extractedData.gpsLatitude, extractedData.gpsLongitude)) {
           if (!fileWarnings.some(w => w.includes("GPS"))) {
             fileWarnings.push("Image is missing GPS coordinates - detection positions may be inaccurate");
           }
