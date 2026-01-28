@@ -185,7 +185,7 @@ export async function PUT(
       );
     }
     
-    let updateData: any = {
+    const updateData: any = {
       weedType,
       confidence,
       notes,
@@ -245,8 +245,8 @@ export async function PUT(
           };
           
           // Calculate center point for map display
-          const sumLat = geoPoints.reduce((sum: number, [lon, lat]: [number, number]) => sum + lat, 0);
-          const sumLon = geoPoints.reduce((sum: number, [lon, lat]: [number, number]) => sum + lon, 0);
+          const sumLat = geoPoints.reduce((sum: number, [, lat]: [number, number]) => sum + lat, 0);
+          const sumLon = geoPoints.reduce((sum: number, [lon]: [number, number]) => sum + lon, 0);
           updateData.centerLat = sumLat / geoPoints.length;
           updateData.centerLon = sumLon / geoPoints.length;
           

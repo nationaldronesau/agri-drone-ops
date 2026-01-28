@@ -231,7 +231,6 @@ async function calculateWithPhotogrammetryAndDSM(
   
   // Convert gimbal angles to radians
   const pitchRad = params.gimbalPitch * Math.PI / 180;
-  const rollRad = params.gimbalRoll * Math.PI / 180;
   const yawRad = params.gimbalYaw * Math.PI / 180;
   
   // Initial ground distance estimate (flat terrain at drone altitude - 100m)

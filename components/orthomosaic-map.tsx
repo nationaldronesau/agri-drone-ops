@@ -33,7 +33,7 @@ interface OrthomosaicMapProps {
   onControlsChange: (controls: any) => void;
 }
 
-export default function OrthomosaicMap({ orthomosaic, controls, onControlsChange }: OrthomosaicMapProps) {
+export default function OrthomosaicMap({ orthomosaic, controls }: OrthomosaicMapProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<L.Map | null>(null);
   const orthomosaicLayer = useRef<L.TileLayer | null>(null);
@@ -114,7 +114,7 @@ export default function OrthomosaicMap({ orthomosaic, controls, onControlsChange
       'Orthomosaic': orthomosaicTileLayer,
     };
 
-    const layerControl = L.control.layers(baseLayers, overlayLayers, {
+    L.control.layers(baseLayers, overlayLayers, {
       position: 'topleft',
       collapsed: !controls.showLayers,
     }).addTo(map);

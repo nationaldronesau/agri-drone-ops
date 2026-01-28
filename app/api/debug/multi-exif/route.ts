@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import exifr from 'exifr';
-// @ts-ignore
+// @ts-expect-error - missing types
 import ExifParser from 'exif-parser';
-// @ts-ignore
+// @ts-expect-error - missing types
 import fastExif from 'fast-exif';
-// @ts-ignore
+// @ts-expect-error - missing types
 import nodeExif from 'node-exif';
 import { blockInProduction } from '@/lib/utils/dev-only';
 

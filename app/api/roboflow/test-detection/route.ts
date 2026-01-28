@@ -1,7 +1,7 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { blockInProduction } from '@/lib/utils/dev-only';
 
-export async function POST(request: NextRequest) {
+export async function POST() {
   const prodBlock = blockInProduction();
   if (prodBlock) return prodBlock;
 
@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
     let data;
     try {
       data = JSON.parse(responseText);
-    } catch (parseError) {
+    } catch {
       return NextResponse.json({
         error: 'Failed to parse response',
         response: responseText

@@ -36,7 +36,6 @@ import {
   Rocket,
   Settings,
   ShieldCheck,
-  Sparkles,
   XCircle,
   PlayCircle,
 } from "lucide-react";
@@ -514,7 +513,7 @@ export default function TrainingPage() {
         duplicateImages: data.duplicateImages || 0,
         skippedReason: data.skippedReason,
       });
-    } catch (err) {
+    } catch {
       setInferencePreview(null);
     } finally {
       setInferencePreviewLoading(false);

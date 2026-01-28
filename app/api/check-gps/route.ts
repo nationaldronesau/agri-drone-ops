@@ -1,8 +1,8 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { blockInProduction } from '@/lib/utils/dev-only';
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   const prodBlock = blockInProduction();
   if (prodBlock) return prodBlock;
 

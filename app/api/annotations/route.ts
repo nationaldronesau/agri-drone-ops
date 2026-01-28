@@ -261,8 +261,8 @@ export async function POST(request: NextRequest) {
         };
 
         // Calculate center point for map display
-        const sumLat = geoPoints.reduce((sum: number, [lon, lat]: [number, number]) => sum + lat, 0);
-        const sumLon = geoPoints.reduce((sum: number, [lon, lat]: [number, number]) => sum + lon, 0);
+        const sumLat = geoPoints.reduce((sum: number, [, lat]: [number, number]) => sum + lat, 0);
+        const sumLon = geoPoints.reduce((sum: number, [lon]: [number, number]) => sum + lon, 0);
         centerLat = sumLat / geoPoints.length;
         centerLon = sumLon / geoPoints.length;
 

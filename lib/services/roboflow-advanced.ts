@@ -1,6 +1,6 @@
 // Advanced Roboflow Service with Large Image Handling
-import { Detection, RoboflowResponse } from '@/types/roboflow';
-import { roboflowService, ModelType, ROBOFLOW_MODELS } from './roboflow';
+import { Detection } from '@/types/roboflow';
+import { roboflowService, ModelType } from './roboflow';
 
 interface ImageTile {
   canvas: HTMLCanvasElement;
@@ -27,8 +27,7 @@ export class AdvancedRoboflowService {
    */
   async processLargeImage(
     imageFile: File | Buffer,
-    modelTypes: ModelType[],
-    maxDimension: number = 4000
+    modelTypes: ModelType[]
   ): Promise<Detection[]> {
     
     // Convert to image element for processing

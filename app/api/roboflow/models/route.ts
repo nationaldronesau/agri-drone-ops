@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
 
 const ROBOFLOW_API_KEY = process.env.ROBOFLOW_API_KEY;
@@ -77,7 +77,7 @@ interface RoboflowProjectResponse {
  * GET /api/roboflow/models
  * Fetches all deployed models from the Roboflow workspace
  */
-export async function GET(request: NextRequest) {
+export async function GET() {
   // SECURITY: Add authentication check (fixes #101)
   const auth = await getAuthenticatedUser();
   if (!auth.authenticated) {

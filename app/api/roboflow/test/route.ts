@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { blockInProduction } from '@/lib/utils/dev-only';
 
 /**
@@ -11,7 +11,7 @@ async function fetchRoboflowTest(baseUrl: string, apiKey: string): Promise<Respo
   return fetch(urlWithKey);
 }
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   const prodBlock = blockInProduction();
   if (prodBlock) return prodBlock;
 

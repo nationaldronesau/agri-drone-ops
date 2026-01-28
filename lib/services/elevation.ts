@@ -139,8 +139,6 @@ class ElevationService {
   private async getAustralianElevationFallback(latitude: number, longitude: number): Promise<ElevationPoint | null> {
     try {
       // MapQuest Open Elevation service (also global coverage)
-      const url = `https://open.mapquestapi.com/elevation/v1/profile?key=KEY&shapeFormat=raw&latLngCollection=${latitude},${longitude}`;
-      
       // Note: This requires an API key, so we'll just try and fall back gracefully
       const response = await fetch(`https://api.opentopodata.org/v1/srtm30m?locations=${latitude},${longitude}`, {
         headers: {

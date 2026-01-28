@@ -63,7 +63,7 @@ export async function POST(
       );
     }
 
-    const [_, updatedModel] = await prisma.$transaction([
+    const [, updatedModel] = await prisma.$transaction([
       prisma.project.update({
         where: { id: projectId },
         data: { activeModelId: model.id },

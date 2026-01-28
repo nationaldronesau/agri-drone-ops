@@ -52,8 +52,6 @@ export interface GeoCoordinates {
   lon: number;
 }
 
-const EARTH_RADIUS = 6371000; // meters
-
 export interface GeoValidationResult {
   valid: boolean;
   error?: string;
@@ -204,7 +202,6 @@ export function pixelToGeo(
   // Apply gimbal rotations (simplified)
   const pitch = params.gimbalPitch * Math.PI / 180;
   const yaw = params.gimbalYaw * Math.PI / 180;
-  const roll = params.gimbalRoll * Math.PI / 180;
   
   // Calculate ground distance
   const groundDistance = params.altitude / Math.cos(pitch + rayAngleY);

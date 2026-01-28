@@ -1156,11 +1156,11 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
 
     const MAX_STATUS_ERRORS = 5;
     let cancelled = false;
-    let intervalId: ReturnType<typeof setInterval> | undefined;
+    const intervalIdRef = { current: undefined as ReturnType<typeof setInterval> | undefined };
     let failureCount = 0;
 
     const stopPolling = (message: string) => {
-      if (intervalId) clearInterval(intervalId);
+      if (intervalIdRef.current) clearInterval(intervalIdRef.current);
       if (!cancelled) {
         setSam3Error(message);
       }
@@ -1189,7 +1189,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         setBatchSummary(data.summary || null);
 
         if (["COMPLETED", "FAILED", "CANCELLED"].includes(data.batchJob.status)) {
-          if (intervalId) clearInterval(intervalId);
+          if (intervalIdRef.current) clearInterval(intervalIdRef.current);
         }
       } catch (err) {
         console.error("Failed to fetch batch job status:", err);
@@ -1201,11 +1201,11 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     };
 
     fetchStatus();
-    intervalId = setInterval(fetchStatus, 3000);
+    intervalIdRef.current = setInterval(fetchStatus, 3000);
 
     return () => {
       cancelled = true;
-      if (intervalId) clearInterval(intervalId);
+      if (intervalIdRef.current) clearInterval(intervalIdRef.current);
     };
   }, [batchJobId]);
 

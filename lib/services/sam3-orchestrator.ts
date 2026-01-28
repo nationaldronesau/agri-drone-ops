@@ -120,6 +120,7 @@ class SAM3Orchestrator {
    * Wait for AWS to be ready (blocking)
    */
   async waitForAWSReady(_timeoutMs: number = 180000): Promise<boolean> {
+    void _timeoutMs;
     if (!awsSam3Service.isConfigured()) return false;
     if (awsSam3Service.isReady()) return true;
 

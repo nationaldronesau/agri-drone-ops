@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Download, FileText, Map, Filter, CheckCircle, AlertTriangle, Database } from "lucide-react";
+import { ArrowLeft, Download, FileText, Map, AlertTriangle, Database } from "lucide-react";
 import Link from "next/link";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -53,61 +53,12 @@ export default function ExportPage() {
   // Threshold for when to recommend/require streaming export
   const LARGE_DATASET_THRESHOLD = 1000;
 
-  // Helper function to escape CSV fields (RFC 4180 compliant)
-  const escapeCSV = (field: any): string => {
-    const str = String(field ?? '');
-    if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
-      return `"${str.replace(/"/g, '""')}"`;
-    }
-    return str;
-  };
-
-  // Helper function to escape XML special characters
-  const escapeXML = (str: any): string => {
-    return String(str ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  };
-
   // Helper function to validate coordinates
   const isValidCoordinate = (lat: number | null | undefined, lon: number | null | undefined): boolean => {
     if (lat == null || lon == null) return false;
     return Number.isFinite(lat) && Number.isFinite(lon) &&
            lat >= -90 && lat <= 90 &&
            lon >= -180 && lon <= 180;
-  };
-
-  // Helper function to validate polygon coordinate arrays
-  // Returns true if all coordinates in the polygon are valid
-  const isValidPolygon = (coords: Array<[number, number]> | undefined): boolean => {
-    if (!coords || !Array.isArray(coords) || coords.length < 3) return false;
-    return coords.every(coord =>
-      Array.isArray(coord) &&
-      coord.length >= 2 &&
-      isValidCoordinate(coord[1], coord[0]) // coords are [lon, lat]
-    );
-  };
-
-  // Helper to filter only valid detections for export
-  const getValidDetectionsForExport = (detections: Detection[]): Detection[] => {
-    return detections.filter(d => {
-      // Must have valid center coordinates for points
-      if (!isValidCoordinate(d.centerLat, d.centerLon)) {
-        console.warn(`Skipping detection ${d.id} - invalid center coordinates`);
-        return false;
-      }
-      // If manual/SAM3 annotation with polygon, validate polygon too
-      if ((d.type === 'manual' || d.type === 'sam3') && d.metadata?.polygonCoordinates) {
-        if (!isValidPolygon(d.metadata.polygonCoordinates)) {
-          console.warn(`Skipping detection ${d.id} - invalid polygon coordinates`);
-          return false;
-        }
-      }
-      return true;
-    });
   };
 
   useEffect(() => {
@@ -209,127 +160,6 @@ export default function ExportPage() {
         ? prev.filter(c => c !== className)
         : [...prev, className]
     );
-  };
-
-  const exportAsCSV = () => {
-    // Filter out detections with invalid coordinates
-    const validDetections = getValidDetectionsForExport(filteredDetections);
-
-    const headers = includeMetadata
-      ? ['ID', 'Weed Type', 'Latitude', 'Longitude', 'Confidence', 'Type', 'Altitude (m)', 'Image File', 'Project', 'Location', 'Detection Date']
-      : ['Weed Type', 'Latitude', 'Longitude'];
-
-    const rows = validDetections.map(d => {
-      const baseData = [
-        escapeCSV(d.className),
-        escapeCSV(d.centerLat?.toFixed(8)),
-        escapeCSV(d.centerLon?.toFixed(8))
-      ];
-
-      if (includeMetadata) {
-        return [
-          escapeCSV(d.id),
-          ...baseData,
-          escapeCSV((d.confidence * 100).toFixed(1) + '%'),
-          escapeCSV(d.type === 'manual' ? 'Manual' : d.type === 'sam3' ? 'SAM3' : 'AI'),
-          escapeCSV(d.asset.altitude?.toFixed(1) || 'N/A'),
-          escapeCSV(d.asset.fileName),
-          escapeCSV(d.asset.project.name),
-          escapeCSV(d.asset.project.location || 'N/A'),
-          escapeCSV(new Date(d.createdAt).toLocaleDateString())
-        ];
-      }
-      return baseData;
-    });
-
-    const csv = [headers.map(escapeCSV), ...rows].map(row => row.join(',')).join('\n');
-
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `weed-detections-${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const exportAsKML = () => {
-    // Filter out detections with invalid coordinates
-    const validDetections = getValidDetectionsForExport(filteredDetections);
-
-    const kml = `<?xml version="1.0" encoding="UTF-8"?>
-<kml xmlns="http://www.opengis.net/kml/2.2">
-  <Document>
-    <name>${escapeXML('Weed Detections - ' + new Date().toLocaleDateString())}</name>
-    <description>${escapeXML('Exported from AgriDrone Ops')}</description>
-    ${[...new Set(validDetections.map(d => d.className))].map(className => {
-      const color = validDetections.find(d => d.className === className)?.metadata?.color || '#FF0000';
-      return `
-    <Style id="${escapeXML(className)}">
-      <IconStyle>
-        <color>${kmlColor(color)}</color>
-        <scale>1.0</scale>
-        <Icon>
-          <href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href>
-        </Icon>
-      </IconStyle>
-      <PolyStyle>
-        <color>7F${kmlColor(color).substring(2)}</color>
-        <fill>1</fill>
-        <outline>1</outline>
-      </PolyStyle>
-      <LineStyle>
-        <color>${kmlColor(color)}</color>
-        <width>2</width>
-      </LineStyle>
-    </Style>`;
-    }).join('')}
-    ${validDetections.map(d => `
-    <Placemark>
-      <name>${escapeXML(d.className + ' (' + (d.type === 'manual' ? 'Manual' : d.type === 'sam3' ? 'SAM3' : 'AI') + ')')}</name>
-      <description>
-        ${escapeXML('Type: ' + (d.type === 'manual' ? 'Manual Annotation' : d.type === 'sam3' ? 'SAM3 Pending' : 'AI Detection'))}
-        ${escapeXML('Confidence: ' + (d.confidence * 100).toFixed(1) + '%')}
-        ${escapeXML('Image: ' + d.asset.fileName)}
-        ${escapeXML('Project: ' + d.asset.project.name)}
-        ${d.asset.altitude ? escapeXML('Altitude: ' + d.asset.altitude.toFixed(1) + 'm') : ''}
-        ${d.metadata?.notes ? escapeXML('Notes: ' + d.metadata.notes) : ''}
-      </description>
-      <styleUrl>#${escapeXML(d.className)}</styleUrl>
-      ${(d.type === 'manual' || d.type === 'sam3') && d.metadata?.polygonCoordinates && d.metadata.polygonCoordinates.length > 0 ? `
-      <Polygon>
-        <outerBoundaryIs>
-          <LinearRing>
-            <coordinates>
-              ${d.metadata.polygonCoordinates.map(coord => `${coord[0]},${coord[1]},0`).join(' ')}
-              ${d.metadata.polygonCoordinates[0][0]},${d.metadata.polygonCoordinates[0][1]},0
-            </coordinates>
-          </LinearRing>
-        </outerBoundaryIs>
-      </Polygon>` : `
-      <Point>
-        <coordinates>${d.centerLon},${d.centerLat},0</coordinates>
-      </Point>`}
-    </Placemark>`).join('')}
-  </Document>
-</kml>`;
-
-    const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `weed-detections-${new Date().toISOString().split('T')[0]}.kml`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const kmlColor = (hexColor: string): string => {
-    // Convert hex to KML color format (aabbggrr)
-    const hex = hexColor.replace('#', '');
-    const r = hex.substring(0, 2);
-    const g = hex.substring(2, 4);
-    const b = hex.substring(4, 6);
-    return `ff${b}${g}${r}`;
   };
 
   const handleExport = async () => {
