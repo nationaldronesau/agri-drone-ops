@@ -285,7 +285,7 @@ export async function GET(
       ...aiDetections.map((detection) => {
         const asset = detection.asset;
         const validation = validateGeoParams(asset);
-        let centerBox = parseCenterBox(detection.boundingBox);
+        const centerBox = parseCenterBox(detection.boundingBox);
         const cornerBox = centerBox ? centerBoxToCorner(centerBox) : undefined;
 
         return {

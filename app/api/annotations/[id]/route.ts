@@ -185,7 +185,7 @@ export async function PUT(
       );
     }
     
-    let updateData: any = {
+    const updateData: any = {
       weedType,
       confidence,
       notes,
