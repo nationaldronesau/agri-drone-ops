@@ -1,8 +1,8 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { roboflowService } from '@/lib/services/roboflow';
 import { blockInProduction } from '@/lib/utils/dev-only';
 
-export async function POST(request: NextRequest) {
+export async function POST() {
   const prodBlock = blockInProduction();
   if (prodBlock) return prodBlock;
 

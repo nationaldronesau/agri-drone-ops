@@ -1,5 +1,5 @@
 // Roboflow API Service for Weed Detection
-import { Detection, RoboflowResponse } from '@/types/roboflow';
+import { Detection } from '@/types/roboflow';
 import PQueue from 'p-queue';
 
 // Roboflow workspace from environment variable

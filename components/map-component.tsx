@@ -112,15 +112,15 @@ export default function MapComponent() {
   const [error, setError] = useState<string | null>(null);
   const [mapCenter, setMapCenter] = useState<[number, number]>([-27.4698, 153.0251]); // Brisbane default
   const [satelliteLayer, setSatelliteLayer] = useState(true);
-  const [showDroneImages, setShowDroneImages] = useState(true);
-  const [showDetections, setShowDetections] = useState(true);
+  const [showDroneImages] = useState(true);
+  const [showDetections] = useState(true);
   const [focusedOrthomosaic, setFocusedOrthomosaic] = useState<Orthomosaic | null>(null);
   const [orthomosaicError, setOrthomosaicError] = useState<string | null>(null);
 
   // Filters
-  const [selectedLocation, setSelectedLocation] = useState<string>("all");
+  const [selectedLocation] = useState<string>("all");
   const [selectedProject, setSelectedProject] = useState<string>("all");
-  const [selectedPurpose, setSelectedPurpose] = useState<string>("all");
+  const [selectedPurpose] = useState<string>("all");
 
   useEffect(() => {
     fetchAssets();

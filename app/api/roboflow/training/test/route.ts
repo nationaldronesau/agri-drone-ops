@@ -1,8 +1,8 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { roboflowTrainingService } from "@/lib/services/roboflow-training";
 import { blockInProduction } from "@/lib/utils/dev-only";
 
-export async function GET(_request: NextRequest) {
+export async function GET() {
   const prodBlock = blockInProduction();
   if (prodBlock) return prodBlock;
 

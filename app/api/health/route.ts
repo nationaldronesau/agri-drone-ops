@@ -12,7 +12,7 @@ export async function GET() {
       service: "agridrone-ops",
       version: process.env.npm_package_version || "1.0.0",
     });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       {
         status: "unhealthy",

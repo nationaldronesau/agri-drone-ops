@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
         reviveValues: false,
         mergeOutput: false
       });
-    } catch (e) {
+    } catch {
       console.log('XMP raw parsing failed');
     }
     
@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
         sanitize: false,
         mergeOutput: false
       });
-    } catch (e) {
+    } catch {
       console.log('Failed to get raw EXIF');
     }
     
@@ -86,7 +86,7 @@ export async function POST(request: NextRequest) {
         mergeOutput: false,
         translateKeys: false
       });
-    } catch (e) {
+    } catch {
       console.log('No XMP data found');
     }
     
@@ -97,7 +97,7 @@ export async function POST(request: NextRequest) {
         makerNote: true,
         mergeOutput: false
       });
-    } catch (e) {
+    } catch {
       console.log('No maker notes found');
     }
 
@@ -144,7 +144,7 @@ export async function POST(request: NextRequest) {
       // Search for potential coordinate values (numbers between -180 and 180)
       potentialCoordinates: Object.entries(fullMetadata || {}).reduce((acc, [segment, data]) => {
         if (typeof data === 'object' && data !== null) {
-          const coords = Object.entries(data).filter(([key, value]) => 
+          const coords = Object.entries(data).filter(([, value]) => 
             typeof value === 'number' && 
             value >= -180 && value <= 180 && 
             Math.abs(value) > 1 // Exclude small numbers like 0, 1, etc.

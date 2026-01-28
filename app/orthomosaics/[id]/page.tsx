@@ -7,7 +7,7 @@ import dynamic from 'next/dynamic';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, MapPin, Calendar, Ruler, Mountain, Layers, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+import { ArrowLeft, MapPin, Calendar, Ruler, Mountain, Layers, ZoomIn, RotateCcw } from 'lucide-react';
 import { formatBytes, formatDate } from '@/lib/utils';
 
 // Dynamically import the map component to avoid SSR issues

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import { precisionPixelToGeo, extractPrecisionParams, debugGeoreferencing } from '@/lib/utils/precision-georeferencing';
+import { precisionPixelToGeo, extractPrecisionParams } from '@/lib/utils/precision-georeferencing';
 import { blockInProduction } from '@/lib/utils/dev-only';
 
 export async function GET(request: NextRequest) {

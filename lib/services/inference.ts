@@ -253,7 +253,7 @@ export async function processInferenceJob(options: {
           try {
             const geoResult = pixelToGeo(geoParams, { x: bbox.x, y: bbox.y });
             geoCoords = geoResult instanceof Promise ? await geoResult : geoResult;
-          } catch (geoError) {
+          } catch {
             errors.push(`Asset ${asset.id}: Georeference failed`);
             continue;
           }

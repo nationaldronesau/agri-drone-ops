@@ -6,7 +6,6 @@ import {
   BatchUploadResponse,
   DatasetStats,
   TrainingJob,
-  TrainingOptions,
   TrainingStatus,
   UploadResponse,
 } from "@/types/roboflow";
@@ -381,10 +380,7 @@ export class RoboflowTrainingService {
     return { totalImages, byClass };
   }
 
-  async triggerTraining(
-    projectId: string,
-    _options?: TrainingOptions,
-  ): Promise<TrainingJob> {
+  async triggerTraining(projectId: string): Promise<TrainingJob> {
     // Placeholder for future implementation
     console.warn("triggerTraining called but not implemented", { projectId });
     return { id: projectId, status: "queued" };

@@ -1,9 +1,6 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string; z: string; x: string; y: string } }
-) {
+export async function GET() {
   // For now, return a transparent tile as placeholder
   // In a real implementation, this would serve actual tile images
   
