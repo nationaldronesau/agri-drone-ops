@@ -18,6 +18,7 @@
     "worker:inference:dev": "tsx -r tsconfig-paths/register --env-file=.env workers/inference-worker.ts",
     "worker:yolo-inference": "tsx -r tsconfig-paths/register workers/yolo-inference-worker.ts",
     "worker:yolo-inference:dev": "tsx -r tsconfig-paths/register --env-file=.env workers/yolo-inference-worker.ts",
+    "migrate:model-weights": "tsx -r tsconfig-paths/register scripts/migrate-model-weights.ts",
     "seed:verified": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed-verified.ts",
     "docker:build": "docker build -t agridrone-ops .",
     "docker:dev": "docker-compose -f docker-compose.yml -f docker-compose.dev.yml up",
