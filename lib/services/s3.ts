@@ -493,10 +493,10 @@ export class S3Service {
   /**
    * Check if an object exists in S3
    */
-  static async objectExists(key: string): Promise<boolean> {
+  static async objectExists(key: string, bucket: string = this.bucketName): Promise<boolean> {
     try {
       const command = new HeadObjectCommand({
-        Bucket: BUCKET_NAME,
+        Bucket: bucket,
         Key: key,
       });
 
@@ -614,12 +614,16 @@ export class S3Service {
   /**
    * Copy an object within S3
    */
-  static async copyObject(sourceKey: string, destinationKey: string): Promise<void> {
+  static async copyObject(
+    sourceKey: string,
+    destinationKey: string,
+    bucket: string = this.bucketName
+  ): Promise<void> {
     try {
       const command = new CopyObjectCommand({
-        Bucket: BUCKET_NAME,
+        Bucket: bucket,
         Key: destinationKey,
-        CopySource: `${BUCKET_NAME}/${sourceKey}`,
+        CopySource: `${bucket}/${sourceKey}`,
       });
 
       await s3Client.send(command);

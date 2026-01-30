@@ -10,8 +10,53 @@ import { checkRedisConnection } from '@/lib/queue/redis';
 import { enqueueInferenceJob } from '@/lib/queue/inference-queue';
 import { processInferenceJob } from '@/lib/services/inference';
 import { formatModelId } from '@/lib/services/yolo';
+import { S3Service } from '@/lib/services/s3';
 
 const MAX_SYNC_IMAGES = 50;
+
+function parseS3Path(path: string): { bucket: string; keyPrefix: string } | null {
+  if (!path.startsWith('s3://')) return null;
+  const withoutScheme = path.replace('s3://', '');
+  const [bucket, ...rest] = withoutScheme.split('/');
+  if (!bucket) return null;
+  return { bucket, keyPrefix: rest.join('/') };
+}
+
+async function ensureCanonicalWeights(model: {
+  name: string;
+  version: number;
+  s3Path: string;
+  s3Bucket?: string | null;
+  weightsFile?: string | null;
+}): Promise<{ ok: boolean; error?: string }> {
+  const parsed = parseS3Path(model.s3Path);
+  if (!parsed?.keyPrefix) {
+    return { ok: true };
+  }
+
+  const weightsFile = model.weightsFile || 'best.pt';
+  const sourceKey = parsed.keyPrefix.endsWith('.pt')
+    ? parsed.keyPrefix
+    : `${parsed.keyPrefix.replace(/\/$/, '')}/${weightsFile}`;
+
+  const canonicalPrefix = `models/${model.name}/v${model.version}`;
+  const canonicalKey = `${canonicalPrefix}/${weightsFile}`;
+  const bucket = model.s3Bucket || parsed.bucket || S3Service.bucketName;
+
+  if (sourceKey === canonicalKey) {
+    return { ok: true };
+  }
+
+  try {
+    await S3Service.copyObject(sourceKey, canonicalKey, bucket);
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Failed to prepare model weights',
+    };
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -63,6 +108,9 @@ export async function POST(request: NextRequest) {
         version: true,
         status: true,
         teamId: true,
+        s3Path: true,
+        s3Bucket: true,
+        weightsFile: true,
       },
     });
 
@@ -161,6 +209,17 @@ export async function POST(request: NextRequest) {
         },
         { status: 400 }
       );
+    }
+
+    if (!preview) {
+      const weightsReady = await ensureCanonicalWeights(model);
+      if (!weightsReady.ok) {
+        console.error('Failed to prepare model weights:', weightsReady.error);
+        return NextResponse.json(
+          { error: 'Failed to prepare model weights' },
+          { status: 502 }
+        );
+      }
     }
 
     const modelName = formatModelId(model.name, model.version);
