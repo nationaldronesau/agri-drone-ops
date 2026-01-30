@@ -64,9 +64,12 @@ COPY --from=builder /app/lib ./lib
 # Copy tsconfig.json so tsconfig-paths can resolve @/* imports
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
 
-# Copy entrypoint script
-COPY ./scripts/docker-entrypoint.sh ./scripts/
-RUN chmod +x ./scripts/docker-entrypoint.sh
+# Copy all scripts
+COPY ./scripts/ ./scripts/
+
+# Ensure all scripts are executable
+RUN chmod -R +x ./scripts
+
 
 # Ensure writable directories exist
 RUN mkdir -p .next && chown -R nextjs:nodejs .next
