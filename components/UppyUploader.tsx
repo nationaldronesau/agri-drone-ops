@@ -379,8 +379,6 @@ export function UppyUploader({
       uppy.close();
       uppyRef.current = null;
     };
-  // We intentionally initialize Uppy once and rely on refs for latest props.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return <div ref={containerRef} data-testid="uppy-dashboard" />;

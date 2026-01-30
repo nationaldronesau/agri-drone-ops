@@ -137,6 +137,20 @@ export async function GET(request: NextRequest) {
     const includeAI = searchParams.get('includeAI') !== 'false';
     const includeManual = searchParams.get('includeManual') !== 'false';
     const classFilter = searchParams.get('classes')?.split(',').filter(Boolean) || [];
+    // GEO_DEBUG=1 logs a single JSON payload per request; optional GEO_DEBUG_ASSET_ID/GEO_DEBUG_ITEM_ID filter it.
+    const geoDebugEnabled = process.env.GEO_DEBUG === '1';
+    const geoDebugAssetFilter = process.env.GEO_DEBUG_ASSET_ID;
+    const geoDebugItemFilter = process.env.GEO_DEBUG_ITEM_ID;
+    let geoDebugLogged = false;
+    const logGeoDebugOnce = (payload: Record<string, unknown>) => {
+      if (!geoDebugEnabled || geoDebugLogged) return;
+      const assetId = payload.assetId;
+      const itemId = payload.itemId;
+      if (geoDebugAssetFilter && assetId !== geoDebugAssetFilter) return;
+      if (geoDebugItemFilter && itemId !== geoDebugItemFilter) return;
+      geoDebugLogged = true;
+      console.log(JSON.stringify(payload));
+    };
 
     if (!['csv', 'kml', 'shapefile'].includes(format)) {
       return NextResponse.json({ error: 'Invalid format. Use csv, kml, or shapefile.' }, { status: 400 });
@@ -278,6 +292,7 @@ export async function GET(request: NextRequest) {
       }
 
       let centerBox = parseCenterBox(detection.boundingBox);
+      const preRescaleBox = centerBox ? { ...centerBox } : null;
       let meta = detection.preprocessingMeta as YOLOPreprocessingMeta | null;
       if (meta && typeof meta === 'string') {
         try {
@@ -286,6 +301,7 @@ export async function GET(request: NextRequest) {
           meta = null;
         }
       }
+      const didRescale = Boolean(centerBox && detection.type === 'YOLO_LOCAL' && meta);
       if (centerBox && detection.type === 'YOLO_LOCAL' && meta) {
         centerBox = rescaleToOriginalWithMeta(centerBox, meta);
       }
@@ -300,6 +316,25 @@ export async function GET(request: NextRequest) {
         continue;
       }
 
+      logGeoDebugOnce({
+        format,
+        itemKind: 'detection',
+        itemId: detection.id,
+        assetId: asset.id,
+        fileName: asset.fileName,
+        pixel: { x: centerBox.x, y: centerBox.y },
+        bboxPreRescale: preRescaleBox,
+        bboxPostRescale: didRescale ? { ...centerBox } : null,
+        imageWidth: asset.imageWidth,
+        imageHeight: asset.imageHeight,
+        gpsLatitude: asset.gpsLatitude,
+        gpsLongitude: asset.gpsLongitude,
+        altitude: asset.altitude,
+        gimbalPitch: asset.gimbalPitch,
+        gimbalRoll: asset.gimbalRoll,
+        gimbalYaw: asset.gimbalYaw,
+        geoMethod: 'pixelToGeoWithDSM',
+      });
       const geo = await pixelToGeoWithDSM(asset, { x: centerBox.x, y: centerBox.y });
       if (!geo) {
         skippedItems.push({
@@ -352,6 +387,25 @@ export async function GET(request: NextRequest) {
         continue;
       }
 
+      logGeoDebugOnce({
+        format,
+        itemKind: 'annotation',
+        itemId: annotation.id,
+        assetId: asset.id,
+        fileName: asset.fileName,
+        pixel: { x: centerBox.x, y: centerBox.y },
+        bboxPreRescale: { ...centerBox },
+        bboxPostRescale: null,
+        imageWidth: asset.imageWidth,
+        imageHeight: asset.imageHeight,
+        gpsLatitude: asset.gpsLatitude,
+        gpsLongitude: asset.gpsLongitude,
+        altitude: asset.altitude,
+        gimbalPitch: asset.gimbalPitch,
+        gimbalRoll: asset.gimbalRoll,
+        gimbalYaw: asset.gimbalYaw,
+        geoMethod: 'pixelToGeoWithDSM',
+      });
       const geo = await pixelToGeoWithDSM(asset, { x: centerBox.x, y: centerBox.y });
       if (!geo) {
         skippedItems.push({

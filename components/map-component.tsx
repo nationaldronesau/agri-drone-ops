@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
 import { Button } from "@/components/ui/button";
+import Image from "next/image";
 import { ArrowLeft, Layers, AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -12,7 +13,7 @@ import L from "leaflet";
 
 // Fix leaflet marker icons
 if (typeof window !== "undefined") {
-  delete (L.Icon.Default.prototype as any)._getIconUrl;
+  delete (L.Icon.Default.prototype as { _getIconUrl?: unknown })._getIconUrl;
   L.Icon.Default.mergeOptions({
     iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png",
     iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png",
@@ -47,7 +48,7 @@ interface Detection {
   confidence: number;
   centerLat: number | null;
   centerLon: number | null;
-  metadata: any;
+  metadata: Record<string, unknown> | null;
   asset: {
     id: string;
     fileName: string;
@@ -62,12 +63,19 @@ interface Orthomosaic {
   id: string;
   name: string;
   projectId: string;
-  bounds: any;
+  bounds: {
+    type?: string;
+    coordinates?: Array<Array<[number, number]>>;
+  };
   centerLat: number;
   centerLon: number;
   minZoom: number;
   maxZoom: number;
 }
+
+type Cluster = {
+  getChildCount: () => number;
+};
 
 // Create custom detection marker icon
 const createDetectionIcon = (color: string) => {
@@ -350,7 +358,16 @@ export default function MapComponent() {
                 <Marker key={a.id} position={[a.gpsLatitude!, a.gpsLongitude!]}>
                   <Popup>
                     <div>
-                      <img src={a.storageUrl} alt={a.fileName} className="w-full h-24 object-cover" />
+                      <div className="relative w-full h-24">
+                        <Image
+                          src={a.storageUrl}
+                          alt={a.fileName}
+                          fill
+                          className="object-cover"
+                          sizes="256px"
+                          unoptimized
+                        />
+                      </div>
                       <p>{a.project.name}</p>
                     </div>
                   </Popup>
@@ -363,7 +380,7 @@ export default function MapComponent() {
                 maxClusterRadius={50}
                 spiderfyOnMaxZoom={true}
                 showCoverageOnHover={false}
-                iconCreateFunction={(cluster: any) => {
+                iconCreateFunction={(cluster: Cluster) => {
                   const count = cluster.getChildCount();
                   // Color based on cluster size
                   let size = 'small';

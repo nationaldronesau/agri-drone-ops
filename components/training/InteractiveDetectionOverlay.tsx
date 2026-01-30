@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Image from 'next/image';
 import { Check, X } from 'lucide-react';
 
 interface Detection {
@@ -81,6 +82,8 @@ export function InteractiveDetectionOverlay({
   const scale = containerSize.width > 0 ? containerSize.width / actualImageSize.width : 1;
   const scaledWidth = actualImageSize.width * scale;
   const scaledHeight = actualImageSize.height * scale;
+  const renderWidth = Math.max(1, Math.round(scaledWidth));
+  const renderHeight = Math.max(1, Math.round(scaledHeight));
 
   // Convert pixel coordinates to scaled coordinates
   const scaleBox = (bbox: number[]) => {
@@ -164,13 +167,16 @@ export function InteractiveDetectionOverlay({
         }}
       >
         {/* Base Image */}
-        <img
+        <Image
           src={imageUrl}
           alt="Detection preview"
+          width={renderWidth}
+          height={renderHeight}
           className="block"
-          style={{ width: scaledWidth, height: scaledHeight }}
+          style={{ width: renderWidth, height: renderHeight }}
           onLoad={handleImageLoad}
           draggable={false}
+          unoptimized
         />
 
         {/* SVG Overlay for Detections */}

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type { Prisma } from '@prisma/client';
 import prisma from '@/lib/db';
 import { pixelToGeo } from '@/lib/utils/georeferencing';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
@@ -185,7 +186,7 @@ export async function PUT(
       );
     }
     
-    const updateData: any = {
+    const updateData: Prisma.ManualAnnotationUpdateInput = {
       weedType,
       confidence,
       notes,

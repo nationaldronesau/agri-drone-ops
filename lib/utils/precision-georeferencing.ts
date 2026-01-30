@@ -284,35 +284,36 @@ async function calculateWithPhotogrammetryAndDSM(
 /**
  * Extract precision georeferencing parameters from DJI metadata
  */
-export function extractPrecisionParams(metadata: any): PrecisionGeoreferenceParams {
+export function extractPrecisionParams(metadata: Record<string, unknown>): PrecisionGeoreferenceParams {
+  const meta = metadata as Record<string, number | null | undefined>;
   return {
     // Image parameters
-    imageWidth: metadata.ExifImageWidth || metadata.imageWidth || 5280,
-    imageHeight: metadata.ExifImageHeight || metadata.imageHeight || 3956,
+    imageWidth: (meta.ExifImageWidth || meta.imageWidth || 5280) as number,
+    imageHeight: (meta.ExifImageHeight || meta.imageHeight || 3956) as number,
     
     // Calibrated camera parameters
-    calibratedFocalLength: metadata.CalibratedFocalLength || 3725.151611,
-    opticalCenterX: metadata.CalibratedOpticalCenterX || 2640,
-    opticalCenterY: metadata.CalibratedOpticalCenterY || 1978,
+    calibratedFocalLength: (meta.CalibratedFocalLength || 3725.151611) as number,
+    opticalCenterX: (meta.CalibratedOpticalCenterX || 2640) as number,
+    opticalCenterY: (meta.CalibratedOpticalCenterY || 1978) as number,
     
     // Drone position (RTK GPS)
-    droneLatitude: metadata.GpsLatitude || metadata.latitude,
-    droneLongitude: metadata.GpsLongitude || metadata.longitude,
-    droneAltitude: metadata.AbsoluteAltitude || metadata.altitude,
+    droneLatitude: (meta.GpsLatitude || meta.latitude) as number,
+    droneLongitude: (meta.GpsLongitude || meta.longitude) as number,
+    droneAltitude: (meta.AbsoluteAltitude || meta.altitude) as number,
     
     // Gimbal orientation
-    gimbalPitch: metadata.GimbalPitchDegree || -90,
-    gimbalRoll: metadata.GimbalRollDegree || 0,
-    gimbalYaw: metadata.GimbalYawDegree || 0,
+    gimbalPitch: (meta.GimbalPitchDegree || -90) as number,
+    gimbalRoll: (meta.GimbalRollDegree || 0) as number,
+    gimbalYaw: (meta.GimbalYawDegree || 0) as number,
     
     // Laser rangefinder data
-    lrfTargetDistance: metadata.LRFTargetDistance,
-    lrfTargetLatitude: metadata.LRFTargetLat,
-    lrfTargetLongitude: metadata.LRFTargetLon,
-    lrfTargetAltitude: metadata.LRFTargetAlt,
+    lrfTargetDistance: meta.LRFTargetDistance,
+    lrfTargetLatitude: meta.LRFTargetLat,
+    lrfTargetLongitude: meta.LRFTargetLon,
+    lrfTargetAltitude: meta.LRFTargetAlt,
     
     // Lens distortion
-    dewarpData: metadata.DewarpData
+    dewarpData: meta.DewarpData
   };
 }
 
@@ -321,19 +322,20 @@ export function extractPrecisionParams(metadata: any): PrecisionGeoreferencePara
  */
 export async function debugGeoreferencing(
   pixel: PixelCoordinate,
-  metadata: any
+  metadata: Record<string, unknown>
 ): Promise<{
   oldMethod: GeographicCoordinate;
   newMethod: GeographicCoordinate | null;
   lrfReference: GeographicCoordinate | null;
   distanceError: number | null;
 }> {
+  const meta = metadata as Record<string, number | null | undefined>;
   const params = extractPrecisionParams(metadata);
 
   // Old method (current implementation)
   const oldResult = {
-    latitude: metadata.latitude || 0,
-    longitude: metadata.longitude || 0
+    latitude: (meta.latitude || 0) as number,
+    longitude: (meta.longitude || 0) as number
   };
 
   // New precision method (now returns null if invalid)

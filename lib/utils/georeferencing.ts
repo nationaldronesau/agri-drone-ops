@@ -52,6 +52,15 @@ export interface GeoCoordinates {
   lon: number;
 }
 
+type GeoFeaturePolygon = {
+  type: 'Feature';
+  geometry: {
+    type: 'Polygon';
+    coordinates: Array<Array<[number, number]>>;
+  };
+  properties: Record<string, unknown>;
+};
+
 export interface GeoValidationResult {
   valid: boolean;
   error?: string;
@@ -298,7 +307,7 @@ export function boundingBoxToGeoPolygon(
   imageHeight: number,
   dronePosition: DronePosition,
   cameraParams: CameraParams
-): any {
+): GeoFeaturePolygon {
   if (!bbox.width || !bbox.height) {
     throw new Error('Bounding box must have width and height properties');
   }
@@ -351,20 +360,21 @@ export function boundingBoxToGeoPolygon(
   };
 }
 
-export function extractGeoParams(metadata: any): GeoreferenceParams {
+export function extractGeoParams(metadata: Record<string, unknown>): GeoreferenceParams {
+  const meta = metadata as Record<string, number | null | undefined>;
   return {
-    gpsLatitude: metadata.GPSLatitude,
-    gpsLongitude: metadata.GPSLongitude,
-    altitude: metadata.RelativeAltitude || metadata.GPSAltitude || 0,
-    gimbalRoll: metadata.GimbalRollDegree || 0,
-    gimbalPitch: metadata.GimbalPitchDegree || -90,
-    gimbalYaw: metadata.GimbalYawDegree || metadata.FlightYawDegree || 0,
-    cameraFov: metadata.FieldOfView || 84,
-    imageWidth: metadata.ImageWidth || metadata.ExifImageWidth,
-    imageHeight: metadata.ImageHeight || metadata.ExifImageHeight,
-    lrfDistance: metadata.LRFDistance,
-    lrfTargetLat: metadata.LRFTargetLat,
-    lrfTargetLon: metadata.LRFTargetLon
+    gpsLatitude: meta.GPSLatitude as number,
+    gpsLongitude: meta.GPSLongitude as number,
+    altitude: (meta.RelativeAltitude || meta.GPSAltitude || 0) as number,
+    gimbalRoll: (meta.GimbalRollDegree || 0) as number,
+    gimbalPitch: (meta.GimbalPitchDegree || -90) as number,
+    gimbalYaw: (meta.GimbalYawDegree || meta.FlightYawDegree || 0) as number,
+    cameraFov: (meta.FieldOfView || 84) as number,
+    imageWidth: (meta.ImageWidth || meta.ExifImageWidth) as number,
+    imageHeight: (meta.ImageHeight || meta.ExifImageHeight) as number,
+    lrfDistance: meta.LRFDistance,
+    lrfTargetLat: meta.LRFTargetLat,
+    lrfTargetLon: meta.LRFTargetLon
   };
 }
 

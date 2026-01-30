@@ -28,7 +28,10 @@ interface Orthomosaic {
   name: string;
   description: string | null;
   fileSize: bigint;
-  bounds: any;
+  bounds: {
+    type?: string;
+    coordinates?: Array<Array<[number, number]>>;
+  };
   centerLat: number;
   centerLon: number;
   minZoom: number;

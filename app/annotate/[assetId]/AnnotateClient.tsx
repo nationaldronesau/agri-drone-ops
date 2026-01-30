@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -1785,12 +1786,15 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
             ref={canvasContainerRef}
             className="flex-1 relative flex items-center justify-center bg-gray-800 overflow-hidden"
           >
-            <img
+            <Image
               ref={imageRef}
               src={session.asset.storageUrl}
               alt={session.asset.fileName}
               onLoad={handleImageLoad}
               className="hidden"
+              width={session.asset.imageWidth ?? 1}
+              height={session.asset.imageHeight ?? 1}
+              unoptimized
             />
             <canvas
               ref={canvasRef}

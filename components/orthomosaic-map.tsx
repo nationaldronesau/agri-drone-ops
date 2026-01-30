@@ -6,7 +6,7 @@ import 'leaflet/dist/leaflet.css';
 
 // Fix leaflet default marker icon issue
 if (typeof window !== 'undefined') {
-  delete (L.Icon.Default.prototype as any)._getIconUrl;
+  delete (L.Icon.Default.prototype as { _getIconUrl?: unknown })._getIconUrl;
   L.Icon.Default.mergeOptions({
     iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
     iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
@@ -14,23 +14,30 @@ if (typeof window !== 'undefined') {
   });
 }
 
+type OrthomosaicBounds = {
+  type?: string;
+  coordinates?: Array<Array<[number, number]>>;
+};
+
+type OrthomosaicControls = {
+  showLayers: boolean;
+  showMeasurement: boolean;
+  opacity: number;
+};
+
 interface OrthomosaicMapProps {
   orthomosaic: {
     id: string;
     name: string;
-    bounds: any;
+    bounds: OrthomosaicBounds;
     centerLat: number;
     centerLon: number;
     minZoom: number;
     maxZoom: number;
     tilesetPath?: string;
   };
-  controls: {
-    showLayers: boolean;
-    showMeasurement: boolean;
-    opacity: number;
-  };
-  onControlsChange: (controls: any) => void;
+  controls: OrthomosaicControls;
+  onControlsChange: (controls: OrthomosaicControls) => void;
 }
 
 export default function OrthomosaicMap({ orthomosaic, controls }: OrthomosaicMapProps) {
@@ -144,7 +151,7 @@ export default function OrthomosaicMap({ orthomosaic, controls }: OrthomosaicMap
         mapInstance.current = null;
       }
     };
-  }, [orthomosaic]);
+  }, [orthomosaic, controls.opacity, controls.showLayers]);
 
   // Update opacity when controls change
   useEffect(() => {

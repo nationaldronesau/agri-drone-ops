@@ -1,5 +1,6 @@
 import prisma from '@/lib/db';
 import { yoloService } from '@/lib/services/yolo';
+import { S3Service } from '@/lib/services/s3';
 import { ModelStatus, TrainingJob, TrainingStatus } from '@prisma/client';
 
 const ACTIVE_STATUSES: TrainingStatus[] = [
@@ -28,6 +29,10 @@ function parseS3Path(path: string): { bucket: string; keyPrefix: string } | null
   const [bucket, ...rest] = withoutScheme.split('/');
   if (!bucket) return null;
   return { bucket, keyPrefix: rest.join('/') };
+}
+
+function getCanonicalModelPrefix(baseName: string, version: number): string {
+  return `models/${baseName}/v${version}`;
 }
 
 type SyncResult = {
@@ -86,6 +91,32 @@ export async function syncJobWithEC2(
         const [baseName, versionStr] = modelName.split('-v');
         const version = parseInt(versionStr, 10) || 1;
         const parsedPath = parseS3Path(ec2Status.s3_output_path);
+        const bucket = parsedPath?.bucket || job.dataset.s3Path.split('/')[2] || 'agridrone-ops';
+
+        let resolvedS3Path = ec2Status.s3_output_path;
+        const weightsFile = 'best.pt';
+
+        if (parsedPath?.keyPrefix) {
+          const sourcePrefix = parsedPath.keyPrefix;
+          const sourceKey = sourcePrefix.endsWith('.pt')
+            ? sourcePrefix
+            : `${sourcePrefix}/${weightsFile}`;
+
+          const canonicalPrefix = getCanonicalModelPrefix(baseName, version);
+          const canonicalKey = `${canonicalPrefix}/${weightsFile}`;
+          const canonicalS3Path = `s3://${bucket}/${canonicalPrefix}`;
+
+          if (sourceKey !== canonicalKey) {
+            try {
+              await S3Service.copyObject(sourceKey, canonicalKey, bucket);
+              resolvedS3Path = canonicalS3Path;
+            } catch (error) {
+              console.warn('Failed to copy model weights to canonical path:', error);
+            }
+          } else {
+            resolvedS3Path = canonicalS3Path;
+          }
+        }
 
         let trainedModelId: string | null = null;
 
@@ -95,8 +126,8 @@ export async function syncJobWithEC2(
               name: baseName,
               version,
               displayName: `${job.dataset.name} (v${version})`,
-              s3Path: ec2Status.s3_output_path,
-              s3Bucket: parsedPath?.bucket || job.dataset.s3Path.split('/')[2] || 'agridrone-ops',
+              s3Path: resolvedS3Path,
+              s3Bucket: bucket,
               classes: job.dataset.classes,
               classCount: JSON.parse(job.dataset.classes).length,
               mAP50: ec2Status.metrics?.mAP50,

@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/select";
 import { ArrowLeft, MapPin, Calendar, Eye, Edit3, FolderOpen } from "lucide-react";
 import Link from "next/link";
+import Image from "next/image";
 
 interface Project {
   id: string;
@@ -32,7 +33,9 @@ interface Asset {
   gimbalPitch: number | null;
   gimbalRoll: number | null;
   gimbalYaw: number | null;
-  metadata: any;
+  imageWidth?: number | null;
+  imageHeight?: number | null;
+  metadata: Record<string, unknown> | null;
   createdAt: string;
   project?: Project;
 }
@@ -208,13 +211,16 @@ export default function ImagesPage() {
             {assets.map((asset) => (
               <Card key={asset.id} className="overflow-hidden hover:shadow-lg transition-shadow">
                 <div className="aspect-video relative bg-gray-100">
-                  <img
+                  <Image
                     src={asset.storageUrl}
                     alt={asset.fileName}
-                    className="object-cover w-full h-full"
+                    fill
+                    className="object-cover"
+                    sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
                     onError={(e) => {
-                      e.currentTarget.src = '/placeholder-image.png';
+                      e.currentTarget.src = "/placeholder-image.png";
                     }}
+                    unoptimized
                   />
                   <div
                     className={`absolute top-2 left-2 rounded-full px-2 py-0.5 text-xs font-medium shadow ${
@@ -319,10 +325,13 @@ export default function ImagesPage() {
               <CardContent>
                 <div className="grid md:grid-cols-2 gap-6">
                   <div>
-                    <img
+                    <Image
                       src={selectedAsset.storageUrl}
                       alt={selectedAsset.fileName}
-                      className="w-full rounded-lg"
+                      width={selectedAsset.imageWidth ?? 1200}
+                      height={selectedAsset.imageHeight ?? 800}
+                      className="w-full h-auto rounded-lg"
+                      unoptimized
                     />
                   </div>
                   <div className="space-y-4">

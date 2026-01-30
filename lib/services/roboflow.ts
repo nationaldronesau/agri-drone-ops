@@ -2,6 +2,27 @@
 import { Detection } from '@/types/roboflow';
 import PQueue from 'p-queue';
 
+type RoboflowRawPrediction = {
+  class?: string;
+  class_name?: string;
+  confidence: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type RoboflowResponseLike = {
+  predictions?: RoboflowRawPrediction[];
+  results?: { image?: { predictions?: RoboflowRawPrediction[] } };
+};
+
+const extractPredictions = (data: unknown): RoboflowRawPrediction[] => {
+  if (!data || typeof data !== 'object') return [];
+  const typed = data as RoboflowResponseLike;
+  return typed.results?.image?.predictions ?? typed.predictions ?? [];
+};
+
 // Roboflow workspace from environment variable
 const ROBOFLOW_WORKSPACE = process.env.ROBOFLOW_WORKSPACE;
 
@@ -221,11 +242,11 @@ class RoboflowService {
 
           // SAHI workflow returns results in a different format
           // Need to extract predictions from the workflow output
-          const predictions = data.results?.image?.predictions || data.predictions || [];
+          const predictions = extractPredictions(data);
 
-          return predictions.map((pred: any) => ({
+          return predictions.map((pred) => ({
             id: crypto.randomUUID(),
-            class: pred.class || pred.class_name,
+            class: (pred.class ?? pred.class_name) as string,
             confidence: pred.confidence,
             x: pred.x,
             y: pred.y,
@@ -263,9 +284,11 @@ class RoboflowService {
 
           data = await response.json();
 
-          return data.predictions.map((pred: any) => ({
+          const predictions = extractPredictions(data);
+
+          return predictions.map((pred) => ({
             id: crypto.randomUUID(),
-            class: pred.class,
+            class: pred.class as string,
             confidence: pred.confidence,
             x: pred.x,
             y: pred.y,
@@ -407,9 +430,11 @@ class RoboflowService {
 
         const data = await response.json();
 
-        return (data.predictions || []).map((pred: any) => ({
+        const predictions = extractPredictions(data);
+
+        return predictions.map((pred) => ({
           id: crypto.randomUUID(),
-          class: pred.class,
+          class: pred.class as string,
           confidence: pred.confidence,
           x: pred.x,
           y: pred.y,

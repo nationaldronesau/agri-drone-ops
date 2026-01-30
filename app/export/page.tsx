@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Download, FileText, Map, AlertTriangle, Database } from "lucide-react";
@@ -23,7 +23,7 @@ interface Detection {
   centerLat: number | null;
   centerLon: number | null;
   type?: 'ai' | 'manual' | 'sam3';
-  metadata: any;
+  metadata: Record<string, unknown> | null;
   createdAt: string;
   asset: {
     id: string;
@@ -61,16 +61,7 @@ export default function ExportPage() {
            lon >= -180 && lon <= 180;
   };
 
-  useEffect(() => {
-    fetchProjects();
-    fetchAllDetections();
-  }, []);
-
-  useEffect(() => {
-    fetchAllDetections();
-  }, [selectedProject, includeAI, includeManual, includeSam3]);
-
-  const fetchProjects = async () => {
+  const fetchProjects = useCallback(async () => {
     try {
       setProjectsError(null);
       const response = await fetch('/api/projects');
@@ -83,9 +74,9 @@ export default function ExportPage() {
       console.error('Failed to fetch projects:', error);
       setProjectsError(error instanceof Error ? error.message : 'Failed to load projects');
     }
-  };
+  }, []);
 
-  const fetchAllDetections = async () => {
+  const fetchAllDetections = useCallback(async () => {
     const allDetections: Detection[] = [];
     const failures: string[] = [];
 
@@ -101,8 +92,8 @@ export default function ExportPage() {
         if (!aiResponse.ok) {
           throw new Error(`AI detections request failed (${aiResponse.status})`);
         }
-        const aiData = await aiResponse.json();
-        const aiDetections = aiData.map((d: any) => ({ ...d, type: 'ai' }));
+        const aiData = (await aiResponse.json()) as Detection[];
+        const aiDetections = aiData.map((d) => ({ ...d, type: 'ai' as const }));
         allDetections.push(...aiDetections);
       } catch (error) {
         console.error('Failed to fetch AI detections:', error);
@@ -145,7 +136,16 @@ export default function ExportPage() {
     if (failures.length > 0) {
       setDetectionsError(`Some data failed to load: ${failures.join(', ')}`);
     }
-  };
+  }, [includeAI, includeManual, includeSam3, selectedProject]);
+
+  useEffect(() => {
+    fetchProjects();
+    fetchAllDetections();
+  }, [fetchProjects, fetchAllDetections]);
+
+  useEffect(() => {
+    fetchAllDetections();
+  }, [fetchAllDetections]);
 
   const filteredDetections = detections.filter(detection => {
     if (selectedClasses.length > 0 && !selectedClasses.includes(detection.className)) {

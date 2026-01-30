@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Image, { type ImageProps } from 'next/image';
 
 interface SignedUrlResponse {
   url: string;
@@ -90,9 +91,14 @@ export function useSignedUrl(
 /**
  * Component wrapper for images that automatically handles signed URLs
  */
-interface S3ImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
+type S3ImageProps = Omit<ImageProps, 'src' | 'alt' | 'width' | 'height' | 'fill'> & {
   assetId?: string;
-}
+  src?: string;
+  alt?: string;
+  width?: number;
+  height?: number;
+  fill?: boolean;
+};
 
 export function S3Image({ 
   assetId, 
@@ -102,6 +108,8 @@ export function S3Image({
   ...props 
 }: S3ImageProps) {
   const { url, loading, error } = useSignedUrl(assetId || null, 'asset', src);
+  const resolvedSrc = url || src;
+  const { width, height, fill, ...imageProps } = props;
 
   if (loading) {
     return (
@@ -111,7 +119,7 @@ export function S3Image({
     );
   }
 
-  if (error && !url && !src) {
+  if (error && !resolvedSrc) {
     return (
       <div className={`flex items-center justify-center bg-gray-100 text-xs text-gray-500 ${className}`}>
         Image unavailable
@@ -119,12 +127,28 @@ export function S3Image({
     );
   }
 
+  if (fill) {
+    return (
+      <Image
+        src={resolvedSrc || ''}
+        alt={alt ?? ''}
+        className={className}
+        fill
+        unoptimized
+        {...imageProps}
+      />
+    );
+  }
+
   return (
-    <img 
-      src={url || src || ''}
-      alt={alt}
+    <Image
+      src={resolvedSrc || ''}
+      alt={alt ?? ''}
       className={className}
-      {...props}
+      width={width ?? 1}
+      height={height ?? 1}
+      unoptimized
+      {...imageProps}
     />
   );
 }

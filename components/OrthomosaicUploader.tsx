@@ -242,8 +242,6 @@ export function OrthomosaicUploader({
       uppy.close();
       uppyRef.current = null;
     };
-  // We initialize Uppy once and manage updates via refs.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return <div ref={containerRef} />;
