@@ -106,8 +106,9 @@ export async function POST(
             },
           });
           created = true;
-        } catch (error: any) {
-          if (error?.code === 'P2002') {
+        } catch (error: unknown) {
+          const errorCode = (error as { code?: string } | null)?.code;
+          if (errorCode === 'P2002') {
             await tx.reviewSessionEdit.update({
               where: {
                 reviewSessionId_sourceType_sourceId: {

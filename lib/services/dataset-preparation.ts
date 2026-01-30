@@ -66,6 +66,37 @@ export interface DatasetPreview {
 
 type AnnotationPoint = [number, number];
 
+interface DatasetDetection {
+  confidence?: number | null;
+  className: string;
+  boundingBox: unknown;
+  type?: string | null;
+  preprocessingMeta?: unknown;
+}
+
+interface DatasetAnnotation {
+  roboflowClassName?: string | null;
+  weedType: string;
+  coordinates: unknown;
+}
+
+interface DatasetAnnotationSession {
+  annotations: DatasetAnnotation[];
+}
+
+interface DatasetAsset {
+  id: string;
+  fileName: string;
+  mimeType?: string | null;
+  storageUrl?: string | null;
+  s3Key?: string | null;
+  s3Bucket?: string | null;
+  imageWidth?: number | null;
+  imageHeight?: number | null;
+  detections?: DatasetDetection[];
+  annotationSessions?: DatasetAnnotationSession[];
+}
+
 export function sanitizeClassName(name: string): string {
   return name
     .toLowerCase()
@@ -288,7 +319,7 @@ class DatasetPreparationService {
     };
   }
 
-  private async fetchAnnotatedAssets(config: DatasetConfig) {
+  private async fetchAnnotatedAssets(config: DatasetConfig): Promise<DatasetAsset[]> {
     const where: Record<string, unknown> = {};
     if (config.projectId) {
       where.projectId = config.projectId;
@@ -339,7 +370,7 @@ class DatasetPreparationService {
   }
 
   private convertToYOLO(
-    asset: any,
+    asset: DatasetAsset,
     classMap: Map<string, number>,
     includeAI: boolean,
     includeManual: boolean,
@@ -520,9 +551,9 @@ names: ${JSON.stringify(classes)}
   }
 
   private splitDataset(
-    assets: any[],
+    assets: DatasetAsset[],
     ratio: { train: number; val: number; test: number }
-  ): { train: any[]; val: any[]; test: any[] } {
+  ): { train: DatasetAsset[]; val: DatasetAsset[]; test: DatasetAsset[] } {
     const total = assets.length;
     const trainEnd = Math.floor(total * ratio.train);
     const valEnd = trainEnd + Math.floor(total * ratio.val);
@@ -566,7 +597,7 @@ names: ${JSON.stringify(classes)}
   }
 
   private async copyImageToDataset(
-    asset: any,
+    asset: DatasetAsset,
     s3BasePath: string,
     splitName: string
   ): Promise<string> {
@@ -597,7 +628,7 @@ names: ${JSON.stringify(classes)}
     throw new Error(`Asset ${asset.id} has no accessible storage location`);
   }
 
-  private getImageExtension(asset: any): string {
+  private getImageExtension(asset: DatasetAsset): string {
     const ext = path.extname(asset.fileName || '').toLowerCase();
     if (ext) return ext;
     if (asset.mimeType === 'image/png') return '.png';

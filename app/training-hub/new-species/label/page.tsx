@@ -6,6 +6,12 @@ import { Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 
+type StoredTrainingSession = {
+  localProjectId?: string;
+  roboflowProject?: { project?: { roboflowId?: string } };
+  roboflowProjectId?: string;
+};
+
 export default function LegacyNewSpeciesLabelRedirect() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -16,9 +22,9 @@ export default function LegacyNewSpeciesLabelRedirect() {
         ? new URLSearchParams(window.location.search).get('project')
         : null;
       const stored = typeof window !== 'undefined' ? sessionStorage.getItem('trainingSession') : null;
-      let parsed: any = null;
+      let parsed: StoredTrainingSession | null = null;
       try {
-        parsed = stored ? JSON.parse(stored) : null;
+        parsed = stored ? (JSON.parse(stored) as StoredTrainingSession) : null;
       } catch {
         parsed = null;
       }

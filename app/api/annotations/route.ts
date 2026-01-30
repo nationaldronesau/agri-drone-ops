@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type { Prisma } from '@prisma/client';
 import prisma from '@/lib/db';
 import { pixelToGeo } from '@/lib/utils/georeferencing';
 import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
@@ -53,8 +54,7 @@ export async function GET(request: NextRequest) {
     // Parse pagination params
     const paginationParams = parsePaginationParams(searchParams);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const where: any = {
+    const where: Prisma.ManualAnnotationWhereInput = {
       // Filter by user's teams through session -> asset -> project -> team
       session: {
         asset: {
@@ -216,7 +216,7 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    let geoCoordinates = null;
+    let geoCoordinates: Prisma.InputJsonValue | null = null;
     let centerLat = null;
     let centerLon = null;
     let geoConversionWarning: string | null = null;
@@ -281,7 +281,7 @@ export async function POST(request: NextRequest) {
         weedType,
         confidence: confidence || 'LIKELY',
         coordinates,
-        geoCoordinates: geoCoordinates as any,
+        geoCoordinates,
         centerLat,
         centerLon,
         notes,

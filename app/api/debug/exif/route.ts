@@ -101,6 +101,55 @@ export async function POST(request: NextRequest) {
       console.log('No maker notes found');
     }
 
+    type SegmentAnalysis = {
+      fieldCount: number;
+      fields: string[];
+      gpsFields: string[];
+      droneFields: string[];
+    };
+
+    const segmentAnalysis = Object.entries(fullMetadata || {}).reduce<Record<string, SegmentAnalysis>>(
+      (acc, [segment, data]) => {
+        if (typeof data === 'object' && data !== null) {
+          acc[segment] = {
+            fieldCount: Object.keys(data).length,
+            fields: Object.keys(data),
+            gpsFields: Object.keys(data).filter(k =>
+              k.toLowerCase().includes('gps') ||
+              k.toLowerCase().includes('latitude') ||
+              k.toLowerCase().includes('longitude')
+            ),
+            droneFields: Object.keys(data).filter(k =>
+              k.toLowerCase().includes('gimbal') ||
+              k.toLowerCase().includes('flight') ||
+              k.toLowerCase().includes('altitude') ||
+              k.toLowerCase().includes('lrf') ||
+              k.toLowerCase().includes('rangefinder')
+            )
+          };
+        }
+        return acc;
+      },
+      {}
+    );
+
+    const potentialCoordinates = Object.entries(fullMetadata || {}).reduce<Record<string, Array<[string, number]>>>(
+      (acc, [segment, data]) => {
+        if (typeof data === 'object' && data !== null) {
+          const coords = Object.entries(data).filter(([, value]) =>
+            typeof value === 'number' &&
+            value >= -180 && value <= 180 &&
+            Math.abs(value) > 1 // Exclude small numbers like 0, 1, etc.
+          ) as Array<[string, number]>;
+          if (coords.length > 0) {
+            acc[segment] = coords;
+          }
+        }
+        return acc;
+      },
+      {}
+    );
+
     return NextResponse.json({
       filename: file.name,
       allFields: Object.keys(allMetadata || {}),
@@ -112,49 +161,17 @@ export async function POST(request: NextRequest) {
       xmpRaw: xmpRaw,
       makerNotes: makerNotes,
       fullFields: Object.keys(fullMetadata || {}),
-      
+
       // Detailed field analysis
-      segmentAnalysis: Object.entries(fullMetadata || {}).reduce((acc, [segment, data]) => {
-        if (typeof data === 'object' && data !== null) {
-          acc[segment] = {
-            fieldCount: Object.keys(data).length,
-            fields: Object.keys(data),
-            gpsFields: Object.keys(data).filter(k => 
-              k.toLowerCase().includes('gps') || 
-              k.toLowerCase().includes('latitude') || 
-              k.toLowerCase().includes('longitude')
-            ),
-            droneFields: Object.keys(data).filter(k => 
-              k.toLowerCase().includes('gimbal') || 
-              k.toLowerCase().includes('flight') || 
-              k.toLowerCase().includes('altitude') ||
-              k.toLowerCase().includes('lrf') ||
-              k.toLowerCase().includes('rangefinder')
-            )
-          };
-        }
-        return acc;
-      }, {} as any),
-      
+      segmentAnalysis,
+
       // Look for GPS in different locations
       gpsInIfd0: fullMetadata?.ifd0 ? Object.keys(fullMetadata.ifd0).filter(k => k.toLowerCase().includes('gps')) : [],
       gpsInExif: fullMetadata?.exif ? Object.keys(fullMetadata.exif).filter(k => k.toLowerCase().includes('gps')) : [],
       gpsInXmp: xmpData?.xmp ? Object.keys(xmpData.xmp).filter(k => k.toLowerCase().includes('gps') || k.toLowerCase().includes('latitude') || k.toLowerCase().includes('longitude')) : [],
-      
+
       // Search for potential coordinate values (numbers between -180 and 180)
-      potentialCoordinates: Object.entries(fullMetadata || {}).reduce((acc, [segment, data]) => {
-        if (typeof data === 'object' && data !== null) {
-          const coords = Object.entries(data).filter(([, value]) => 
-            typeof value === 'number' && 
-            value >= -180 && value <= 180 && 
-            Math.abs(value) > 1 // Exclude small numbers like 0, 1, etc.
-          );
-          if (coords.length > 0) {
-            acc[segment] = coords;
-          }
-        }
-        return acc;
-      }, {} as any)
+      potentialCoordinates
     });
   } catch (error) {
     console.error('Debug EXIF error:', error);

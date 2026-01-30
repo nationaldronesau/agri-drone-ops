@@ -10,11 +10,22 @@ interface GPSCheckResult {
   total: number;
   withGPS: {
     count: number;
-    assets: any[];
+    assets: {
+      id: string;
+      fileName: string;
+      gpsLatitude: number | null;
+      gpsLongitude: number | null;
+      altitude: number | null;
+      metadata: unknown | null;
+    }[];
   };
   withoutGPS: {
     count: number;
-    assets: any[];
+    assets: {
+      id: string;
+      fileName: string;
+      hasMetadata: boolean;
+    }[];
   };
 }
 

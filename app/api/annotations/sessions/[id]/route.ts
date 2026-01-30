@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type { Prisma } from '@prisma/client';
 import prisma from '@/lib/db';
 
 export async function GET(
@@ -69,7 +70,7 @@ export async function PUT(
     const body = await request.json();
     const { status, userId } = body;
     
-    const updateData: any = {};
+    const updateData: Prisma.AnnotationSessionUpdateInput = {};
     
     if (status) {
       updateData.status = status;

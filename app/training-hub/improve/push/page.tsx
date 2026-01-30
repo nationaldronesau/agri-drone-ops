@@ -4,16 +4,23 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 
+type StoredTrainingSession = {
+  localProjectId?: string;
+  roboflowProject?: { project?: { roboflowId?: string } };
+  roboflowProjectId?: string;
+  confidenceThreshold?: number;
+};
+
 export default function LegacyImprovePushRedirect() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const bootstrap = async () => {
-      const stored = typeof window !== 'undefined' ? sessionStorage.getItem('trainingSession') : null;
-      let parsed: any = null;
+      const bootstrap = async () => {
+        const stored = typeof window !== 'undefined' ? sessionStorage.getItem('trainingSession') : null;
+      let parsed: StoredTrainingSession | null = null;
       try {
-        parsed = stored ? JSON.parse(stored) : null;
+        parsed = stored ? (JSON.parse(stored) as StoredTrainingSession) : null;
       } catch {
         parsed = null;
       }

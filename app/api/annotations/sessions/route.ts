@@ -257,9 +257,10 @@ export async function POST(request: NextRequest) {
       }, transactionOptions);
 
       return NextResponse.json(session);
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Handle serialization failures (P2034) - suggest retry
-      if (error?.code === 'P2034') {
+      const errorCode = (error as { code?: string } | null)?.code;
+      if (errorCode === 'P2034') {
         return NextResponse.json(
           { error: 'Session creation conflict - please try again', retryable: true },
           { status: 409 }

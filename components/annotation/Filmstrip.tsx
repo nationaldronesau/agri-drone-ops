@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useCallback } from "react";
+import Image from "next/image";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -122,11 +123,13 @@ export function Filmstrip({
                 title={`${asset.fileName} (${index + 1}/${assets.length})`}
               >
                 {/* Thumbnail */}
-                <img
+                <Image
                   src={asset.storageUrl}
                   alt={asset.fileName}
-                  className="w-full h-full object-cover"
-                  loading="lazy"
+                  fill
+                  className="object-cover"
+                  sizes="64px"
+                  unoptimized
                 />
 
                 {/* Index number */}

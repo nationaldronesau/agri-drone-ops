@@ -61,6 +61,38 @@ interface ExtractedMetadata {
   imageHeight: number | null;
 }
 
+type InferenceDetection = {
+  id: string;
+  class: string;
+  confidence: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  modelType: string;
+  color: string;
+  modelName?: string;
+  geoCoordinates?: { lat: number; lon: number };
+};
+
+interface UploadResult {
+  success: boolean;
+  name: string;
+  url: string;
+  size: number;
+  id?: string;
+  bucket?: string | null;
+  s3Key?: string | null;
+  metadata?: unknown;
+  gpsLatitude?: number | null;
+  gpsLongitude?: number | null;
+  altitude?: number | null;
+  detections?: InferenceDetection[];
+  warnings?: string[];
+  warning?: string;
+  error?: string;
+}
+
 /**
  * SAFETY CRITICAL: Validates GPS coordinates for spray drone operations
  * Invalid coordinates could send drones to wrong locations
@@ -163,7 +195,7 @@ export async function POST(request: NextRequest) {
         ? requestedModels
         : (Object.keys(ROBOFLOW_MODELS) as ModelType[]);
 
-    const uploadResults: any[] = [];
+    const uploadResults: UploadResult[] = [];
     const autoInferenceAssetIds: string[] = [];
     let autoInferenceSkipped = 0;
     let autoInferenceSummary:
@@ -408,7 +440,7 @@ export async function POST(request: NextRequest) {
             : file.url;
 
         // Run AI detection before transaction (external API call)
-        let detectionResults: any[] = [];
+        let detectionResults: InferenceDetection[] = [];
         if (runDetection && isValidGPSCoordinate(extractedData.gpsLatitude, extractedData.gpsLongitude)) {
           try {
             const imageBase64 = buffer.toString("base64");
@@ -460,7 +492,7 @@ export async function POST(request: NextRequest) {
             },
           });
 
-          const detections: any[] = [];
+          const detections: InferenceDetection[] = [];
 
           // Create processing job and detections if we have valid detection results
           if (
@@ -483,7 +515,10 @@ export async function POST(request: NextRequest) {
             });
 
             // Prepare all valid detections for batch creation
-            const validDetections: any[] = [];
+            const validDetections: Array<{
+              detection: InferenceDetection;
+              geoCoords: { lat: number; lon: number };
+            }> = [];
 
             // Build georeferencing params once for this image
             const geoParams = {

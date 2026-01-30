@@ -73,7 +73,6 @@ export function RoboflowProjectSelector({
 
   useEffect(() => {
     fetchProjects();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleValueChange = (projectId: string) => {

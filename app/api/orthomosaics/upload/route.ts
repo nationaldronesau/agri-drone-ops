@@ -12,6 +12,11 @@ import { mkdtemp, rm, writeFile } from "fs/promises";
 
 const execAsync = promisify(exec);
 
+type GeoJsonPolygon = {
+  type: "Polygon";
+  coordinates: Array<Array<[number, number]>>;
+};
+
 const fileSchema = z.object({
   url: z.string().url("A valid S3 URL is required"),
   name: z.string().min(1, "File name is required"),
@@ -104,7 +109,7 @@ export async function POST(request: NextRequest) {
     try {
       await writeFile(tempFilePath, buffer);
 
-      let bounds: any = null;
+      let bounds: GeoJsonPolygon | null = null;
       let centerLat = 0;
       let centerLon = 0;
       let resolution: number | null = null;
@@ -193,6 +198,8 @@ export async function POST(request: NextRequest) {
         };
       }
 
+      const boundsValue: GeoJsonPolygon | Record<string, never> = bounds ?? {};
+
       const orthomosaic = await prisma.orthomosaic.create({
         data: {
           projectId,
@@ -203,7 +210,7 @@ export async function POST(request: NextRequest) {
           s3Key: key,
           s3Bucket: bucket,
           storageType: "s3",
-          bounds: bounds || {},
+          bounds: boundsValue,
           centerLat,
           centerLon,
           resolution: resolution || null,

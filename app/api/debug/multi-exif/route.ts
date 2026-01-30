@@ -13,6 +13,22 @@ export async function POST(request: NextRequest) {
   if (prodBlock) return prodBlock;
 
   try {
+    type FieldCounts = Record<string, number>;
+    type LibraryResult = Record<string, unknown> & { error?: string };
+    type GpsFinding = { path: string; value: number; key: string; note?: string };
+    type GpsAnalysis = {
+      potentialLatitudes: GpsFinding[];
+      potentialLongitudes: GpsFinding[];
+      potentialAltitudes: GpsFinding[];
+      gimbalFields: GpsFinding[];
+      lrfFields: GpsFinding[];
+    };
+
+    const toErrorMessage = (value: unknown) =>
+      value instanceof Error ? value.message : 'Unknown error';
+    const isRecord = (value: unknown): value is Record<string, unknown> =>
+      typeof value === 'object' && value !== null;
+
     const formData = await request.formData();
     const file = formData.get('file') as File;
     
@@ -23,7 +39,12 @@ export async function POST(request: NextRequest) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    const results = {
+    const results: {
+      filename: string;
+      fileSize: number;
+      mimeType: string;
+      libraries: Record<string, LibraryResult>;
+    } = {
       filename: file.name,
       fileSize: file.size,
       mimeType: file.type,
@@ -66,15 +87,15 @@ export async function POST(request: NextRequest) {
         raw: exifrRaw,
         full: exifrFull,
         gps: await exifr.gps(buffer).catch(() => null),
-        fieldCounts: Object.entries(exifrFull || {}).reduce((acc, [key, val]) => {
+        fieldCounts: Object.entries(exifrFull || {}).reduce<FieldCounts>((acc, [key, val]) => {
           if (typeof val === 'object' && val !== null) {
             acc[key] = Object.keys(val).length;
           }
           return acc;
-        }, {} as any)
+        }, {})
       };
     } catch (error) {
-      results.libraries.exifr = { error: error.message };
+      results.libraries.exifr = { error: toErrorMessage(error) };
     }
 
     // Method 2: exif-parser (lower level)
@@ -90,14 +111,14 @@ export async function POST(request: NextRequest) {
         imageSize: exifResult.imageSize || {}
       };
     } catch (error) {
-      results.libraries.exifParser = { error: error.message };
+      results.libraries.exifParser = { error: toErrorMessage(error) };
     }
 
     // Method 3: fast-exif
     try {
       console.log('=== FAST-EXIF EXTRACTION ===');
-      const fastResult = await new Promise((resolve, reject) => {
-        fastExif.read(buffer, (error: any, data: any) => {
+      const fastResult = await new Promise<unknown>((resolve, reject) => {
+        fastExif.read(buffer, (error: unknown, data: unknown) => {
           if (error) reject(error);
           else resolve(data);
         });
@@ -107,14 +128,14 @@ export async function POST(request: NextRequest) {
         result: fastResult
       };
     } catch (error) {
-      results.libraries.fastExif = { error: error.message };
+      results.libraries.fastExif = { error: toErrorMessage(error) };
     }
 
     // Method 4: node-exif
     try {
       console.log('=== NODE-EXIF EXTRACTION ===');
-      const nodeResult = await new Promise((resolve, reject) => {
-        nodeExif(buffer, (error: any, data: any) => {
+      const nodeResult = await new Promise<unknown>((resolve, reject) => {
+        nodeExif(buffer, (error: unknown, data: unknown) => {
           if (error) reject(error);
           else resolve(data);
         });
@@ -124,11 +145,11 @@ export async function POST(request: NextRequest) {
         result: nodeResult
       };
     } catch (error) {
-      results.libraries.nodeExif = { error: error.message };
+      results.libraries.nodeExif = { error: toErrorMessage(error) };
     }
 
     // Search for GPS-like values across all results
-    const gpsAnalysis = {
+    const gpsAnalysis: GpsAnalysis = {
       potentialLatitudes: [],
       potentialLongitudes: [],
       potentialAltitudes: [],
@@ -137,8 +158,8 @@ export async function POST(request: NextRequest) {
     };
 
     // Recursive function to search for GPS values
-    function searchForGPS(obj: any, path = '') {
-      if (typeof obj !== 'object' || obj === null) return;
+    function searchForGPS(obj: unknown, path = '') {
+      if (!isRecord(obj)) return;
       
       for (const [key, value] of Object.entries(obj)) {
         const fullPath = path ? `${path}.${key}` : key;
@@ -185,7 +206,7 @@ export async function POST(request: NextRequest) {
 
     // Search all library results
     Object.values(results.libraries).forEach(libResult => {
-      if (libResult && typeof libResult === 'object' && !libResult.error) {
+      if (isRecord(libResult) && !('error' in libResult)) {
         searchForGPS(libResult);
       }
     });
