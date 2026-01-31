@@ -899,8 +899,9 @@ export default function TrainingPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           projectId: job.project.id,
-          workflowType: "improve_model",
+          workflowType: "yolo_inference",
           targetType: "both",
+          inferenceJobIds: [job.id],
           confidenceThreshold:
             typeof job.config.confidence === "number" ? job.config.confidence : 0.7,
         }),
