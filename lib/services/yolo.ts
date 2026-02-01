@@ -367,7 +367,32 @@ export class YOLOService {
   }
 
   async activateModel(modelName: string): Promise<{ success: boolean; message: string }> {
-    return this.request(`/api/v1/models/${modelName}/activate`, { method: 'POST' });
+    // The YOLO service doesn't have an /activate endpoint - models are loaded on-demand.
+    // Check if the model exists in the cached models list instead.
+    try {
+      const cached = await this.listCachedModels();
+      const cachedModels = cached.cached_models || cached.models || [];
+      if (cachedModels.includes(modelName)) {
+        return { success: true, message: `Model ${modelName} is already cached and ready` };
+      }
+
+      // Check if model exists in available models
+      const available = await this.listModels();
+      const modelExists = available.models?.some(
+        (m) => m.name === modelName || `${m.name}-${m.latest}` === modelName
+      );
+
+      if (modelExists) {
+        return { success: true, message: `Model ${modelName} is available and will load on first use` };
+      }
+
+      throw new Error(`Model ${modelName} not found on YOLO service`);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('not found')) {
+        throw error;
+      }
+      throw new Error(`Failed to verify model ${modelName}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
 }
 
