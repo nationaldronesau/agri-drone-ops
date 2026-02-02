@@ -90,3 +90,8 @@ infrastructure/terraform/lambda_trigger.zip
 *.tfvars
 !*.tfvars.example
 test-assets/
+
+# Claude Code auto-generated context files (keep root CLAUDE.md)
+**/CLAUDE.md
+!CLAUDE.md
+!.claude/CLAUDE.md
