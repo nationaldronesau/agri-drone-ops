@@ -63,6 +63,8 @@ export async function POST(request: NextRequest) {
       snapshotAssetIds = validIds;
     } else {
       const assetIdSet = new Set<string>();
+      const hasJobFilters =
+        requestedBatchJobIds.length > 0 || requestedInferenceJobIds.length > 0;
 
       if (requestedBatchJobIds.length > 0) {
         const batchJobs = await prisma.batchJob.findMany({
@@ -85,32 +87,56 @@ export async function POST(request: NextRequest) {
       }
 
       if (requestedInferenceJobIds.length > 0) {
-        const inferenceJobs = await prisma.yOLOInferenceJob.findMany({
-          where: { id: { in: requestedInferenceJobIds }, projectId },
-          select: {
-            id: true,
-            assetIds: true,
-            reviewSession: { select: { assetIds: true } },
-          },
-        });
+        const [yoloInferenceJobs, processingJobs] = await Promise.all([
+          prisma.yOLOInferenceJob.findMany({
+            where: { id: { in: requestedInferenceJobIds }, projectId },
+            select: {
+              id: true,
+              assetIds: true,
+              reviewSession: { select: { assetIds: true } },
+            },
+          }),
+          prisma.processingJob.findMany({
+            where: {
+              id: { in: requestedInferenceJobIds },
+              projectId,
+              type: 'AI_DETECTION',
+            },
+            select: { id: true },
+          }),
+        ]);
 
-        if (inferenceJobs.length !== requestedInferenceJobIds.length) {
+        const yoloInferenceJobIds = yoloInferenceJobs.map((job) => job.id);
+        const processingJobIds = processingJobs.map((job) => job.id);
+        const foundIds = new Set([...yoloInferenceJobIds, ...processingJobIds]);
+        const missingIds = requestedInferenceJobIds.filter((id) => !foundIds.has(id));
+
+        if (missingIds.length > 0) {
           return NextResponse.json(
             { error: 'One or more inferenceJobIds do not belong to this project' },
             { status: 400 }
           );
         }
 
-        for (const job of inferenceJobs) {
+        for (const job of yoloInferenceJobs) {
           const directIds = toStringArray(job.assetIds);
           const sessionIds = toStringArray(job.reviewSession?.assetIds);
           const ids = directIds.length > 0 ? directIds : sessionIds;
           ids.forEach((id) => assetIdSet.add(id));
         }
 
-        if (assetIdSet.size === 0) {
+        if (assetIdSet.size === 0 && yoloInferenceJobIds.length > 0) {
           const detectionAssets = await prisma.detection.findMany({
-            where: { inferenceJobId: { in: requestedInferenceJobIds } },
+            where: { inferenceJobId: { in: yoloInferenceJobIds } },
+            select: { assetId: true },
+            distinct: ['assetId'],
+          });
+          detectionAssets.forEach((entry) => assetIdSet.add(entry.assetId));
+        }
+
+        if (processingJobIds.length > 0) {
+          const detectionAssets = await prisma.detection.findMany({
+            where: { jobId: { in: processingJobIds } },
             select: { assetId: true },
             distinct: ['assetId'],
           });
@@ -119,11 +145,15 @@ export async function POST(request: NextRequest) {
       }
 
       if (assetIdSet.size === 0) {
-        const assets = await prisma.asset.findMany({
-          where: { projectId },
-          select: { id: true },
-        });
-        snapshotAssetIds = assets.map((asset) => asset.id);
+        if (hasJobFilters) {
+          snapshotAssetIds = [];
+        } else {
+          const assets = await prisma.asset.findMany({
+            where: { projectId },
+            select: { id: true },
+          });
+          snapshotAssetIds = assets.map((asset) => asset.id);
+        }
       } else {
         snapshotAssetIds = Array.from(assetIdSet);
       }

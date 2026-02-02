@@ -236,6 +236,12 @@ export default function TrainingHubPage() {
                 <RefreshCw className={`w-4 h-4 mr-2 ${syncing ? 'animate-spin' : ''}`} />
                 Sync Projects
               </Button>
+              <Link href="/training">
+                <Button variant="outline" size="sm" className="gap-2">
+                  <Brain className="w-4 h-4" />
+                  YOLO Training
+                </Button>
+              </Link>
               <Link href="/dashboard">
                 <Button variant="ghost" size="sm">
                   Back to Dashboard
