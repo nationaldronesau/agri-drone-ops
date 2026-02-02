@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { getAuthenticatedUser, checkProjectAccess } from '@/lib/auth/api-auth';
 import { yoloService, formatModelId } from '@/lib/services/yolo';
+import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
 import { ModelStatus } from '@prisma/client';
 
 export async function POST(
@@ -54,6 +55,13 @@ export async function POST(
     const modelId = formatModelId(model.name, model.version);
 
     try {
+      const gpuResult = await sam3Orchestrator.ensureGPUAvailable();
+      if (!gpuResult.success) {
+        return NextResponse.json(
+          { error: `Cannot activate model: ${gpuResult.message}` },
+          { status: 503 }
+        );
+      }
       await yoloService.activateModel(modelId);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to activate model';

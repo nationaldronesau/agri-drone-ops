@@ -147,6 +147,27 @@ export async function GET(
     const isBatchReview = session.workflowType === 'batch_review';
     const createdAfter = session.createdAt;
 
+    let yoloInferenceJobIds: string[] = [];
+    let processingJobIds: string[] = [];
+    if (inferenceJobIds.length > 0) {
+      const [yoloJobs, processingJobs] = await Promise.all([
+        prisma.yOLOInferenceJob.findMany({
+          where: { id: { in: inferenceJobIds }, projectId: session.projectId },
+          select: { id: true },
+        }),
+        prisma.processingJob.findMany({
+          where: {
+            id: { in: inferenceJobIds },
+            projectId: session.projectId,
+            type: 'AI_DETECTION',
+          },
+          select: { id: true },
+        }),
+      ]);
+      yoloInferenceJobIds = yoloJobs.map((job) => job.id);
+      processingJobIds = processingJobs.map((job) => job.id);
+    }
+
     if (assetIds.length === 0) {
       return NextResponse.json({ items: [] });
     }
@@ -201,7 +222,9 @@ export async function GET(
           where: {
             assetId: { in: filteredAssetIds },
             type: 'AI',
-            createdAt: { gte: createdAfter },
+            ...(processingJobIds.length > 0
+              ? { jobId: { in: processingJobIds } }
+              : { createdAt: { gte: createdAfter } }),
           },
           include: {
             asset: { select: assetSelect },
@@ -212,12 +235,12 @@ export async function GET(
         })
       : Promise.resolve([]);
 
-    const yoloDetectionsPromise = !isBatchReview && inferenceJobIds.length > 0
+    const yoloDetectionsPromise = !isBatchReview && yoloInferenceJobIds.length > 0
       ? prisma.detection.findMany({
           where: {
             assetId: { in: filteredAssetIds },
             type: 'YOLO_LOCAL',
-            inferenceJobId: { in: inferenceJobIds },
+            inferenceJobId: { in: yoloInferenceJobIds },
           },
           include: {
             asset: { select: assetSelect },

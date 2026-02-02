@@ -126,6 +126,9 @@ function ReviewPageContent() {
     });
   }, [items, minConfidence, pendingOnly]);
 
+  const hasJobScope =
+    (session?.inferenceJobIds?.length ?? 0) > 0 || (session?.batchJobIds?.length ?? 0) > 0;
+
   const bulkCandidates = useMemo(
     () => filteredItems.filter((item) => item.status === 'pending'),
     [filteredItems]
@@ -360,6 +363,17 @@ function ReviewPageContent() {
           >
             {pushError || actionError || pushMessage}
           </div>
+        )}
+
+        {items.length === 0 && hasJobScope && (
+          <Card className="border-amber-200 bg-amber-50">
+            <CardContent className="py-4 text-sm text-amber-700">
+              <div className="font-medium">No detections found for this review session.</div>
+              <p className="text-xs text-amber-600 mt-1">
+                This usually means the inference job finished with zero detections or failed.
+              </p>
+            </CardContent>
+          </Card>
         )}
 
         <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600">

@@ -812,7 +812,8 @@ export default function TrainingPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data?.error || "Failed to activate model");
+        const message = data?.details ? `${data.error}: ${data.details}` : data?.error;
+        throw new Error(message || "Failed to activate model");
       }
       await loadModels();
       setProjects((prev) =>
