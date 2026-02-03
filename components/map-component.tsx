@@ -33,6 +33,8 @@ interface Asset {
   gimbalYaw: number | null;
   flightSession: string | null;
   createdAt: string;
+  geoQuality?: "high" | "medium" | "low" | "missing";
+  geoMissing?: string[];
   project: {
     id: string;
     name: string;
@@ -369,6 +371,16 @@ export default function MapComponent() {
                         />
                       </div>
                       <p>{a.project.name}</p>
+                      {a.geoQuality && (
+                        <p className="text-xs text-gray-500">
+                          Geo: {a.geoQuality.charAt(0).toUpperCase() + a.geoQuality.slice(1)}
+                        </p>
+                      )}
+                      {a.geoMissing && a.geoMissing.length > 0 && (
+                        <p className="text-[10px] text-gray-400">
+                          Missing: {a.geoMissing.join(", ")}
+                        </p>
+                      )}
                     </div>
                   </Popup>
                 </Marker>

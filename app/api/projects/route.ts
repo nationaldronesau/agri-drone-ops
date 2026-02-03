@@ -44,7 +44,10 @@ export async function GET(request: NextRequest) {
         include: {
           _count: {
             select: { assets: true }
-          }
+          },
+          cameraProfile: {
+            select: { id: true, name: true },
+          },
         },
         orderBy: {
           createdAt: 'desc'

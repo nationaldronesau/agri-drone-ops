@@ -19,6 +19,11 @@ export async function GET(
 
     const session = await prisma.reviewSession.findUnique({
       where: { id: params.sessionId },
+      include: {
+        assignedTo: {
+          select: { id: true, name: true, email: true, image: true },
+        },
+      },
     });
 
     if (!session) {

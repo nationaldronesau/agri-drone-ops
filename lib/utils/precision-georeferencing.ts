@@ -11,6 +11,94 @@
 
 import { getTerrainElevation } from '@/lib/services/elevation';
 
+type MetadataRecord = Record<string, unknown>;
+
+const toNumber = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
+const readNumber = (metadata: MetadataRecord, keys: string[]): number | undefined => {
+  for (const key of keys) {
+    const value = toNumber(metadata[key]);
+    if (value != null) {
+      return value;
+    }
+  }
+  return undefined;
+};
+
+const readString = (metadata: MetadataRecord, keys: string[]): string | undefined => {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return undefined;
+};
+
+const META_KEYS = {
+  imageWidth: ['ExifImageWidth', 'ImageWidth', 'imageWidth', 'PixelXDimension'],
+  imageHeight: ['ExifImageHeight', 'ImageHeight', 'imageHeight', 'PixelYDimension'],
+  calibratedFocalLength: ['CalibratedFocalLength', 'drone-dji:CalibratedFocalLength'],
+  opticalCenterX: ['CalibratedOpticalCenterX', 'drone-dji:CalibratedOpticalCenterX'],
+  opticalCenterY: ['CalibratedOpticalCenterY', 'drone-dji:CalibratedOpticalCenterY'],
+  gpsLatitude: ['GpsLatitude', 'GPSLatitude', 'Latitude', 'latitude', 'drone-dji:GPSLatitude', 'drone-dji:GpsLatitude'],
+  gpsLongitude: ['GpsLongitude', 'GPSLongitude', 'Longitude', 'longitude', 'drone-dji:GPSLongitude', 'drone-dji:GpsLongitude'],
+  absoluteAltitude: ['AbsoluteAltitude', 'GPSAltitude', 'RelativeAltitude', 'altitude', 'drone-dji:AbsoluteAltitude', 'drone-dji:RelativeAltitude'],
+  gimbalPitch: ['GimbalPitchDegree', 'drone-dji:GimbalPitchDegree'],
+  gimbalRoll: ['GimbalRollDegree', 'drone-dji:GimbalRollDegree'],
+  gimbalYaw: ['GimbalYawDegree', 'FlightYawDegree', 'drone-dji:GimbalYawDegree', 'drone-dji:FlightYawDegree'],
+  lrfDistance: ['LRFTargetDistance', 'drone-dji:LRFTargetDistance'],
+  lrfLat: ['LRFTargetLat', 'drone-dji:LRFTargetLat'],
+  lrfLon: ['LRFTargetLon', 'drone-dji:LRFTargetLon'],
+  lrfAlt: ['LRFTargetAlt', 'drone-dji:LRFTargetAlt'],
+  dewarpData: ['DewarpData', 'drone-dji:DewarpData'],
+  fieldOfView: ['FieldOfView', 'drone-dji:FieldOfView', 'FOV', 'CameraFOV'],
+};
+
+export interface PrecisionMetadataStatus {
+  hasCalibration: boolean;
+  hasLRF: boolean;
+  hasDewarp: boolean;
+  calibratedFocalLength?: number;
+  opticalCenterX?: number;
+  opticalCenterY?: number;
+}
+
+export function getPrecisionMetadataStatus(metadata: MetadataRecord): PrecisionMetadataStatus {
+  const calibratedFocalLength = readNumber(metadata, META_KEYS.calibratedFocalLength);
+  const opticalCenterX = readNumber(metadata, META_KEYS.opticalCenterX);
+  const opticalCenterY = readNumber(metadata, META_KEYS.opticalCenterY);
+  const lrfDistance = readNumber(metadata, META_KEYS.lrfDistance);
+  const lrfLat = readNumber(metadata, META_KEYS.lrfLat);
+  const lrfLon = readNumber(metadata, META_KEYS.lrfLon);
+  const hasLRF = lrfDistance != null && lrfLat != null && lrfLon != null;
+
+  return {
+    hasCalibration: calibratedFocalLength != null && opticalCenterX != null && opticalCenterY != null,
+    hasLRF,
+    hasDewarp: Boolean(readString(metadata, META_KEYS.dewarpData)),
+    calibratedFocalLength,
+    opticalCenterX,
+    opticalCenterY,
+  };
+}
+
+export function getCameraFovFromMetadata(metadata: MetadataRecord): number | null {
+  const fov = readNumber(metadata, META_KEYS.fieldOfView);
+  return fov ?? null;
+}
+
 /**
  * SAFETY CRITICAL: Validates geographic coordinates for spray drone operations
  * Returns null if coordinates are invalid (NaN, Infinity, out of range)
@@ -285,35 +373,35 @@ async function calculateWithPhotogrammetryAndDSM(
  * Extract precision georeferencing parameters from DJI metadata
  */
 export function extractPrecisionParams(metadata: Record<string, unknown>): PrecisionGeoreferenceParams {
-  const meta = metadata as Record<string, number | null | undefined>;
+  const meta = metadata as MetadataRecord;
   return {
     // Image parameters
-    imageWidth: (meta.ExifImageWidth || meta.imageWidth || 5280) as number,
-    imageHeight: (meta.ExifImageHeight || meta.imageHeight || 3956) as number,
+    imageWidth: readNumber(meta, META_KEYS.imageWidth) ?? 5280,
+    imageHeight: readNumber(meta, META_KEYS.imageHeight) ?? 3956,
     
     // Calibrated camera parameters
-    calibratedFocalLength: (meta.CalibratedFocalLength || 3725.151611) as number,
-    opticalCenterX: (meta.CalibratedOpticalCenterX || 2640) as number,
-    opticalCenterY: (meta.CalibratedOpticalCenterY || 1978) as number,
+    calibratedFocalLength: readNumber(meta, META_KEYS.calibratedFocalLength) ?? 3725.151611,
+    opticalCenterX: readNumber(meta, META_KEYS.opticalCenterX) ?? 2640,
+    opticalCenterY: readNumber(meta, META_KEYS.opticalCenterY) ?? 1978,
     
     // Drone position (RTK GPS)
-    droneLatitude: (meta.GpsLatitude || meta.latitude) as number,
-    droneLongitude: (meta.GpsLongitude || meta.longitude) as number,
-    droneAltitude: (meta.AbsoluteAltitude || meta.altitude) as number,
+    droneLatitude: readNumber(meta, META_KEYS.gpsLatitude) ?? 0,
+    droneLongitude: readNumber(meta, META_KEYS.gpsLongitude) ?? 0,
+    droneAltitude: readNumber(meta, META_KEYS.absoluteAltitude) ?? 0,
     
     // Gimbal orientation
-    gimbalPitch: (meta.GimbalPitchDegree || -90) as number,
-    gimbalRoll: (meta.GimbalRollDegree || 0) as number,
-    gimbalYaw: (meta.GimbalYawDegree || 0) as number,
+    gimbalPitch: readNumber(meta, META_KEYS.gimbalPitch) ?? -90,
+    gimbalRoll: readNumber(meta, META_KEYS.gimbalRoll) ?? 0,
+    gimbalYaw: readNumber(meta, META_KEYS.gimbalYaw) ?? 0,
     
     // Laser rangefinder data
-    lrfTargetDistance: meta.LRFTargetDistance,
-    lrfTargetLatitude: meta.LRFTargetLat,
-    lrfTargetLongitude: meta.LRFTargetLon,
-    lrfTargetAltitude: meta.LRFTargetAlt,
+    lrfTargetDistance: readNumber(meta, META_KEYS.lrfDistance),
+    lrfTargetLatitude: readNumber(meta, META_KEYS.lrfLat),
+    lrfTargetLongitude: readNumber(meta, META_KEYS.lrfLon),
+    lrfTargetAltitude: readNumber(meta, META_KEYS.lrfAlt),
     
     // Lens distortion
-    dewarpData: meta.DewarpData
+    dewarpData: readString(meta, META_KEYS.dewarpData)
   };
 }
 

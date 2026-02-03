@@ -1,5 +1,10 @@
 import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
-import { precisionPixelToGeo, extractPrecisionParams } from '@/lib/utils/precision-georeferencing';
+import {
+  precisionPixelToGeo,
+  extractPrecisionParams,
+  getPrecisionMetadataStatus,
+  getCameraFovFromMetadata,
+} from '@/lib/utils/precision-georeferencing';
 
 export interface GeoreferenceParams {
   gpsLatitude: number;
@@ -81,6 +86,7 @@ export interface GeoAssetParams {
   gimbalYaw: number | null;
   imageWidth: number | null;
   imageHeight: number | null;
+  cameraFov?: number | null;
   metadata?: unknown | null;
   lrfDistance?: number | null;
   lrfTargetLat?: number | null;
@@ -155,6 +161,75 @@ export function validateGeoParams(asset: GeoAssetParams): GeoParamsValidationRes
     missingFields: missing as string[],
     warnings: missing.length > 0 ? [`Missing EXIF: ${missing.join(', ')}`] : [],
   };
+}
+
+export type GeoResolutionMethod = 'precision_dsm' | 'precision_lrf_dsm' | 'standard';
+
+export interface GeoResolution {
+  geo: GeoPoint;
+  method: GeoResolutionMethod;
+}
+
+const DEFAULT_CAMERA_FOV = 84;
+const DEFAULT_ALTITUDE = 100;
+
+export async function resolveGeoCoordinates(
+  asset: GeoAssetParams,
+  pixel: PixelPoint
+): Promise<GeoResolution | null> {
+  if (asset.gpsLatitude == null || asset.gpsLongitude == null) {
+    return null;
+  }
+
+  if (asset.imageWidth == null || asset.imageHeight == null) {
+    return null;
+  }
+
+  const metadata =
+    asset.metadata && typeof asset.metadata === 'object'
+      ? (asset.metadata as Record<string, unknown>)
+      : {};
+
+  const precisionStatus = getPrecisionMetadataStatus(metadata);
+  const shouldUsePrecision = precisionStatus.hasCalibration || precisionStatus.hasLRF;
+
+  if (shouldUsePrecision) {
+    const precision = await pixelToGeoWithDSM(asset, pixel);
+    if (precision) {
+      return {
+        geo: precision,
+        method: precisionStatus.hasLRF ? 'precision_lrf_dsm' : 'precision_dsm',
+      };
+    }
+  }
+
+  const cameraFov =
+    asset.cameraFov ??
+    getCameraFovFromMetadata(metadata) ??
+    DEFAULT_CAMERA_FOV;
+
+  const geoParams: GeoreferenceParams = {
+    gpsLatitude: asset.gpsLatitude,
+    gpsLongitude: asset.gpsLongitude,
+    altitude: asset.altitude ?? DEFAULT_ALTITUDE,
+    gimbalRoll: asset.gimbalRoll ?? 0,
+    gimbalPitch: asset.gimbalPitch ?? 0,
+    gimbalYaw: asset.gimbalYaw ?? 0,
+    cameraFov,
+    imageWidth: asset.imageWidth,
+    imageHeight: asset.imageHeight,
+    lrfDistance: asset.lrfDistance ?? undefined,
+    lrfTargetLat: asset.lrfTargetLat ?? undefined,
+    lrfTargetLon: asset.lrfTargetLon ?? undefined,
+  };
+
+  try {
+    const geoResult = pixelToGeo(geoParams, pixel);
+    const geo = geoResult instanceof Promise ? await geoResult : geoResult;
+    return { geo, method: 'standard' };
+  } catch {
+    return null;
+  }
 }
 
 export function pixelToGeo(

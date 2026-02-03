@@ -32,6 +32,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { CreateProjectDialog } from '@/components/training/CreateProjectDialog';
+import { WorkflowGuide } from '@/components/workflow-guide';
 
 interface RoboflowClass {
   id: string;
@@ -266,6 +267,7 @@ export default function TrainingHubPage() {
             </CardContent>
           </Card>
         )}
+        <WorkflowGuide current="sam3" />
         {/* Workflow Cards */}
         <div className="grid md:grid-cols-2 gap-6 mb-8">
           {/* Label New Species */}

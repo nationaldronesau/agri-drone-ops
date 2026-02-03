@@ -30,6 +30,17 @@ interface Project {
   name: string;
   location: string | null;
   purpose: string;
+  cameraProfileId?: string | null;
+}
+
+interface CameraProfile {
+  id: string;
+  name: string;
+  description?: string | null;
+  fov?: number | null;
+  calibratedFocalLength?: number | null;
+  opticalCenterX?: number | null;
+  opticalCenterY?: number | null;
 }
 
 function UploadPageContent() {
@@ -38,6 +49,9 @@ function UploadPageContent() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<string>("");
   const [flightSession, setFlightSession] = useState<string>("");
+  const [cameraProfiles, setCameraProfiles] = useState<CameraProfile[]>([]);
+  const [selectedCameraProfileId, setSelectedCameraProfileId] = useState<string>("none");
+  const [cameraFovInput, setCameraFovInput] = useState<string>("");
   const [runDetection, setRunDetection] = useState<boolean>(true);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [availableModels, setAvailableModels] = useState<RoboflowModel[]>([]);
@@ -45,9 +59,16 @@ function UploadPageContent() {
   const [processingError, setProcessingError] = useState<string | null>(null);
   const [projectsError, setProjectsError] = useState<string | null>(null);
   const [modelsError, setModelsError] = useState<string | null>(null);
+  const [cameraProfilesError, setCameraProfilesError] = useState<string | null>(null);
   const [uploadResponse, setUploadResponse] = useState<UploadApiResponse | null>(
     null,
   );
+
+  const parsedCameraFov = Number(cameraFovInput);
+  const cameraFov =
+    cameraFovInput.trim().length > 0 && Number.isFinite(parsedCameraFov)
+      ? parsedCameraFov
+      : undefined;
 
   // Fetch available models
   useEffect(() => {
@@ -93,6 +114,36 @@ function UploadPageContent() {
         setProjectsError(error instanceof Error ? error.message : "Unable to load projects.");
       });
   }, [projectParam]);
+
+  useEffect(() => {
+    setCameraProfilesError(null);
+    fetch("/api/camera-profiles")
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error("Failed to load camera profiles");
+        }
+        return res.json();
+      })
+      .then((data) => {
+        setCameraProfiles(data.profiles || []);
+      })
+      .catch((error) => {
+        console.error("Failed to load camera profiles:", error);
+        setCameraProfilesError(
+          error instanceof Error ? error.message : "Unable to load camera profiles."
+        );
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!selectedProject) return;
+    const project = projects.find((p) => p.id === selectedProject);
+    if (project?.cameraProfileId) {
+      setSelectedCameraProfileId(project.cameraProfileId);
+    } else {
+      setSelectedCameraProfileId("none");
+    }
+  }, [projects, selectedProject]);
 
   // Get selected models data for the UppyUploader
   const selectedModelsData = availableModels.filter((m) =>
@@ -165,7 +216,7 @@ function UploadPageContent() {
             </CardHeader>
 
             <CardContent className="space-y-6">
-              {(projectsError || modelsError) && (
+              {(projectsError || modelsError || cameraProfilesError) && (
                 <div className="space-y-2">
                   {projectsError && (
                     <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
@@ -177,6 +228,12 @@ function UploadPageContent() {
                     <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
                       <AlertCircle className="h-4 w-4" />
                       <span>{modelsError}</span>
+                    </div>
+                  )}
+                  {cameraProfilesError && (
+                    <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                      <AlertCircle className="h-4 w-4" />
+                      <span>{cameraProfilesError}</span>
                     </div>
                   )}
                 </div>
@@ -229,6 +286,49 @@ function UploadPageContent() {
                     />
                     <p className="text-xs text-gray-500">
                       Used in the S3 key path to keep uploads organised.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="cameraProfile">Camera Profile (optional)</Label>
+                    <Select
+                      value={selectedCameraProfileId}
+                      onValueChange={setSelectedCameraProfileId}
+                    >
+                      <SelectTrigger id="cameraProfile">
+                        <SelectValue placeholder="Choose a camera profile" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">No profile (use metadata)</SelectItem>
+                        {cameraProfiles.map((profile) => (
+                          <SelectItem key={profile.id} value={profile.id}>
+                            {profile.name}
+                            {profile.fov ? ` – ${profile.fov}°` : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-gray-500">
+                      Applies calibrated focal length + optical center from DJI metadata.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="cameraFov">
+                      Camera FOV Override (optional)
+                    </Label>
+                    <Input
+                      id="cameraFov"
+                      type="number"
+                      min={1}
+                      max={180}
+                      step="0.1"
+                      placeholder="e.g. 84"
+                      value={cameraFovInput}
+                      onChange={(event) => setCameraFovInput(event.target.value)}
+                    />
+                    <p className="text-xs text-gray-500">
+                      Overrides DJI metadata when present. Helps fix FOV mismatch issues.
                     </p>
                   </div>
                 </div>
@@ -289,6 +389,10 @@ function UploadPageContent() {
                   runDetection={runDetection}
                   dynamicModels={selectedModelsData}
                   flightSession={flightSession}
+                  cameraFov={cameraFov}
+                  cameraProfileId={
+                    selectedCameraProfileId !== "none" ? selectedCameraProfileId : undefined
+                  }
                   disabled={!selectedProject}
                   onProcessingStart={handleProcessingStart}
                   onProcessingComplete={handleProcessingComplete}

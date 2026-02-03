@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { getAuthenticatedUser, getUserTeamIds, checkProjectAccess } from '@/lib/auth/api-auth';
+import { evaluateGeoQuality } from '@/lib/utils/geo-quality';
 
 export async function GET(request: NextRequest) {
   try {
@@ -86,10 +87,17 @@ export async function GET(request: NextRequest) {
       return acc;
     }, {});
 
-    const assetsWithCounts = assets.map((asset) => ({
-      ...asset,
-      annotationCount: annotationCounts[asset.id] || 0,
-    }));
+    const assetsWithCounts = assets.map((asset) => {
+      const geo = evaluateGeoQuality(asset);
+      return {
+        ...asset,
+        annotationCount: annotationCounts[asset.id] || 0,
+        geoQuality: geo.quality,
+        geoMissing: geo.missing,
+        geoHasCalibration: geo.hasCalibration,
+        geoHasLrf: geo.hasLRF,
+      };
+    });
 
     return NextResponse.json({ assets: assetsWithCounts });
   } catch (error) {

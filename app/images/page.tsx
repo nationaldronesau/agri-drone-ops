@@ -27,6 +27,10 @@ interface Asset {
   fileSize: number;
   mimeType: string;
   annotationCount?: number;
+  geoQuality?: "high" | "medium" | "low" | "missing";
+  geoMissing?: string[];
+  geoHasCalibration?: boolean;
+  geoHasLrf?: boolean;
   gpsLatitude: number | null;
   gpsLongitude: number | null;
   altitude: number | null;
@@ -114,6 +118,21 @@ export default function ImagesPage() {
       hour: '2-digit',
       minute: '2-digit'
     });
+  };
+
+  const getGeoBadge = (quality?: Asset["geoQuality"]) => {
+    switch (quality) {
+      case "high":
+        return { label: "Geo: High", className: "bg-emerald-600 text-white" };
+      case "medium":
+        return { label: "Geo: Medium", className: "bg-amber-500 text-white" };
+      case "low":
+        return { label: "Geo: Low", className: "bg-orange-500 text-white" };
+      case "missing":
+        return { label: "Geo: Missing", className: "bg-red-600 text-white" };
+      default:
+        return { label: "Geo: Unknown", className: "bg-gray-500 text-white" };
+    }
   };
 
   return (
@@ -222,16 +241,28 @@ export default function ImagesPage() {
                     }}
                     unoptimized
                   />
-                  <div
-                    className={`absolute top-2 left-2 rounded-full px-2 py-0.5 text-xs font-medium shadow ${
-                      asset.annotationCount && asset.annotationCount > 0
-                        ? 'bg-green-600 text-white'
-                        : 'bg-gray-500 text-white'
-                    }`}
-                  >
-                    {asset.annotationCount && asset.annotationCount > 0
-                      ? `Labeled (${asset.annotationCount})`
-                      : 'Unlabeled'}
+                  <div className="absolute top-2 left-2 flex flex-col gap-1">
+                    <div
+                      className={`rounded-full px-2 py-0.5 text-xs font-medium shadow ${
+                        asset.annotationCount && asset.annotationCount > 0
+                          ? 'bg-green-600 text-white'
+                          : 'bg-gray-500 text-white'
+                      }`}
+                    >
+                      {asset.annotationCount && asset.annotationCount > 0
+                        ? `Labeled (${asset.annotationCount})`
+                        : 'Unlabeled'}
+                    </div>
+                    <div
+                      className={`rounded-full px-2 py-0.5 text-xs font-medium shadow ${getGeoBadge(asset.geoQuality).className}`}
+                      title={
+                        asset.geoMissing && asset.geoMissing.length > 0
+                          ? `Missing: ${asset.geoMissing.join(", ")}`
+                          : undefined
+                      }
+                    >
+                      {getGeoBadge(asset.geoQuality).label}
+                    </div>
                   </div>
                   <div className="absolute top-2 right-2 flex gap-2">
                     <Link href={`/annotate/${asset.id}`}>
@@ -341,6 +372,17 @@ export default function ImagesPage() {
                         <p>Latitude: {selectedAsset.gpsLatitude || 'N/A'}</p>
                         <p>Longitude: {selectedAsset.gpsLongitude || 'N/A'}</p>
                         <p>Altitude: {selectedAsset.altitude ? `${Math.round(selectedAsset.altitude)}m` : 'N/A'}</p>
+                        <p>
+                          Geo Quality:{" "}
+                          <span className="font-medium">
+                            {getGeoBadge(selectedAsset.geoQuality).label.replace("Geo: ", "")}
+                          </span>
+                        </p>
+                        {selectedAsset.geoMissing && selectedAsset.geoMissing.length > 0 && (
+                          <p className="text-xs text-gray-500">
+                            Missing: {selectedAsset.geoMissing.join(", ")}
+                          </p>
+                        )}
                       </div>
                     </div>
                     

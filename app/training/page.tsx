@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Slider } from "@/components/ui/slider";
+import { WorkflowGuide } from "@/components/workflow-guide";
 import {
   Select,
   SelectContent,
@@ -1542,6 +1543,8 @@ export default function TrainingPage() {
           </div>
         )}
 
+        <WorkflowGuide current="training" />
+
         {notice && (
           <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
             {notice}
@@ -1565,8 +1568,8 @@ export default function TrainingPage() {
           </div>
         )}
 
-        <div className="grid gap-6 lg:grid-cols-3">
-          <Card>
+        <section id="training" className="grid gap-6 lg:grid-cols-3">
+          <Card id="inference">
             <CardHeader>
               <CardTitle>Active Training Jobs</CardTitle>
               <CardDescription>Live progress for current runs.</CardDescription>
@@ -1973,7 +1976,7 @@ export default function TrainingPage() {
               )}
             </CardContent>
           </Card>
-        </div>
+        </section>
 
         <div className="grid gap-6 lg:grid-cols-3">
           <Card className="lg:col-span-2">

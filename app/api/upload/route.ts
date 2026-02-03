@@ -14,7 +14,8 @@ import { formatModelId } from "@/lib/services/yolo";
 import { processInferenceJob } from "@/lib/services/inference";
 import { checkRedisConnection } from "@/lib/queue/redis";
 import { enqueueInferenceJob } from "@/lib/queue/inference-queue";
-import { pixelToGeo } from "@/lib/utils/georeferencing";
+import { resolveGeoCoordinates } from "@/lib/utils/georeferencing";
+import { getCameraFovFromMetadata } from "@/lib/utils/precision-georeferencing";
 import { S3Service } from "@/lib/services/s3";
 
 const fileSchema = z.object({
@@ -42,6 +43,8 @@ const requestSchema = z.object({
   detectionModels: z.string().optional(), // Legacy: comma-separated model keys
   dynamicModels: z.array(dynamicModelSchema).optional(), // New: dynamic models from workspace
   flightSession: z.string().optional(),
+  cameraFov: z.number().min(1).max(180).optional(),
+  cameraProfileId: z.string().optional(),
 });
 
 const AUTO_INFERENCE_CONFIDENCE = 0.25;
@@ -54,6 +57,7 @@ interface ExtractedMetadata {
   gimbalPitch: number | null;
   gimbalRoll: number | null;
   gimbalYaw: number | null;
+  cameraFov: number | null;
   lrfDistance: number | null;
   lrfTargetLat: number | null;
   lrfTargetLon: number | null;
@@ -123,6 +127,7 @@ const defaultExtractedMetadata = (): ExtractedMetadata => ({
   gimbalPitch: null,
   gimbalRoll: null,
   gimbalYaw: null,
+  cameraFov: null,
   lrfDistance: null,
   lrfTargetLat: null,
   lrfTargetLon: null,
@@ -149,6 +154,8 @@ export async function POST(request: NextRequest) {
       detectionModels,
       dynamicModels,
       flightSession,
+      cameraFov,
+      cameraProfileId,
     } = parsed.data;
 
     // Verify user is authenticated AND has access to the project
@@ -171,11 +178,55 @@ export async function POST(request: NextRequest) {
         teamId: true,
         activeModelId: true,
         autoInferenceEnabled: true,
+        cameraProfileId: true,
       },
     });
 
     if (!projectSettings) {
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    }
+
+    const explicitCameraProfileId = cameraProfileId || null;
+    const effectiveCameraProfileId =
+      explicitCameraProfileId || projectSettings.cameraProfileId || null;
+
+    let cameraProfile: {
+      id: string;
+      name: string;
+      fov: number | null;
+      calibratedFocalLength: number | null;
+      opticalCenterX: number | null;
+      opticalCenterY: number | null;
+    } | null = null;
+
+    if (effectiveCameraProfileId) {
+      cameraProfile = await prisma.cameraProfile.findFirst({
+        where: {
+          id: effectiveCameraProfileId,
+          teamId: projectSettings.teamId,
+        },
+        select: {
+          id: true,
+          name: true,
+          fov: true,
+          calibratedFocalLength: true,
+          opticalCenterX: true,
+          opticalCenterY: true,
+        },
+      });
+
+      if (!cameraProfile) {
+        if (explicitCameraProfileId) {
+          return NextResponse.json(
+            { error: "Camera profile not found or access denied" },
+            { status: 400 }
+          );
+        }
+        console.warn(
+          `[Upload] Project default camera profile not found: ${effectiveCameraProfileId}`
+        );
+        cameraProfile = null;
+      }
     }
 
     // Check if we're using dynamic models (new) or legacy hardcoded models
@@ -375,6 +426,10 @@ export async function POST(request: NextRequest) {
                 | undefined) ??
               null;
 
+            extractedData.cameraFov =
+              extractedData.cameraFov ??
+              getCameraFovFromMetadata(fullMetadata);
+
             extractedData.gimbalPitch =
               (fullMetadata["GimbalPitchDegree"] as number | undefined) ??
               (fullMetadata["drone-dji:GimbalPitchDegree"] as
@@ -427,6 +482,44 @@ export async function POST(request: NextRequest) {
               extractedData.lrfTargetLon = null;
             }
           }
+
+          if (cameraProfile) {
+            const geoOverrides: Record<string, number> = {};
+            if (cameraProfile.calibratedFocalLength != null) {
+              geoOverrides.CalibratedFocalLength = cameraProfile.calibratedFocalLength;
+            }
+            if (cameraProfile.opticalCenterX != null) {
+              geoOverrides.CalibratedOpticalCenterX = cameraProfile.opticalCenterX;
+            }
+            if (cameraProfile.opticalCenterY != null) {
+              geoOverrides.CalibratedOpticalCenterY = cameraProfile.opticalCenterY;
+            }
+
+            if (cameraProfile.fov != null && cameraFov == null) {
+              extractedData.cameraFov = cameraProfile.fov;
+            }
+
+            if (Object.keys(geoOverrides).length > 0) {
+              const baseMetadata =
+                fullMetadata && typeof fullMetadata === "object" ? fullMetadata : {};
+              fullMetadata = {
+                ...baseMetadata,
+                ...geoOverrides,
+                geoOverrides: {
+                  ...(typeof (baseMetadata as Record<string, unknown>).geoOverrides === "object"
+                    ? (baseMetadata as Record<string, unknown>).geoOverrides
+                    : {}),
+                  ...geoOverrides,
+                  cameraProfileId: cameraProfile.id,
+                  cameraProfileName: cameraProfile.name,
+                },
+              };
+            }
+          }
+
+          if (cameraFov != null) {
+            extractedData.cameraFov = cameraFov;
+          }
         } catch (metadataError) {
           console.error("Error parsing EXIF/XMP:", metadataError);
           fileWarnings.push(
@@ -474,12 +567,14 @@ export async function POST(request: NextRequest) {
               s3Key: key,
               s3Bucket: bucket,
               storageType: "s3",
+              cameraProfileId: cameraProfile?.id ?? null,
               gpsLatitude: extractedData.gpsLatitude,
               gpsLongitude: extractedData.gpsLongitude,
               altitude: extractedData.altitude,
               gimbalPitch: extractedData.gimbalPitch,
               gimbalRoll: extractedData.gimbalRoll,
               gimbalYaw: extractedData.gimbalYaw,
+              cameraFov: extractedData.cameraFov,
               lrfDistance: extractedData.lrfDistance,
               lrfTargetLat: extractedData.lrfTargetLat,
               lrfTargetLon: extractedData.lrfTargetLon,
@@ -518,31 +613,37 @@ export async function POST(request: NextRequest) {
             const validDetections: Array<{
               detection: InferenceDetection;
               geoCoords: { lat: number; lon: number };
+              geoMethod: string;
             }> = [];
 
-            // Build georeferencing params once for this image
-            const geoParams = {
+            const geoContext = {
               gpsLatitude: extractedData.gpsLatitude!,
               gpsLongitude: extractedData.gpsLongitude!,
-              altitude: extractedData.altitude || 100,
-              gimbalRoll: extractedData.gimbalRoll || 0,
-              gimbalPitch: extractedData.gimbalPitch || 0,
-              gimbalYaw: extractedData.gimbalYaw || 0,
-              cameraFov: 84, // Default FOV for DJI drones
+              altitude: extractedData.altitude ?? null,
+              gimbalRoll: extractedData.gimbalRoll ?? null,
+              gimbalPitch: extractedData.gimbalPitch ?? null,
+              gimbalYaw: extractedData.gimbalYaw ?? null,
+              cameraFov: extractedData.cameraFov ?? null,
               imageWidth: extractedData.imageWidth!,
               imageHeight: extractedData.imageHeight!,
-              lrfDistance: extractedData.lrfDistance ?? undefined,
-              lrfTargetLat: extractedData.lrfTargetLat ?? undefined,
-              lrfTargetLon: extractedData.lrfTargetLon ?? undefined,
+              lrfDistance: extractedData.lrfDistance ?? null,
+              lrfTargetLat: extractedData.lrfTargetLat ?? null,
+              lrfTargetLon: extractedData.lrfTargetLon ?? null,
+              metadata: fullMetadata,
             };
 
             for (const detection of detectionResults) {
               try {
                 const pixel = { x: detection.x, y: detection.y };
-                const geoResult = pixelToGeo(geoParams, pixel);
+                const resolved = await resolveGeoCoordinates(geoContext, pixel);
+                if (!resolved) {
+                  console.warn(
+                    `[SAFETY] Georeferencing failed for ${file.name}, class=${detection.class}`
+                  );
+                  continue;
+                }
 
-                // Handle potential Promise return (when DTM is used)
-                const geoCoords = geoResult instanceof Promise ? await geoResult : geoResult;
+                const geoCoords = resolved.geo;
 
                 // SAFETY CRITICAL: Validate detection coordinates before saving
                 // pixelToGeo returns { lat, lon } not { latitude, longitude }
@@ -551,7 +652,7 @@ export async function POST(request: NextRequest) {
                   continue;
                 }
 
-                validDetections.push({ detection, geoCoords });
+                validDetections.push({ detection, geoCoords, geoMethod: resolved.method });
               } catch (geoError) {
                 // SAFETY: Skip this detection if georeferencing fails, don't abort entire upload
                 console.warn(`[SAFETY] Georeferencing failed for detection in ${file.name}, class=${detection.class}:`, geoError);
@@ -560,7 +661,7 @@ export async function POST(request: NextRequest) {
             }
 
             // Create all detections within the transaction
-            for (const { detection, geoCoords } of validDetections) {
+            for (const { detection, geoCoords, geoMethod } of validDetections) {
               const savedDetection = await tx.detection.create({
                 data: {
                   jobId: job.id,
@@ -583,6 +684,7 @@ export async function POST(request: NextRequest) {
                   metadata: {
                     modelType: detection.modelType,
                     color: detection.color,
+                    geoMethod,
                   },
                 },
               });
