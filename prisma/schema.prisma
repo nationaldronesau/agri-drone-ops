@@ -8,20 +8,21 @@ datasource db {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  email         String    @unique
-  password      String?
-  name          String?
-  image         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  
-  accounts      Account[]
-  sessions      Session[]
-  teamMembers   TeamMember[]
-  createdAssets Asset[]
-  reviewSessions ReviewSession[]
-  yoloInferenceJobs YOLOInferenceJob[]
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String?
+  name      String?
+  image     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts               Account[]
+  sessions               Session[]
+  teamMembers            TeamMember[]
+  createdAssets          Asset[]
+  createdReviewSessions  ReviewSession[]    @relation("ReviewSessionCreator")
+  assignedReviewSessions ReviewSession[]    @relation("ReviewSessionAssignee")
+  yoloInferenceJobs      YOLOInferenceJob[]
 }
 
 model Account {
@@ -52,15 +53,15 @@ model Session {
 }
 
 model Team {
-  id          String       @id @default(cuid())
+  id          String   @id @default(cuid())
   name        String
   description String?
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  
-  members     TeamMember[]
-  projects    Project[]
-  cameraProfiles CameraProfile[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members           TeamMember[]
+  projects          Project[]
+  cameraProfiles    CameraProfile[]
   trainingDatasets  TrainingDataset[]
   trainingJobs      TrainingJob[]
   trainedModels     TrainedModel[]
@@ -74,10 +75,10 @@ model TeamMember {
   teamId    String
   role      TeamRole @default(MEMBER)
   createdAt DateTime @default(now())
-  
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
   @@unique([userId, teamId])
 }
 
@@ -88,37 +89,37 @@ enum TeamRole {
 }
 
 model Project {
-  id          String   @id @default(cuid())
-  name        String
-  description String?
-  teamId      String
+  id              String  @id @default(cuid())
+  name            String
+  description     String?
+  teamId          String
   cameraProfileId String?
-  
+
   // Enhanced fields for location-based grouping
-  location    String?  // Farm/property name
-  purpose     ProjectPurpose @default(WEED_DETECTION)
-  season      String?  // e.g., "2024 Spring", "Winter Survey"
-  
+  location String? // Farm/property name
+  purpose  ProjectPurpose @default(WEED_DETECTION)
+  season   String? // e.g., "2024 Spring", "Winter Survey"
+
   // Geographic center for map filtering
-  centerLat   Float?
-  centerLon   Float?
+  centerLat Float?
+  centerLon Float?
 
   // YOLO inference settings
-  activeModelId         String?
-  activeModel           TrainedModel? @relation("ProjectActiveModel", fields: [activeModelId], references: [id])
-  autoInferenceEnabled  Boolean       @default(false)
-  
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  
-  team        Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  cameraProfile CameraProfile? @relation(fields: [cameraProfileId], references: [id])
-  assets      Asset[]
-  jobs        ProcessingJob[]
-  orthomosaics Orthomosaic[]
-  batchJobs   BatchJob[]
-  trainingDatasets TrainingDataset[]
-  reviewSessions ReviewSession[]
+  activeModelId        String?
+  activeModel          TrainedModel? @relation("ProjectActiveModel", fields: [activeModelId], references: [id])
+  autoInferenceEnabled Boolean       @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  team              Team               @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  cameraProfile     CameraProfile?     @relation(fields: [cameraProfileId], references: [id])
+  assets            Asset[]
+  jobs              ProcessingJob[]
+  orthomosaics      Orthomosaic[]
+  batchJobs         BatchJob[]
+  trainingDatasets  TrainingDataset[]
+  reviewSessions    ReviewSession[]
   yoloInferenceJobs YOLOInferenceJob[]
 
   @@index([teamId])
@@ -138,7 +139,7 @@ enum ProjectPurpose {
 }
 
 model Asset {
-  id              String   @id @default(cuid())
+  id              String  @id @default(cuid())
   projectId       String
   fileName        String
   fileSize        Int
@@ -146,68 +147,68 @@ model Asset {
   storageUrl      String
   thumbnailUrl    String?
   cameraProfileId String?
-  
+
   // S3 Storage (nullable for backward compatibility)
-  s3Key           String?  // S3 object key
-  s3Bucket        String?  // S3 bucket name
-  storageType     String   @default("local") // "local" or "s3"
-  uploadedAt      DateTime @default(now())
-  
+  s3Key       String? // S3 object key
+  s3Bucket    String? // S3 bucket name
+  storageType String   @default("local") // "local" or "s3"
+  uploadedAt  DateTime @default(now())
+
   // Flight session grouping
-  flightSession   String?  // e.g., "Flight 1 - Section A", "Morning Survey"
-  flightDate      DateTime?
-  
+  flightSession String? // e.g., "Flight 1 - Section A", "Morning Survey"
+  flightDate    DateTime?
+
   // Metadata from EXIF
-  metadata        Json?
-  gpsLatitude     Float?
-  gpsLongitude    Float?
-  altitude        Float?
-  gimbalRoll      Float?
-  gimbalPitch     Float?
-  gimbalYaw       Float?
-  cameraFov       Float?
-  imageWidth      Int?
-  imageHeight     Int?
-  lrfDistance     Float?
-  lrfTargetLat    Float?
-  lrfTargetLon    Float?
-  
-  createdAt       DateTime @default(now())
-  createdById     String
-  
-  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  cameraProfile   CameraProfile? @relation(fields: [cameraProfileId], references: [id])
-  createdBy       User     @relation(fields: [createdById], references: [id])
-  detections      Detection[]
-  processingJobs  ProcessingJob[]
+  metadata     Json?
+  gpsLatitude  Float?
+  gpsLongitude Float?
+  altitude     Float?
+  gimbalRoll   Float?
+  gimbalPitch  Float?
+  gimbalYaw    Float?
+  cameraFov    Float?
+  imageWidth   Int?
+  imageHeight  Int?
+  lrfDistance  Float?
+  lrfTargetLat Float?
+  lrfTargetLon Float?
+
+  createdAt   DateTime @default(now())
+  createdById String
+
+  project            Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  cameraProfile      CameraProfile?      @relation(fields: [cameraProfileId], references: [id])
+  createdBy          User                @relation(fields: [createdById], references: [id])
+  detections         Detection[]
+  processingJobs     ProcessingJob[]
   annotationSessions AnnotationSession[]
   pendingAnnotations PendingAnnotation[]
 
+  @@unique([s3Key])
   @@index([projectId])
   @@index([cameraProfileId])
   @@index([flightSession])
   @@index([gpsLatitude, gpsLongitude])
-  @@unique([s3Key])
   @@index([createdById])
   @@index([createdAt])
 }
 
 model ProcessingJob {
-  id          String       @id @default(cuid())
-  projectId   String
-  type        JobType
-  status      JobStatus    @default(PENDING)
-  config      Json?        // Job-specific configuration (e.g., Roboflow model ID)
-  progress    Int          @default(0)
+  id           String    @id @default(cuid())
+  projectId    String
+  type         JobType
+  status       JobStatus @default(PENDING)
+  config       Json? // Job-specific configuration (e.g., Roboflow model ID)
+  progress     Int       @default(0)
   errorMessage String?
-  startedAt   DateTime?
-  completedAt DateTime?
-  createdAt   DateTime     @default(now())
-  
-  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  assets      Asset[]
-  detections  Detection[]
-  
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  project    Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assets     Asset[]
+  detections Detection[]
+
   @@index([projectId, status])
   @@index([status])
   @@index([createdAt])
@@ -227,47 +228,47 @@ enum JobStatus {
 }
 
 model Detection {
-  id              String         @id @default(cuid())
-  jobId           String?
-  assetId         String
-  type            DetectionType
-  className       String
-  confidence      Float?
+  id         String        @id @default(cuid())
+  jobId      String?
+  assetId    String
+  type       DetectionType
+  className  String
+  confidence Float?
 
   // Custom model source tracking
-  customModelId   String?
-  
+  customModelId String?
+
   // Pixel coordinates
-  boundingBox     Json           // {x, y, width, height} or polygon points
-  
+  boundingBox Json // {x, y, width, height} or polygon points
+
   // Geographic coordinates
-  geoCoordinates  Json?          // GeoJSON format
+  geoCoordinates  Json? // GeoJSON format
   centerLat       Float?
   centerLon       Float?
-  geoDsmCorrected Boolean        @default(false)
+  geoDsmCorrected Boolean @default(false)
 
   // YOLO preprocessing metadata (letterbox/tiling)
   preprocessingMeta Json?
 
   // YOLO inference linkage (local model)
-  inferenceJobId  String?
+  inferenceJobId String?
 
   // Additional data
-  metadata        Json?          // Any additional data (e.g., chemical recommendations)
-  verified        Boolean        @default(false)
-  reviewedAt      DateTime?
-  reviewedBy      String?
-  rejected        Boolean        @default(false)
-  userCorrected   Boolean        @default(false)
-  originalClass   String?
-  
-  createdAt       DateTime       @default(now())
-  
-  job             ProcessingJob? @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  asset           Asset          @relation(fields: [assetId], references: [id], onDelete: Cascade)
-  customModel     TrainedModel?  @relation(fields: [customModelId], references: [id])
-  inferenceJob    YOLOInferenceJob? @relation(fields: [inferenceJobId], references: [id], onDelete: SetNull)
-  
+  metadata      Json? // Any additional data (e.g., chemical recommendations)
+  verified      Boolean   @default(false)
+  reviewedAt    DateTime?
+  reviewedBy    String?
+  rejected      Boolean   @default(false)
+  userCorrected Boolean   @default(false)
+  originalClass String?
+
+  createdAt DateTime @default(now())
+
+  job          ProcessingJob?    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  asset        Asset             @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  customModel  TrainedModel?     @relation(fields: [customModelId], references: [id])
+  inferenceJob YOLOInferenceJob? @relation(fields: [inferenceJobId], references: [id], onDelete: SetNull)
+
   @@index([jobId])
   @@index([assetId])
   @@index([customModelId])
@@ -296,53 +297,53 @@ model ChemicalRecommendation {
 }
 
 model AnnotationSession {
-  id            String               @id @default(cuid())
-  assetId       String
-  userId        String?              // Optional - for when auth is enabled
-  status        AnnotationStatus     @default(IN_PROGRESS)
-  createdAt     DateTime             @default(now())
-  completedAt   DateTime?
-  updatedAt     DateTime             @updatedAt
-  
-  asset         Asset                @relation(fields: [assetId], references: [id], onDelete: Cascade)
-  annotations   ManualAnnotation[]
-  
+  id          String           @id @default(cuid())
+  assetId     String
+  userId      String? // Optional - for when auth is enabled
+  status      AnnotationStatus @default(IN_PROGRESS)
+  createdAt   DateTime         @default(now())
+  completedAt DateTime?
+  updatedAt   DateTime         @updatedAt
+
+  asset       Asset              @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  annotations ManualAnnotation[]
+
   @@index([assetId])
   @@index([status])
 }
 
 model ManualAnnotation {
-  id              String           @id @default(cuid())
-  sessionId       String
-  weedType        String           // e.g., "Unknown Weed #1", "Suspected Lantana"
-  confidence      ConfidenceLevel  @default(LIKELY)
+  id         String          @id @default(cuid())
+  sessionId  String
+  weedType   String // e.g., "Unknown Weed #1", "Suspected Lantana"
+  confidence ConfidenceLevel @default(LIKELY)
 
   // Pixel coordinates (polygon vertices)
-  coordinates     Json             // [[x1,y1], [x2,y2], ...] in pixels
+  coordinates Json // [[x1,y1], [x2,y2], ...] in pixels
 
   // Geographic coordinates (converted from pixels)
-  geoCoordinates  Json?            // GeoJSON polygon format
-  centerLat       Float?           // Center point for map display
-  centerLon       Float?
+  geoCoordinates Json? // GeoJSON polygon format
+  centerLat      Float? // Center point for map display
+  centerLon      Float?
 
   // Additional metadata
-  notes           String?
-  verified        Boolean          @default(false)
-  verifiedBy      String?          // User who verified
-  verifiedAt      DateTime?
+  notes      String?
+  verified   Boolean   @default(false)
+  verifiedBy String? // User who verified
+  verifiedAt DateTime?
 
   // Training integration - legacy (single project from env var)
-  pushedToTraining Boolean         @default(false)
+  pushedToTraining Boolean   @default(false)
   pushedAt         DateTime?
   roboflowImageId  String?
 
   // Training integration - new (project-aware)
-  roboflowProjectId   String?      // Which Roboflow project this targets
-  roboflowClassName   String?      // Class name as it appears in Roboflow
-  trainingSessionId   String?      // Link to training session workflow
+  roboflowProjectId String? // Which Roboflow project this targets
+  roboflowClassName String? // Class name as it appears in Roboflow
+  trainingSessionId String? // Link to training session workflow
 
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   session         AnnotationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   trainingSession TrainingSession?  @relation(fields: [trainingSessionId], references: [id])
@@ -369,44 +370,44 @@ enum ConfidenceLevel {
 }
 
 model Orthomosaic {
-  id            String           @id @default(cuid())
-  projectId     String
-  name          String
-  description   String?
-  
+  id          String  @id @default(cuid())
+  projectId   String
+  name        String
+  description String?
+
   // File information
-  originalFile  String           // S3/local path to GeoTIFF
-  tilesetPath   String?          // Path to processed tiles
-  fileSize      BigInt
-  
+  originalFile String // S3/local path to GeoTIFF
+  tilesetPath  String? // Path to processed tiles
+  fileSize     BigInt
+
   // S3 Storage (nullable for backward compatibility)
-  s3Key         String?          // S3 object key for GeoTIFF
-  s3TilesetKey  String?          // S3 prefix for tiles
-  s3Bucket      String?          // S3 bucket name
-  storageType   String           @default("local") // "local" or "s3"
-  
+  s3Key        String? // S3 object key for GeoTIFF
+  s3TilesetKey String? // S3 prefix for tiles
+  s3Bucket     String? // S3 bucket name
+  storageType  String  @default("local") // "local" or "s3"
+
   // Georeferencing
-  bounds        Json             // GeoJSON bounds
-  centerLat     Float
-  centerLon     Float
-  minZoom       Int              @default(10)
-  maxZoom       Int              @default(22)
-  
+  bounds    Json // GeoJSON bounds
+  centerLat Float
+  centerLon Float
+  minZoom   Int   @default(10)
+  maxZoom   Int   @default(22)
+
   // Metadata
-  captureDate   DateTime?
-  resolution    Float?           // cm/pixel
-  area          Float?           // hectares
-  imageCount    Int?             // number of source images
-  
+  captureDate DateTime?
+  resolution  Float? // cm/pixel
+  area        Float? // hectares
+  imageCount  Int? // number of source images
+
   // Processing status
   status        ProcessingStatus @default(PENDING)
   processingLog Json?
-  
+
   // Relations
-  project       Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
-  
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   @@index([projectId])
   @@index([status])
 }
@@ -423,30 +424,30 @@ enum ProcessingStatus {
 // ============================================
 
 model BatchJob {
-  id              String          @id @default(cuid())
-  projectId       String
-  weedType        String          // Target weed type for detection
-  exemplars       Json            // Stored exemplar boxes [{x1,y1,x2,y2}, ...]
-  textPrompt      String?         // Optional text prompt for SAM3
-  exemplarSourceWidth  Int?       // Width of image where exemplars were drawn
-  exemplarSourceHeight Int?       // Height of image where exemplars were drawn
-  exemplarId      String?         // Concept propagation exemplar ID
-  sourceAssetId   String?         // Asset ID used to create exemplar
+  id                   String  @id @default(cuid())
+  projectId            String
+  weedType             String // Target weed type for detection
+  exemplars            Json // Stored exemplar boxes [{x1,y1,x2,y2}, ...]
+  textPrompt           String? // Optional text prompt for SAM3
+  exemplarSourceWidth  Int? // Width of image where exemplars were drawn
+  exemplarSourceHeight Int? // Height of image where exemplars were drawn
+  exemplarId           String? // Concept propagation exemplar ID
+  sourceAssetId        String? // Asset ID used to create exemplar
 
   // Processing status
-  status          BatchJobStatus  @default(QUEUED)
-  totalImages     Int             // Total images to process
-  processedImages Int             @default(0)
-  detectionsFound Int             @default(0)
+  status          BatchJobStatus @default(QUEUED)
+  totalImages     Int // Total images to process
+  processedImages Int            @default(0)
+  detectionsFound Int            @default(0)
   errorMessage    String?
 
   // Timestamps
-  createdAt       DateTime        @default(now())
-  startedAt       DateTime?
-  completedAt     DateTime?
+  createdAt   DateTime  @default(now())
+  startedAt   DateTime?
+  completedAt DateTime?
 
   // Relations
-  project         Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project            Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
   pendingAnnotations PendingAnnotation[]
 
   @@index([projectId])
@@ -462,33 +463,33 @@ enum BatchJobStatus {
 }
 
 model PendingAnnotation {
-  id            String                  @id @default(cuid())
-  batchJobId    String
-  assetId       String
-  weedType      String
-  confidence    Float                   // SAM3 confidence score
-  similarity    Float?                  // Concept similarity score (if available)
+  id         String @id @default(cuid())
+  batchJobId String
+  assetId    String
+  weedType   String
+  confidence Float // SAM3 confidence score
+  similarity Float? // Concept similarity score (if available)
 
   // Coordinates
-  polygon       Json                    // [[x,y], ...] pixel coordinates
-  bbox          Json                    // [x1, y1, x2, y2] bounding box
+  polygon Json // [[x,y], ...] pixel coordinates
+  bbox    Json // [x1, y1, x2, y2] bounding box
 
   // Geographic (computed from pixel coords)
-  geoPolygon    Json?                   // GeoJSON polygon
-  centerLat     Float?
-  centerLon     Float?
+  geoPolygon Json? // GeoJSON polygon
+  centerLat  Float?
+  centerLon  Float?
 
   // Review status
-  status        PendingAnnotationStatus @default(PENDING)
-  reviewedAt    DateTime?
-  reviewedBy    String?
+  status          PendingAnnotationStatus @default(PENDING)
+  reviewedAt      DateTime?
+  reviewedBy      String?
   rejectionReason String?
 
-  createdAt     DateTime                @default(now())
+  createdAt DateTime @default(now())
 
   // Relations
-  batchJob      BatchJob                @relation(fields: [batchJobId], references: [id], onDelete: Cascade)
-  asset         Asset                   @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  batchJob BatchJob @relation(fields: [batchJobId], references: [id], onDelete: Cascade)
+  asset    Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
   @@index([batchJobId])
   @@index([assetId])
@@ -507,50 +508,50 @@ enum PendingAnnotationStatus {
 // ============================================
 
 model ReviewSession {
-  id                  String   @id @default(cuid())
+  id String @id @default(cuid())
 
   // Ownership
-  teamId              String
-  team                Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  createdById         String
-  createdBy           User     @relation(fields: [createdById], references: [id])
-  assignedToId        String?
-  assignedTo          User?    @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
-  assignedAt          DateTime?
+  teamId       String
+  team         Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  createdById  String
+  createdBy    User      @relation("ReviewSessionCreator", fields: [createdById], references: [id])
+  assignedToId String?
+  assignedTo   User?     @relation("ReviewSessionAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  assignedAt   DateTime?
 
   // Project scope
-  projectId           String
-  project             Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   // Workflow context
-  workflowType        String
-  targetType          String
-  roboflowProjectId   String?
-  yoloModelName       String?
+  workflowType      String
+  targetType        String
+  roboflowProjectId String?
+  yoloModelName     String?
 
   // Filters (used at creation)
   confidenceThreshold Float?
   weedTypeFilter      String?
 
   // Asset snapshot (deterministic review/export)
-  assetIds            Json     // String[] of asset IDs
-  assetCount          Int
+  assetIds   Json // String[] of asset IDs
+  assetCount Int
 
   // Job linkage (app-level defaults)
-  inferenceJobIds     Json?    // String[] of YOLOInferenceJob IDs
-  batchJobIds         Json?    // String[] of BatchJob IDs
+  inferenceJobIds Json? // String[] of YOLOInferenceJob IDs
+  batchJobIds     Json? // String[] of BatchJob IDs
 
   // Status and counters
-  status              String   @default("active")
-  itemsReviewed       Int      @default(0)
-  itemsAccepted       Int      @default(0)
-  itemsRejected       Int      @default(0)
+  status        String @default("active")
+  itemsReviewed Int    @default(0)
+  itemsAccepted Int    @default(0)
+  itemsRejected Int    @default(0)
 
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  edits               ReviewSessionEdit[]
-  yoloJobs            YOLOInferenceJob[]
+  edits    ReviewSessionEdit[]
+  yoloJobs YOLOInferenceJob[]
 
   @@index([teamId])
   @@index([projectId])
@@ -559,69 +560,69 @@ model ReviewSession {
 }
 
 model CameraProfile {
-  id                     String   @id @default(cuid())
-  teamId                 String
-  name                   String
-  description            String?
-  fov                    Float?
-  calibratedFocalLength  Float?
-  opticalCenterX         Float?
-  opticalCenterY         Float?
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  id                    String   @id @default(cuid())
+  teamId                String
+  name                  String
+  description           String?
+  fov                   Float?
+  calibratedFocalLength Float?
+  opticalCenterX        Float?
+  opticalCenterY        Float?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
-  team                   Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  projects               Project[]
-  assets                 Asset[]
+  team     Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  projects Project[]
+  assets   Asset[]
 
   @@unique([teamId, name])
   @@index([teamId])
 }
 
 model ReviewSessionEdit {
-  id                String   @id @default(cuid())
-  reviewSessionId   String
-  reviewSession     ReviewSession @relation(fields: [reviewSessionId], references: [id], onDelete: Cascade)
-  sourceType        String
-  sourceId          String
-  newAnnotationId   String
-  createdAt         DateTime @default(now())
+  id              String        @id @default(cuid())
+  reviewSessionId String
+  reviewSession   ReviewSession @relation(fields: [reviewSessionId], references: [id], onDelete: Cascade)
+  sourceType      String
+  sourceId        String
+  newAnnotationId String
+  createdAt       DateTime      @default(now())
 
   @@unique([reviewSessionId, sourceType, sourceId])
   @@index([reviewSessionId])
 }
 
 model YOLOInferenceJob {
-  id              String   @id @default(cuid())
+  id String @id @default(cuid())
 
   // Ownership
-  teamId          String
-  team            Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  createdById     String
-  createdBy       User     @relation(fields: [createdById], references: [id])
+  teamId      String
+  team        Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  createdById String
+  createdBy   User   @relation(fields: [createdById], references: [id])
 
   // Context
   reviewSessionId String?
   reviewSession   ReviewSession? @relation(fields: [reviewSessionId], references: [id], onDelete: SetNull)
   projectId       String
-  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  assetIds        Json?    // String[] - only when reviewSessionId is null
+  project         Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assetIds        Json? // String[] - only when reviewSessionId is null
 
   // Model config
-  modelName       String
-  confidence      Float    @default(0.5)
+  modelName  String
+  confidence Float  @default(0.5)
 
   // Status
   status          BatchJobStatus @default(QUEUED)
-  processedImages Int      @default(0)
+  processedImages Int            @default(0)
   totalImages     Int
-  detectionsFound Int      @default(0)
+  detectionsFound Int            @default(0)
   errorMessage    String?
 
-  createdAt       DateTime @default(now())
-  completedAt     DateTime?
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
 
-  detections      Detection[]
+  detections Detection[]
 
   @@index([teamId])
   @@index([projectId])
@@ -634,36 +635,36 @@ model YOLOInferenceJob {
 // ============================================
 
 model RoboflowProject {
-  id            String   @id @default(cuid())
-  roboflowId    String   @unique  // Roboflow project ID e.g., "lantana-detection-v3"
-  workspaceId   String              // Roboflow workspace name
-  name          String              // Display name
-  type          String              // "object-detection" or "instance-segmentation"
-  annotation    String?             // Annotation group name
+  id          String  @id @default(cuid())
+  roboflowId  String  @unique // Roboflow project ID e.g., "lantana-detection-v3"
+  workspaceId String // Roboflow workspace name
+  name        String // Display name
+  type        String // "object-detection" or "instance-segmentation"
+  annotation  String? // Annotation group name
 
   // Cached stats (refreshed on sync)
-  imageCount    Int      @default(0)
-  lastSyncedAt  DateTime @default(now())
+  imageCount   Int      @default(0)
+  lastSyncedAt DateTime @default(now())
 
   // Relations
-  classes           RoboflowClass[]
-  trainingSessions  TrainingSession[]
+  classes          RoboflowClass[]
+  trainingSessions TrainingSession[]
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([roboflowId])
   @@index([workspaceId])
 }
 
 model RoboflowClass {
-  id        String   @id @default(cuid())
+  id        String  @id @default(cuid())
   projectId String
   className String
-  color     String?  // For UI display consistency
-  count     Int      @default(0)  // Number of images with this class
+  color     String? // For UI display consistency
+  count     Int     @default(0) // Number of images with this class
 
-  project   RoboflowProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project RoboflowProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -674,24 +675,24 @@ model RoboflowClass {
 }
 
 model TrainingSession {
-  id                    String                 @id @default(cuid())
-  roboflowProjectId     String
-  workflowType          TrainingWorkflowType
-  status                TrainingSessionStatus  @default(IN_PROGRESS)
+  id                String                @id @default(cuid())
+  roboflowProjectId String
+  workflowType      TrainingWorkflowType
+  status            TrainingSessionStatus @default(IN_PROGRESS)
 
   // Stats
-  imagesTotal           Int      @default(0)
-  imagesLabeled         Int      @default(0)
-  annotationsCreated    Int      @default(0)
-  annotationsPushed     Int      @default(0)
+  imagesTotal        Int @default(0)
+  imagesLabeled      Int @default(0)
+  annotationsCreated Int @default(0)
+  annotationsPushed  Int @default(0)
 
   // Relations
-  roboflowProject       RoboflowProject @relation(fields: [roboflowProjectId], references: [id])
-  annotations           ManualAnnotation[]
+  roboflowProject RoboflowProject    @relation(fields: [roboflowProjectId], references: [id])
+  annotations     ManualAnnotation[]
 
-  createdAt             DateTime @default(now())
-  completedAt           DateTime?
-  pushedAt              DateTime?
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+  pushedAt    DateTime?
 
   @@index([roboflowProjectId])
   @@index([status])
@@ -715,104 +716,104 @@ enum TrainingSessionStatus {
 // ============================================
 
 model TrainingDataset {
-  id                  String   @id @default(cuid())
-  name                String
-  description         String?
+  id          String  @id @default(cuid())
+  name        String
+  description String?
 
   // S3 location
-  s3Path              String
-  s3Bucket            String
+  s3Path   String
+  s3Bucket String
 
   // Source project (optional - can be built from multiple sessions)
-  projectId           String?
-  project             Project? @relation(fields: [projectId], references: [id])
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id])
 
   // Dataset statistics
-  imageCount          Int
-  labelCount          Int
-  classes             String   // JSON: ["wattle", "lantana", ...]
+  imageCount Int
+  labelCount Int
+  classes    String // JSON: ["wattle", "lantana", ...]
 
   // Train/val/test split
-  trainCount          Int
-  valCount            Int
-  testCount           Int
+  trainCount Int
+  valCount   Int
+  testCount  Int
 
   // Augmentation settings applied
   augmentationPreset  String?
-  augmentationConfig  String?  // JSON
+  augmentationConfig  String? // JSON
   augmentedImageCount Int?
 
   // Relations
-  trainingJobs        TrainingJob[]
+  trainingJobs TrainingJob[]
 
   // Ownership
-  teamId              String
-  team                Team     @relation(fields: [teamId], references: [id])
-  createdById         String?
+  teamId      String
+  team        Team    @relation(fields: [teamId], references: [id])
+  createdById String?
 
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([teamId])
   @@index([projectId])
 }
 
 model TrainingJob {
-  id                  String          @id @default(cuid())
+  id String @id @default(cuid())
 
   // What we're training
-  datasetId           String
-  dataset             TrainingDataset @relation(fields: [datasetId], references: [id])
+  datasetId String
+  dataset   TrainingDataset @relation(fields: [datasetId], references: [id])
 
   // Training configuration
-  baseModel           String
-  epochs              Int             @default(100)
-  batchSize           Int             @default(16)
-  imageSize           Int             @default(640)
-  learningRate        Float           @default(0.01)
+  baseModel    String
+  epochs       Int    @default(100)
+  batchSize    Int    @default(16)
+  imageSize    Int    @default(640)
+  learningRate Float  @default(0.01)
 
   // Advanced config (optional)
-  trainingConfig      String?         // JSON
+  trainingConfig String? // JSON
 
   // Status tracking
-  status              TrainingStatus  @default(QUEUED)
-  currentEpoch        Int             @default(0)
-  progress            Float           @default(0)
+  status       TrainingStatus @default(QUEUED)
+  currentEpoch Int            @default(0)
+  progress     Float          @default(0)
 
   // Reference to EC2 job
-  ec2JobId            String?
+  ec2JobId String?
 
   // Metrics - updated during training
-  currentMetrics      String?         // JSON
-  metricsHistory      String?         // JSON
+  currentMetrics String? // JSON
+  metricsHistory String? // JSON
 
   // Final metrics (populated on completion)
-  finalMAP50          Float?
-  finalMAP5095        Float?
-  finalPrecision      Float?
-  finalRecall         Float?
-  finalF1             Float?
+  finalMAP50     Float?
+  finalMAP5095   Float?
+  finalPrecision Float?
+  finalRecall    Float?
+  finalF1        Float?
 
   // Timing
-  startedAt           DateTime?
-  completedAt         DateTime?
-  estimatedMinutes    Int?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  estimatedMinutes Int?
 
   // Error handling
-  errorMessage        String?
-  errorDetails        String?         // JSON
+  errorMessage String?
+  errorDetails String? // JSON
 
   // Output model (created on successful completion)
-  trainedModelId      String?         @unique
-  trainedModel        TrainedModel?   @relation(fields: [trainedModelId], references: [id])
+  trainedModelId String?       @unique
+  trainedModel   TrainedModel? @relation(fields: [trainedModelId], references: [id])
 
   // Ownership
-  teamId              String
-  team                Team            @relation(fields: [teamId], references: [id])
-  createdById         String?
+  teamId      String
+  team        Team    @relation(fields: [teamId], references: [id])
+  createdById String?
 
-  createdAt           DateTime        @default(now())
-  updatedAt           DateTime        @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([teamId])
   @@index([status])
@@ -820,60 +821,60 @@ model TrainingJob {
 }
 
 model TrainedModel {
-  id                  String       @id @default(cuid())
+  id String @id @default(cuid())
 
   // Naming
-  name                String
-  version             Int
-  displayName         String?
-  description         String?
+  name        String
+  version     Int
+  displayName String?
+  description String?
 
   // S3 storage
-  s3Path              String
-  s3Bucket            String
-  weightsFile         String       @default("best.pt")
-  fileSizeBytes       Int?
+  s3Path        String
+  s3Bucket      String
+  weightsFile   String @default("best.pt")
+  fileSizeBytes Int?
 
   // What this model detects
-  classes             String       // JSON
-  classCount          Int
+  classes    String // JSON
+  classCount Int
 
   // Performance metrics
-  mAP50               Float?
-  mAP5095             Float?
-  precision           Float?
-  recall              Float?
-  f1Score             Float?
+  mAP50     Float?
+  mAP5095   Float?
+  precision Float?
+  recall    Float?
+  f1Score   Float?
 
   // Per-class metrics
-  classMetrics        String?      // JSON
+  classMetrics String? // JSON
 
   // Training lineage
-  trainingJob         TrainingJob?
-  baseModel           String
-  trainedOnImages     Int?
-  trainedEpochs       Int?
+  trainingJob     TrainingJob?
+  baseModel       String
+  trainedOnImages Int?
+  trainedEpochs   Int?
 
   // Detection lineage
-  detections          Detection[]
+  detections Detection[]
 
   // Status
-  status              ModelStatus  @default(READY)
-  isActive            Boolean      @default(false)
+  status   ModelStatus @default(READY)
+  isActive Boolean     @default(false)
 
   // Usage tracking
-  inferenceCount      Int          @default(0)
-  lastUsedAt          DateTime?
+  inferenceCount Int       @default(0)
+  lastUsedAt     DateTime?
 
   // Ownership
-  teamId              String
-  team                Team         @relation(fields: [teamId], references: [id])
-  createdById         String?
+  teamId      String
+  team        Team    @relation(fields: [teamId], references: [id])
+  createdById String?
 
-  activeProjects      Project[]    @relation("ProjectActiveModel")
+  activeProjects Project[] @relation("ProjectActiveModel")
 
-  createdAt           DateTime     @default(now())
-  updatedAt           DateTime     @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([name, version, teamId])
   @@index([teamId])
@@ -904,28 +905,28 @@ enum ModelStatus {
 // ============================================
 
 model AuditLog {
-  id          String      @id @default(cuid())
+  id String @id @default(cuid())
 
   // Action details
-  action      AuditAction
-  entityType  String      // e.g., "Detection", "ManualAnnotation", "Project"
-  entityId    String      // ID of the affected entity
+  action     AuditAction
+  entityType String // e.g., "Detection", "ManualAnnotation", "Project"
+  entityId   String // ID of the affected entity
 
   // State tracking (JSON blobs for flexibility)
-  beforeState Json?       // State before modification
-  afterState  Json?       // State after modification
+  beforeState Json? // State before modification
+  afterState  Json? // State after modification
 
   // Actor information
-  userId      String?     // Who performed the action (null for system actions)
-  userEmail   String?     // Cached for when user is deleted
-  ipAddress   String?     // Request origin
-  userAgent   String?     // Browser/client info
+  userId    String? // Who performed the action (null for system actions)
+  userEmail String? // Cached for when user is deleted
+  ipAddress String? // Request origin
+  userAgent String? // Browser/client info
 
   // Request context
-  requestId   String?     // Correlation ID for tracing
+  requestId String? // Correlation ID for tracing
 
   // Timestamps
-  createdAt   DateTime    @default(now())
+  createdAt DateTime @default(now())
 
   // Indexes for efficient querying
   @@index([userId])
