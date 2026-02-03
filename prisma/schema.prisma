@@ -60,6 +60,7 @@ model Team {
   
   members     TeamMember[]
   projects    Project[]
+  cameraProfiles CameraProfile[]
   trainingDatasets  TrainingDataset[]
   trainingJobs      TrainingJob[]
   trainedModels     TrainedModel[]
@@ -91,6 +92,7 @@ model Project {
   name        String
   description String?
   teamId      String
+  cameraProfileId String?
   
   // Enhanced fields for location-based grouping
   location    String?  // Farm/property name
@@ -110,6 +112,7 @@ model Project {
   updatedAt   DateTime @updatedAt
   
   team        Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  cameraProfile CameraProfile? @relation(fields: [cameraProfileId], references: [id])
   assets      Asset[]
   jobs        ProcessingJob[]
   orthomosaics Orthomosaic[]
@@ -122,6 +125,7 @@ model Project {
   @@index([location])
   @@index([purpose, season])
   @@index([activeModelId])
+  @@index([cameraProfileId])
 }
 
 enum ProjectPurpose {
@@ -141,6 +145,7 @@ model Asset {
   mimeType        String
   storageUrl      String
   thumbnailUrl    String?
+  cameraProfileId String?
   
   // S3 Storage (nullable for backward compatibility)
   s3Key           String?  // S3 object key
@@ -171,6 +176,7 @@ model Asset {
   createdById     String
   
   project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  cameraProfile   CameraProfile? @relation(fields: [cameraProfileId], references: [id])
   createdBy       User     @relation(fields: [createdById], references: [id])
   detections      Detection[]
   processingJobs  ProcessingJob[]
@@ -178,6 +184,7 @@ model Asset {
   pendingAnnotations PendingAnnotation[]
 
   @@index([projectId])
+  @@index([cameraProfileId])
   @@index([flightSession])
   @@index([gpsLatitude, gpsLongitude])
   @@unique([s3Key])
@@ -507,6 +514,9 @@ model ReviewSession {
   team                Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
   createdById         String
   createdBy           User     @relation(fields: [createdById], references: [id])
+  assignedToId        String?
+  assignedTo          User?    @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
+  assignedAt          DateTime?
 
   // Project scope
   projectId           String
@@ -545,6 +555,27 @@ model ReviewSession {
   @@index([teamId])
   @@index([projectId])
   @@index([status])
+  @@index([assignedToId])
+}
+
+model CameraProfile {
+  id                     String   @id @default(cuid())
+  teamId                 String
+  name                   String
+  description            String?
+  fov                    Float?
+  calibratedFocalLength  Float?
+  opticalCenterX         Float?
+  opticalCenterY         Float?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  team                   Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  projects               Project[]
+  assets                 Asset[]
+
+  @@unique([teamId, name])
+  @@index([teamId])
 }
 
 model ReviewSessionEdit {

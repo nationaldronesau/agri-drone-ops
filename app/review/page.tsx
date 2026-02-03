@@ -25,6 +25,12 @@ interface ReviewSession {
   confidenceThreshold?: number | null;
   inferenceJobIds: string[];
   batchJobIds: string[];
+  assignedTo?: {
+    id: string;
+    name?: string | null;
+    email?: string | null;
+    image?: string | null;
+  } | null;
 }
 
 function ReviewPageContent() {
@@ -52,6 +58,7 @@ function ReviewPageContent() {
   const [pushError, setPushError] = useState<string | null>(null);
   const [pushLoading, setPushLoading] = useState(false);
   const [yoloTrainingJobId, setYoloTrainingJobId] = useState<string | null>(null);
+  const [assignLoading, setAssignLoading] = useState(false);
 
   const loadSession = useCallback(async () => {
     if (!sessionId) return;
@@ -186,6 +193,30 @@ function ReviewPageContent() {
       );
     },
     [router, sessionId]
+  );
+
+  const handleAssign = useCallback(
+    async (assigneeId: string | null) => {
+      if (!sessionId) return;
+      setAssignLoading(true);
+      try {
+        const response = await fetch(`/api/review/${sessionId}/assign`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ assigneeId: assigneeId ?? null }),
+        });
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || "Failed to assign session");
+        }
+        await loadSession();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to assign session");
+      } finally {
+        setAssignLoading(false);
+      }
+    },
+    [loadSession, sessionId]
   );
 
   const handlePush = useCallback(
@@ -331,6 +362,26 @@ function ReviewPageContent() {
                 {session?.itemsReviewed ?? 0} reviewed · {session?.itemsAccepted ?? 0} accepted ·{' '}
                 {session?.itemsRejected ?? 0} rejected
               </div>
+            </div>
+            <div className="flex flex-col gap-2 text-sm text-gray-600">
+              <span>
+                Assigned to:{" "}
+                <span className="font-medium text-gray-900">
+                  {session?.assignedTo?.name ||
+                    session?.assignedTo?.email ||
+                    "Unassigned"}
+                </span>
+              </span>
+              {!session?.assignedTo && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleAssign("me")}
+                  disabled={assignLoading}
+                >
+                  {assignLoading ? "Assigning..." : "Assign to me"}
+                </Button>
+              )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button variant="outline" onClick={refresh} disabled={loading}>

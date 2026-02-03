@@ -53,6 +53,8 @@ interface UppyUploaderProps {
   detectionModels?: string[]; // Legacy: hardcoded model keys
   dynamicModels?: DynamicModel[]; // New: dynamic models from workspace
   flightSession?: string;
+  cameraFov?: number;
+  cameraProfileId?: string;
   disabled?: boolean;
   onProcessingStart?: () => void;
   onProcessingComplete?: (response: UploadApiResponse) => void;
@@ -81,6 +83,8 @@ export function UppyUploader({
     detectionModels,
     dynamicModels,
     flightSession,
+    cameraFov,
+    cameraProfileId,
     disabled,
   });
   const processingRef = useRef<boolean>(false);
@@ -97,9 +101,11 @@ export function UppyUploader({
       detectionModels,
       dynamicModels,
       flightSession,
+      cameraFov,
+      cameraProfileId,
       disabled,
     };
-  }, [projectId, runDetection, detectionModels, dynamicModels, flightSession, disabled]);
+  }, [projectId, runDetection, detectionModels, dynamicModels, flightSession, cameraFov, cameraProfileId, disabled]);
 
   useEffect(() => {
     callbacksRef.current = {
@@ -343,6 +349,8 @@ export function UppyUploader({
             detectionModels: settings.detectionModels?.join(",") || "",
             dynamicModels: settings.dynamicModels || [],
             flightSession: settings.flightSession || undefined,
+            cameraFov: settings.cameraFov,
+            cameraProfileId: settings.cameraProfileId,
           }),
         });
 

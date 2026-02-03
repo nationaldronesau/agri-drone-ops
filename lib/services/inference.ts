@@ -8,7 +8,7 @@ import { yoloService } from '@/lib/services/yolo';
 import { S3Service } from '@/lib/services/s3';
 import { normalizeDetectionType } from '@/lib/utils/detection-types';
 import { fetchImageSafely } from '@/lib/utils/security';
-import { pixelToGeo, validateGeoCoordinates } from '@/lib/utils/georeferencing';
+import { resolveGeoCoordinates, validateGeoCoordinates } from '@/lib/utils/georeferencing';
 
 interface InferenceAsset {
   id: string;
@@ -28,6 +28,7 @@ interface InferenceAsset {
   lrfDistance: number | null;
   lrfTargetLat: number | null;
   lrfTargetLon: number | null;
+  metadata?: unknown | null;
 }
 
 export interface InferenceJobConfig {
@@ -52,7 +53,6 @@ export interface InferenceResult {
   errors: string[];
 }
 
-const DEFAULT_CAMERA_FOV = 84;
 const DEFAULT_ALTITUDE = 100;
 const DEFAULT_BATCH_SIZE = 10;
 
@@ -193,6 +193,7 @@ export async function processInferenceJob(options: {
         lrfDistance: true,
         lrfTargetLat: true,
         lrfTargetLon: true,
+        metadata: true,
       },
     });
 
@@ -234,29 +235,30 @@ export async function processInferenceJob(options: {
           const bbox = toCenterBox(detection.bbox);
           if (!bbox) continue;
 
-          const geoParams = {
-            gpsLatitude: asset.gpsLatitude,
-            gpsLongitude: asset.gpsLongitude,
-            altitude: asset.altitude ?? DEFAULT_ALTITUDE,
-            gimbalPitch: asset.gimbalPitch ?? 0,
-            gimbalRoll: asset.gimbalRoll ?? 0,
-            gimbalYaw: asset.gimbalYaw ?? 0,
-            cameraFov: asset.cameraFov ?? DEFAULT_CAMERA_FOV,
-            imageWidth: asset.imageWidth,
-            imageHeight: asset.imageHeight,
-            lrfDistance: asset.lrfDistance ?? undefined,
-            lrfTargetLat: asset.lrfTargetLat ?? undefined,
-            lrfTargetLon: asset.lrfTargetLon ?? undefined,
-          };
+          const resolved = await resolveGeoCoordinates(
+            {
+              gpsLatitude: asset.gpsLatitude,
+              gpsLongitude: asset.gpsLongitude,
+              altitude: asset.altitude ?? DEFAULT_ALTITUDE,
+              gimbalPitch: asset.gimbalPitch ?? 0,
+              gimbalRoll: asset.gimbalRoll ?? 0,
+              gimbalYaw: asset.gimbalYaw ?? 0,
+              cameraFov: asset.cameraFov ?? null,
+              imageWidth: asset.imageWidth,
+              imageHeight: asset.imageHeight,
+              lrfDistance: asset.lrfDistance ?? undefined,
+              lrfTargetLat: asset.lrfTargetLat ?? undefined,
+              lrfTargetLon: asset.lrfTargetLon ?? undefined,
+              metadata: asset.metadata,
+            },
+            { x: bbox.x, y: bbox.y }
+          );
 
-          let geoCoords;
-          try {
-            const geoResult = pixelToGeo(geoParams, { x: bbox.x, y: bbox.y });
-            geoCoords = geoResult instanceof Promise ? await geoResult : geoResult;
-          } catch {
+          if (!resolved) {
             errors.push(`Asset ${asset.id}: Georeference failed`);
             continue;
           }
+          const geoCoords = resolved.geo;
 
           if (saveDetections) {
             detectionsToCreate.push({
@@ -276,6 +278,7 @@ export async function processInferenceJob(options: {
                 source: 'custom_model',
                 modelId,
                 modelName,
+                geoMethod: resolved.method,
               },
               customModelId: modelId,
             });

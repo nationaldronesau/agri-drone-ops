@@ -17,6 +17,11 @@ interface Project {
   purpose: string;
   season: string | null;
   createdAt: string;
+  cameraProfileId?: string | null;
+  cameraProfile?: {
+    id: string;
+    name: string;
+  } | null;
   _count: {
     assets: number;
   };
@@ -24,7 +29,10 @@ interface Project {
 
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [cameraProfiles, setCameraProfiles] = useState<Array<{ id: string; name: string }>>([]);
   const [loading, setLoading] = useState(true);
+  const [cameraProfilesError, setCameraProfilesError] = useState<string | null>(null);
+  const [updatingProjectId, setUpdatingProjectId] = useState<string | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newProject, setNewProject] = useState({ 
     name: '', 
@@ -36,6 +44,7 @@ export default function ProjectsPage() {
 
   useEffect(() => {
     fetchProjects();
+    fetchCameraProfiles();
   }, []);
 
   const fetchProjects = async () => {
@@ -49,6 +58,26 @@ export default function ProjectsPage() {
       console.error('Failed to fetch projects:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchCameraProfiles = async () => {
+    try {
+      setCameraProfilesError(null);
+      const response = await fetch('/api/camera-profiles');
+      if (!response.ok) {
+        throw new Error('Failed to load camera profiles');
+      }
+      const data = await response.json();
+      setCameraProfiles(
+        (data.profiles || []).map((profile: { id: string; name: string }) => ({
+          id: profile.id,
+          name: profile.name,
+        }))
+      );
+    } catch (error) {
+      console.error('Failed to fetch camera profiles:', error);
+      setCameraProfilesError(error instanceof Error ? error.message : 'Failed to load camera profiles');
     }
   };
 
@@ -70,6 +99,31 @@ export default function ProjectsPage() {
       }
     } catch (error) {
       console.error('Failed to create project:', error);
+    }
+  };
+
+  const updateProjectCameraProfile = async (projectId: string, cameraProfileId: string | null) => {
+    try {
+      setUpdatingProjectId(projectId);
+      const response = await fetch(`/api/projects/${projectId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cameraProfileId }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to update camera profile');
+      }
+      const data = await response.json();
+      const updatedProject = data.project;
+      setProjects((prev) =>
+        prev.map((project) => (project.id === projectId ? updatedProject : project))
+      );
+    } catch (error) {
+      console.error('Failed to update camera profile:', error);
+      alert(error instanceof Error ? error.message : 'Failed to update camera profile');
+    } finally {
+      setUpdatingProjectId(null);
     }
   };
 
@@ -301,6 +355,34 @@ export default function ProjectsPage() {
                         <Calendar className="w-4 h-4 mr-1" />
                         <span>{formatDate(project.createdAt)}</span>
                       </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label htmlFor={`cameraProfile-${project.id}`} className="text-xs text-gray-500">
+                        Default Camera Profile
+                      </Label>
+                      <select
+                        id={`cameraProfile-${project.id}`}
+                        value={project.cameraProfileId ?? 'none'}
+                        onChange={(event) =>
+                          updateProjectCameraProfile(
+                            project.id,
+                            event.target.value === 'none' ? null : event.target.value
+                          )
+                        }
+                        disabled={updatingProjectId === project.id}
+                        className="w-full mt-1 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
+                      >
+                        <option value="none">No default</option>
+                        {cameraProfiles.map((profile) => (
+                          <option key={profile.id} value={profile.id}>
+                            {profile.name}
+                          </option>
+                        ))}
+                      </select>
+                      {cameraProfilesError && (
+                        <p className="text-xs text-red-600">{cameraProfilesError}</p>
+                      )}
                     </div>
                     
                     <div className="flex space-x-2">

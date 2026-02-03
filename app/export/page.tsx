@@ -8,6 +8,7 @@ import Link from "next/link";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { WorkflowGuide } from "@/components/workflow-guide";
 
 interface Project {
   id: string;
@@ -240,6 +241,7 @@ export default function ExportPage() {
       {/* Main Content */}
       <main className="container mx-auto px-4 py-8">
         <div className="max-w-4xl mx-auto space-y-6">
+          <WorkflowGuide current="export" />
           <Card>
             <CardHeader>
               <CardTitle className="text-2xl">Export Detection Data</CardTitle>

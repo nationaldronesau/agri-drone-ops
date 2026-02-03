@@ -1,7 +1,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { SignOutButton } from "@/components/auth/sign-out-button";
-import { Upload, Zap, Map, Plus, Users, Settings, Folder, Download, Mountain, Sparkles, Brain } from "lucide-react";
+import { Upload, Zap, Map, Plus, Users, Settings, Folder, Download, Mountain, Sparkles, Brain, ClipboardList, Camera } from "lucide-react";
 import Link from "next/link";
 
 export default function Dashboard() {
@@ -46,6 +46,36 @@ export default function Dashboard() {
 
         {/* Quick Actions */}
         <div className="grid md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-6 mb-8">
+          <Link href="/review-queue">
+            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-blue-200">
+              <CardHeader className="pb-4">
+                <div className="flex items-center justify-between">
+                  <ClipboardList className="w-8 h-8 text-blue-600" />
+                  <Plus className="w-5 h-5 text-gray-400" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <CardTitle className="text-lg mb-2">Review Queue</CardTitle>
+                <CardDescription>See assigned sessions</CardDescription>
+              </CardContent>
+            </Card>
+          </Link>
+
+          <Link href="/camera-profiles">
+            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-green-200">
+              <CardHeader className="pb-4">
+                <div className="flex items-center justify-between">
+                  <Camera className="w-8 h-8 text-green-600" />
+                  <Plus className="w-5 h-5 text-gray-400" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <CardTitle className="text-lg mb-2">Camera Profiles</CardTitle>
+                <CardDescription>Manage calibration</CardDescription>
+              </CardContent>
+            </Card>
+          </Link>
+
           <Link href="/projects">
             <Card className="hover:shadow-lg transition-shadow cursor-pointer border-blue-200">
               <CardHeader className="pb-4">
