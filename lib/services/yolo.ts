@@ -19,6 +19,7 @@ export interface TrainingConfig {
   batch_size?: number;
   image_size?: number;
   learning_rate?: number;
+  checkpoint_s3_path?: string;
 }
 
 export interface TrainingJobResponse {
@@ -118,6 +119,7 @@ export class YOLOService {
   private discoveryTtlMs: number;
   private timeout: number;
   private apiKey?: string;
+  private detectEndpoint: '/api/v1/yolo/detect' | '/api/v1/detect' | null = null;
 
   constructor(options?: { baseUrl?: string; timeout?: number; apiKey?: string }) {
     const configuredUrl = options?.baseUrl || process.env.YOLO_SERVICE_URL || null;
@@ -289,6 +291,7 @@ export class YOLOService {
         batch_size: config.batch_size || 16,
         image_size: config.image_size || 640,
         learning_rate: config.learning_rate || 0.01,
+        ...(config.checkpoint_s3_path ? { checkpoint_s3_path: config.checkpoint_s3_path } : {}),
       }),
     });
   }
@@ -310,20 +313,49 @@ export class YOLOService {
       throw new YOLOServiceError('Either image (base64) or s3_path must be provided');
     }
 
-    return this.request<DetectionResponse>(
-      '/api/v1/detect',
-      {
-        method: 'POST',
-        body: JSON.stringify({
-          image: request.image,
-          s3_path: request.s3_path,
-          model: request.model || 'base',
-          confidence: request.confidence || 0.25,
-          iou_threshold: request.iou_threshold || 0.45,
-        }),
-      },
-      60000
-    );
+    const model = request.model || 'base';
+    const basePayload = {
+      image: request.image,
+      s3_path: request.s3_path,
+      confidence: request.confidence || 0.25,
+      iou_threshold: request.iou_threshold || 0.45,
+    };
+    const yoloPayload = { ...basePayload, model_id: model, model };
+    const legacyPayload = { ...basePayload, model };
+
+    const endpoints = this.detectEndpoint
+      ? [this.detectEndpoint]
+      : ['/api/v1/yolo/detect', '/api/v1/detect'];
+
+    for (const endpoint of endpoints) {
+      const payload = endpoint === '/api/v1/yolo/detect' ? yoloPayload : legacyPayload;
+      try {
+        const response = await this.request<DetectionResponse>(
+          endpoint,
+          {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          },
+          60000
+        );
+        if (!this.detectEndpoint) {
+          this.detectEndpoint = endpoint;
+        }
+        return response;
+      } catch (error) {
+        if (
+          error instanceof YOLOServiceError &&
+          (error.statusCode === 404 || error.statusCode === 405)
+        ) {
+          if (endpoint === '/api/v1/yolo/detect') {
+            continue;
+          }
+        }
+        throw error;
+      }
+    }
+
+    throw new YOLOServiceError('YOLO detect endpoint not available', 404);
   }
 
   async runInference(options: {
@@ -367,8 +399,31 @@ export class YOLOService {
   }
 
   async activateModel(modelName: string): Promise<{ success: boolean; message: string }> {
-    // The YOLO service doesn't have an /activate endpoint - models are loaded on-demand.
-    // Check if the model exists in the cached models list instead.
+    // Prefer the SAM3 YOLO load endpoint when available.
+    try {
+      const response = await this.request<{ status?: string; model_id?: string }>(
+        '/api/v1/yolo/load',
+        {
+          method: 'POST',
+          body: JSON.stringify({ model_id: modelName, model: modelName }),
+        },
+        60000
+      );
+      if (response?.status === 'loaded') {
+        return { success: true, message: `Model ${modelName} loaded on YOLO service` };
+      }
+    } catch (error) {
+      if (
+        error instanceof YOLOServiceError &&
+        (error.statusCode === 404 || error.statusCode === 405)
+      ) {
+        // fall through to legacy model discovery
+      } else {
+        throw error;
+      }
+    }
+
+    // Legacy path: models are loaded on-demand; check cached/available lists.
     try {
       const cached = await this.listCachedModels();
       const cachedModels = cached.cached_models || cached.models || [];

@@ -201,6 +201,14 @@ export async function PATCH(
       typeof body.cameraProfileId === "string" && body.cameraProfileId.trim().length > 0
         ? body.cameraProfileId
         : null;
+    const activeModelId =
+      typeof body.activeModelId === "string" && body.activeModelId.trim().length > 0
+        ? body.activeModelId
+        : null;
+    const inferenceBackend =
+      typeof body.inferenceBackend === "string" && body.inferenceBackend.trim().length > 0
+        ? body.inferenceBackend
+        : null;
 
     if (cameraProfileId) {
       const profile = await prisma.cameraProfile.findFirst({
@@ -212,10 +220,29 @@ export async function PATCH(
       }
     }
 
+    if (activeModelId) {
+      const model = await prisma.trainedModel.findFirst({
+        where: { id: activeModelId, teamId: project.teamId },
+        select: { id: true },
+      });
+      if (!model) {
+        return NextResponse.json({ error: "Active model not found" }, { status: 400 });
+      }
+    }
+
+    if (inferenceBackend) {
+      const allowed = new Set(["LOCAL", "ROBOFLOW", "AUTO"]);
+      if (!allowed.has(inferenceBackend)) {
+        return NextResponse.json({ error: "Invalid inference backend" }, { status: 400 });
+      }
+    }
+
     const updated = await prisma.project.update({
       where: { id: project.id },
       data: {
         cameraProfileId,
+        ...(activeModelId !== null ? { activeModelId } : {}),
+        ...(inferenceBackend ? { inferenceBackend } : {}),
       },
       include: {
         _count: { select: { assets: true } },

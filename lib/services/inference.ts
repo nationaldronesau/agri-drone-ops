@@ -4,11 +4,13 @@
  * Runs model inference for a batch of assets and optionally saves detections.
  */
 import prisma from '@/lib/db';
-import { yoloService } from '@/lib/services/yolo';
+import { yoloInferenceService, type InferenceBackend } from '@/lib/services/yolo-inference';
 import { S3Service } from '@/lib/services/s3';
 import { normalizeDetectionType } from '@/lib/utils/detection-types';
 import { fetchImageSafely } from '@/lib/utils/security';
 import { resolveGeoCoordinates, validateGeoCoordinates } from '@/lib/utils/georeferencing';
+import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
+import { acquireGpuLock, refreshGpuLock, releaseGpuLock } from '@/lib/services/gpu-lock';
 
 interface InferenceAsset {
   id: string;
@@ -43,6 +45,7 @@ export interface InferenceJobConfig {
   duplicateImages: number;
   skippedReason?: string;
   errors?: string[];
+  backend?: InferenceBackend;
 }
 
 export interface InferenceResult {
@@ -77,11 +80,15 @@ function getS3Path(asset: InferenceAsset): string | null {
   return `s3://${bucket}/${asset.s3Key}`;
 }
 
-async function getImageBase64(asset: InferenceAsset): Promise<string> {
+function getImageUrl(asset: InferenceAsset): string {
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-  const storageUrl = asset.storageUrl.startsWith('/')
+  return asset.storageUrl.startsWith('/')
     ? `${baseUrl}${asset.storageUrl}`
     : asset.storageUrl;
+}
+
+async function getImageBase64(asset: InferenceAsset): Promise<string> {
+  const storageUrl = getImageUrl(asset);
   const buffer = await fetchImageSafely(storageUrl, `Asset ${asset.id}`);
   return buffer.toString('base64');
 }
@@ -112,6 +119,7 @@ export async function processInferenceJob(options: {
   duplicateImages: number;
   skippedReason?: string;
   batchSize?: number;
+  backend?: InferenceBackend;
 }): Promise<InferenceResult> {
   const {
     jobId,
@@ -125,6 +133,7 @@ export async function processInferenceJob(options: {
     duplicateImages,
     skippedReason,
     batchSize = DEFAULT_BATCH_SIZE,
+    backend = 'auto',
   } = options;
 
   const totalImages = assetIds.length;
@@ -153,7 +162,61 @@ export async function processInferenceJob(options: {
     },
   });
 
-  for (let index = 0; index < assetIds.length; index += batchSize) {
+  let effectiveBackend = backend;
+  const gpuLock = backend !== 'roboflow'
+    ? await acquireGpuLock('yolo-inference')
+    : { acquired: true, token: null };
+
+  if (backend !== 'roboflow' && !gpuLock.acquired) {
+    if (backend === 'auto') {
+      effectiveBackend = 'roboflow';
+    } else {
+      await prisma.processingJob.update({
+        where: { id: jobId },
+        data: {
+          status: 'FAILED',
+          errorMessage: 'GPU lock unavailable for local inference',
+        },
+      });
+      return {
+        processedImages: 0,
+        detectionsFound: 0,
+        skippedImages,
+        duplicateImages,
+        errors: ['GPU lock unavailable for local inference'],
+      };
+    }
+  }
+
+  if (effectiveBackend !== 'roboflow') {
+    const gpuResult = await sam3Orchestrator.ensureGPUAvailable();
+    if (!gpuResult.success) {
+      if (backend === 'auto') {
+        effectiveBackend = 'roboflow';
+      } else {
+        await prisma.processingJob.update({
+          where: { id: jobId },
+          data: {
+            status: 'FAILED',
+            errorMessage: `GPU not available for local inference: ${gpuResult.message}`,
+          },
+        });
+        if (gpuLock.token) {
+          await releaseGpuLock(gpuLock.token);
+        }
+        return {
+          processedImages: 0,
+          detectionsFound: 0,
+          skippedImages,
+          duplicateImages,
+          errors: [`GPU not available: ${gpuResult.message}`],
+        };
+      }
+    }
+  }
+
+  try {
+    for (let index = 0; index < assetIds.length; index += batchSize) {
     const batchIds = assetIds.slice(index, index + batchSize);
 
     const currentJob = await prisma.processingJob.findUnique({
@@ -214,17 +277,17 @@ export async function processInferenceJob(options: {
         }
 
         const s3Path = getS3Path(asset);
-        const response = s3Path
-          ? await yoloService.detect({
-              s3_path: s3Path,
-              model: modelName,
-              confidence,
-            })
-          : await yoloService.detect({
-              image: await getImageBase64(asset),
-              model: modelName,
-              confidence,
-            });
+        const imageUrl = getImageUrl(asset);
+        const imageBase64 = s3Path ? undefined : await getImageBase64(asset);
+
+        const response = await yoloInferenceService.detect({
+          s3Path,
+          imageBase64,
+          imageUrl,
+          modelName,
+          confidence,
+          backend: effectiveBackend,
+        });
 
         const detectionsToCreate: Array<Record<string, unknown>> = [];
 
@@ -279,6 +342,7 @@ export async function processInferenceJob(options: {
                 modelId,
                 modelName,
                 geoMethod: resolved.method,
+                backend: response.backend,
               },
               customModelId: modelId,
             });
@@ -312,9 +376,18 @@ export async function processInferenceJob(options: {
       duplicateImages,
       skippedReason,
       errors: errors.slice(0, 10),
+      backend: effectiveBackend,
     };
 
-    await updateJobProgress(jobId, config, progress);
+      await updateJobProgress(jobId, config, progress);
+      if (gpuLock.token) {
+        await refreshGpuLock(gpuLock.token);
+      }
+    }
+  } finally {
+    if (gpuLock.token) {
+      await releaseGpuLock(gpuLock.token);
+    }
   }
 
   const status = processedImages === 0 && errors.length > 0 ? 'FAILED' : 'COMPLETED';

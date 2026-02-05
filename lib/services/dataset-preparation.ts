@@ -37,9 +37,15 @@ export interface DatasetConfig {
   };
   includeAIDetections?: boolean;
   includeManualAnnotations?: boolean;
+  includeSAM3?: boolean;
   minConfidence?: number;
+  verifiedOnly?: boolean;
   createdAfter?: Date;
+  createdBefore?: Date;
   createdById?: string;
+  datasetId?: string;
+  s3BasePath?: string;
+  skipCreateRecord?: boolean;
 }
 
 interface PreparedDataset {
@@ -84,6 +90,14 @@ interface DatasetAnnotationSession {
   annotations: DatasetAnnotation[];
 }
 
+interface DatasetPendingAnnotation {
+  weedType: string;
+  confidence: number;
+  polygon?: unknown;
+  bbox?: unknown;
+  status?: string;
+}
+
 interface DatasetAsset {
   id: string;
   fileName: string;
@@ -95,6 +109,7 @@ interface DatasetAsset {
   imageHeight?: number | null;
   detections?: DatasetDetection[];
   annotationSessions?: DatasetAnnotationSession[];
+  pendingAnnotations?: DatasetPendingAnnotation[];
 }
 
 export function sanitizeClassName(name: string): string {
@@ -117,8 +132,9 @@ class DatasetPreparationService {
       throw new Error('Classes are required to build a dataset');
     }
 
-    const datasetId = randomUUID();
-    const s3BasePath = `datasets/${datasetId}`;
+    const datasetId = config.datasetId || randomUUID();
+    const rawBasePath = config.s3BasePath || `datasets/${datasetId}`;
+    const s3BasePath = rawBasePath.replace(/\/+$/, '');
 
     const assets = await this.fetchAnnotatedAssets(config);
     if (assets.length === 0) {
@@ -156,7 +172,8 @@ class DatasetPreparationService {
           classMap,
           config.includeAIDetections ?? true,
           config.includeManualAnnotations ?? true,
-          config.minConfidence ?? 0.5
+          config.minConfidence ?? 0.5,
+          config.includeSAM3 ?? false
         );
 
         if (yoloAnnotations.length === 0) {
@@ -189,23 +206,25 @@ class DatasetPreparationService {
     );
 
     const s3FullPath = `s3://${this.bucket}/${s3BasePath}/`;
-    await prisma.trainingDataset.create({
-      data: {
-        id: datasetId,
-        name,
-        projectId: config.projectId,
-        s3Path: s3FullPath,
-        s3Bucket: this.bucket,
-        imageCount: processedImages,
-        labelCount: totalLabels,
-        classes: JSON.stringify(dedupedClasses),
-        trainCount: splitCounts.train,
-        valCount: splitCounts.val,
-        testCount: splitCounts.test,
-        teamId,
-        createdById: config.createdById,
-      },
-    });
+    if (!config.skipCreateRecord) {
+      await prisma.trainingDataset.create({
+        data: {
+          id: datasetId,
+          name,
+          projectId: config.projectId,
+          s3Path: s3FullPath,
+          s3Bucket: this.bucket,
+          imageCount: processedImages,
+          labelCount: totalLabels,
+          classes: JSON.stringify(dedupedClasses),
+          trainCount: splitCounts.train,
+          valCount: splitCounts.val,
+          testCount: splitCounts.test,
+          teamId,
+          createdById: config.createdById,
+        },
+      });
+    }
 
     return {
       datasetId,
@@ -236,6 +255,7 @@ class DatasetPreparationService {
 
     const includeAI = config.includeAIDetections ?? true;
     const includeManual = config.includeManualAnnotations ?? true;
+    const includeSAM3 = config.includeSAM3 ?? false;
     const minConfidence = config.minConfidence ?? 0.5;
 
     const availableCounts = new Map<string, number>();
@@ -260,6 +280,15 @@ class DatasetPreparationService {
           for (const annotation of session.annotations) {
             incrementAvailable(annotation.roboflowClassName || annotation.weedType);
           }
+        }
+      }
+
+      if (includeSAM3 && asset.pendingAnnotations) {
+        for (const pending of asset.pendingAnnotations) {
+          if (typeof pending.confidence === 'number' && pending.confidence < minConfidence) {
+            continue;
+          }
+          incrementAvailable(pending.weedType);
         }
       }
     }
@@ -288,7 +317,8 @@ class DatasetPreparationService {
         classMap,
         includeAI,
         includeManual,
-        minConfidence
+        minConfidence,
+        includeSAM3
       );
 
       if (yoloAnnotations.length === 0) continue;
@@ -319,6 +349,73 @@ class DatasetPreparationService {
     };
   }
 
+  async listPreparedAssets(config: DatasetConfig): Promise<DatasetAsset[]> {
+    const assets = await this.fetchAnnotatedAssets(config);
+    if (assets.length === 0) return [];
+
+    const includeAI = config.includeAIDetections ?? true;
+    const includeManual = config.includeManualAnnotations ?? true;
+    const includeSAM3 = config.includeSAM3 ?? false;
+    const minConfidence = config.minConfidence ?? 0.5;
+
+    const availableCounts = new Map<string, number>();
+    const incrementAvailable = (className: string) => {
+      const sanitized = sanitizeClassName(className);
+      if (!sanitized) return;
+      const next = (availableCounts.get(sanitized) || 0) + 1;
+      availableCounts.set(sanitized, next);
+    };
+
+    for (const asset of assets) {
+      if (includeAI && asset.detections) {
+        for (const detection of asset.detections) {
+          const confidence = typeof detection.confidence === 'number' ? detection.confidence : 0;
+          if (confidence < minConfidence) continue;
+          incrementAvailable(detection.className);
+        }
+      }
+
+      if (includeManual && asset.annotationSessions) {
+        for (const session of asset.annotationSessions) {
+          for (const annotation of session.annotations) {
+            incrementAvailable(annotation.roboflowClassName || annotation.weedType);
+          }
+        }
+      }
+
+      if (includeSAM3 && asset.pendingAnnotations) {
+        for (const pending of asset.pendingAnnotations) {
+          if (typeof pending.confidence === 'number' && pending.confidence < minConfidence) {
+            continue;
+          }
+          incrementAvailable(pending.weedType);
+        }
+      }
+    }
+
+    const selectedClasses = (config.classes && config.classes.length > 0)
+      ? config.classes.map((cls) => sanitizeClassName(cls)).filter(Boolean)
+      : Array.from(availableCounts.keys());
+
+    const dedupedClasses = Array.from(new Set(selectedClasses));
+    const classMap = new Map<string, number>();
+    dedupedClasses.forEach((cls, idx) => {
+      classMap.set(cls, idx);
+    });
+
+    return assets.filter((asset) => {
+      const yoloAnnotations = this.convertToYOLO(
+        asset,
+        classMap,
+        includeAI,
+        includeManual,
+        minConfidence,
+        includeSAM3
+      );
+      return yoloAnnotations.length > 0;
+    });
+  }
+
   private async fetchAnnotatedAssets(config: DatasetConfig): Promise<DatasetAsset[]> {
     const where: Record<string, unknown> = {};
     if (config.projectId) {
@@ -326,6 +423,9 @@ class DatasetPreparationService {
     }
     if (config.assetIds && config.assetIds.length > 0) {
       where.id = { in: config.assetIds };
+    }
+    if (config.createdBefore) {
+      where.createdAt = { lte: config.createdBefore };
     }
 
     const assets = await prisma.asset.findMany({
@@ -336,8 +436,17 @@ class DatasetPreparationService {
               where: {
                 type: { in: ['AI', 'YOLO_LOCAL'] },
                 rejected: false,
-                OR: [{ verified: true }, { userCorrected: true }],
-                ...(config.createdAfter ? { createdAt: { gte: config.createdAfter } } : {}),
+                ...(config.verifiedOnly
+                  ? { verified: true }
+                  : { OR: [{ verified: true }, { userCorrected: true }] }),
+                ...(config.createdAfter || config.createdBefore
+                  ? {
+                      createdAt: {
+                        ...(config.createdAfter ? { gte: config.createdAfter } : {}),
+                        ...(config.createdBefore ? { lte: config.createdBefore } : {}),
+                      },
+                    }
+                  : {}),
               },
             }
           : false,
@@ -348,9 +457,31 @@ class DatasetPreparationService {
                 annotations: {
                   where: {
                     verified: true,
-                    ...(config.createdAfter ? { createdAt: { gte: config.createdAfter } } : {}),
+                    ...(config.createdAfter || config.createdBefore
+                      ? {
+                          createdAt: {
+                            ...(config.createdAfter ? { gte: config.createdAfter } : {}),
+                            ...(config.createdBefore ? { lte: config.createdBefore } : {}),
+                          },
+                        }
+                      : {}),
                   },
                 },
+              },
+            }
+          : false,
+        pendingAnnotations: config.includeSAM3
+          ? {
+              where: {
+                status: 'ACCEPTED',
+                ...(config.createdAfter || config.createdBefore
+                  ? {
+                      createdAt: {
+                        ...(config.createdAfter ? { gte: config.createdAfter } : {}),
+                        ...(config.createdBefore ? { lte: config.createdBefore } : {}),
+                      },
+                    }
+                  : {}),
               },
             }
           : false,
@@ -364,8 +495,10 @@ class DatasetPreparationService {
         config.includeManualAnnotations &&
         asset.annotationSessions &&
         asset.annotationSessions.some((session) => session.annotations.length > 0);
+      const hasSAM3Annotations =
+        config.includeSAM3 && asset.pendingAnnotations && asset.pendingAnnotations.length > 0;
 
-      return hasAIDetections || hasManualAnnotations;
+      return hasAIDetections || hasManualAnnotations || hasSAM3Annotations;
     });
   }
 
@@ -374,7 +507,8 @@ class DatasetPreparationService {
     classMap: Map<string, number>,
     includeAI: boolean,
     includeManual: boolean,
-    minConfidence: number
+    minConfidence: number,
+    includeSAM3: boolean
   ): YOLOAnnotation[] {
     const annotations: YOLOAnnotation[] = [];
 
@@ -415,7 +549,46 @@ class DatasetPreparationService {
       }
     }
 
+    if (includeSAM3 && asset.pendingAnnotations) {
+      for (const pending of asset.pendingAnnotations) {
+        if (typeof pending.confidence === 'number' && pending.confidence < minConfidence) {
+          continue;
+        }
+        const className = sanitizeClassName(pending.weedType);
+        const classId = classMap.get(className);
+        if (classId === undefined) continue;
+
+        const bbox = this.parsePendingBBox(pending, imageWidth, imageHeight);
+        if (!bbox) continue;
+        annotations.push({ classId, bbox });
+      }
+    }
+
     return annotations;
+  }
+
+  private parsePendingBBox(
+    pending: { bbox?: unknown; polygon?: unknown },
+    imgWidth: number,
+    imgHeight: number
+  ): BoundingBox | null {
+    if (pending.bbox) {
+      const parsed =
+        typeof pending.bbox === 'string'
+          ? this.safeJsonParse(pending.bbox)
+          : pending.bbox;
+      if (Array.isArray(parsed) && parsed.length >= 4) {
+        const [x1, y1, x2, y2] = parsed;
+        return this.pixelToYOLO(x1, y1, x2, y2, imgWidth, imgHeight);
+      }
+    }
+
+    const points = this.parsePolygonPoints(pending.polygon);
+    if (points && points.length >= 3) {
+      return this.polygonToBBox(points, imgWidth, imgHeight);
+    }
+
+    return null;
   }
 
   private parseDetectionBBox(

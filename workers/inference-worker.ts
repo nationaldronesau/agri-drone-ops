@@ -33,6 +33,12 @@ async function handleInferenceJob(
   const skippedImages = Number(config.skippedImages || 0);
   const duplicateImages = Number(config.duplicateImages || 0);
   const skippedReason = typeof config.skippedReason === 'string' ? config.skippedReason : undefined;
+  const backend =
+    typeof job.data.backend === 'string'
+      ? job.data.backend
+      : typeof config.backend === 'string'
+        ? config.backend
+        : undefined;
 
   const result = await processInferenceJob({
     jobId: job.data.processingJobId,
@@ -45,6 +51,7 @@ async function handleInferenceJob(
     skippedImages,
     duplicateImages,
     skippedReason,
+    backend: backend as 'local' | 'roboflow' | 'auto' | undefined,
   });
 
   await job.updateProgress(100);

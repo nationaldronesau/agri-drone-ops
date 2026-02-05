@@ -10,6 +10,7 @@
 import { awsSam3Service, FUN_LOADING_MESSAGES } from './aws-sam3';
 import sharp from 'sharp';
 import { normalizeExemplarCrops } from '@/lib/utils/exemplar-crops';
+import { isGpuLocked } from '@/lib/services/gpu-lock';
 
 const ROBOFLOW_API_KEY = process.env.ROBOFLOW_API_KEY;
 const ROBOFLOW_SAM3_URL = 'https://serverless.roboflow.com/sam3/concept_segment';
@@ -133,6 +134,11 @@ class SAM3Orchestrator {
    */
   async predict(request: PredictionRequest): Promise<PredictionResult> {
     const startTime = Date.now();
+
+    if (await isGpuLocked()) {
+      console.log('[Orchestrator] GPU lock active, falling back to Roboflow for SAM3');
+      return this.fallbackToRoboflow(request, startTime, 'GPU busy');
+    }
 
     // Try AWS first if configured
     if (awsSam3Service.isConfigured()) {
@@ -589,6 +595,17 @@ class SAM3Orchestrator {
         count: 0,
         processingTimeMs: Date.now() - startTime,
         error: 'No valid exemplar crops provided',
+      };
+    }
+
+    if (await isGpuLocked()) {
+      return {
+        success: false,
+        backend: 'aws',
+        detections: [],
+        count: 0,
+        processingTimeMs: Date.now() - startTime,
+        error: 'GPU busy, SAM3 unavailable',
       };
     }
 

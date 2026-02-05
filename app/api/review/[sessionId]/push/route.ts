@@ -5,6 +5,7 @@ import { datasetPreparation, sanitizeClassName } from '@/lib/services/dataset-pr
 import { roboflowTrainingService } from '@/lib/services/roboflow-training';
 import { yoloService, estimateTrainingTime, formatModelId } from '@/lib/services/yolo';
 import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
+import { acquireGpuLock, releaseGpuLock } from '@/lib/services/gpu-lock';
 import { S3Service } from '@/lib/services/s3';
 import { fetchImageSafely, isUrlAllowed } from '@/lib/utils/security';
 import { rescaleToOriginalWithMeta } from '@/lib/utils/georeferencing';
@@ -12,6 +13,7 @@ import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
 import type { AnnotationBox } from '@/types/roboflow';
 
 type PushTarget = 'roboflow' | 'yolo' | 'both';
+const TRAINING_LOCK_TTL_MS = 15 * 60 * 1000;
 
 function parseCenterBox(value: unknown): CenterBox | null {
   if (!value) return null;
@@ -337,23 +339,49 @@ export async function POST(
         );
       }
 
-      const ec2Response = await yoloService.startTraining({
-        dataset_s3_path: dataset.s3Path,
-        model_name: modelName,
-        base_model: yoloConfig.baseModel || 'yolo11m',
-        epochs: yoloConfig.epochs || 100,
-        batch_size: yoloConfig.batchSize || 16,
-        image_size: yoloConfig.imageSize || 640,
-        learning_rate: yoloConfig.learningRate || 0.01,
-      });
+      const gpuLock = await acquireGpuLock('yolo-training', TRAINING_LOCK_TTL_MS);
+      if (!gpuLock.acquired) {
+        await prisma.trainingJob.update({
+          where: { id: trainingJob.id },
+          data: {
+            status: 'FAILED',
+            errorMessage: 'GPU lock unavailable for training',
+          },
+        });
+        return NextResponse.json(
+          { error: 'Cannot start YOLO training: GPU lock unavailable' },
+          { status: 503 }
+        );
+      }
 
-      await prisma.trainingJob.update({
-        where: { id: trainingJob.id },
-        data: {
-          ec2JobId: ec2Response.job_id,
-          status: 'PREPARING',
-        },
-      });
+      try {
+        const ec2Response = await yoloService.startTraining({
+          dataset_s3_path: dataset.s3Path,
+          model_name: modelName,
+          base_model: yoloConfig.baseModel || 'yolo11m',
+          epochs: yoloConfig.epochs || 100,
+          batch_size: yoloConfig.batchSize || 16,
+          image_size: yoloConfig.imageSize || 640,
+          learning_rate: yoloConfig.learningRate || 0.01,
+        });
+
+        await prisma.trainingJob.update({
+          where: { id: trainingJob.id },
+          data: {
+            ec2JobId: ec2Response.job_id,
+            status: 'PREPARING',
+            trainingConfig: JSON.stringify({
+              modelName,
+              gpuLockToken: gpuLock.token,
+            }),
+          },
+        });
+      } catch (error) {
+        if (gpuLock.token) {
+          await releaseGpuLock(gpuLock.token);
+        }
+        throw error;
+      }
 
       results.yolo = {
         datasetId: dataset.datasetId,

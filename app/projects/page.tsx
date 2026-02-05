@@ -405,6 +405,11 @@ export default function ProjectsPage() {
                         </Button>
                       </Link>
                     </div>
+                    <Link href={`/projects/${project.id}/versions`} className="block">
+                      <Button variant="outline" size="sm" className="w-full">
+                        Versions
+                      </Button>
+                    </Link>
                   </div>
                 </CardContent>
               </Card>

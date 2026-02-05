@@ -15,6 +15,7 @@ export interface InferenceJobData {
   assetIds: string[];
   confidence: number;
   saveDetections: boolean;
+  backend?: 'local' | 'roboflow' | 'auto';
 }
 
 export interface InferenceJobResult {

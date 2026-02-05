@@ -97,6 +97,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { inferenceBackend: true },
+    });
+    const backendPreference = (project?.inferenceBackend || 'AUTO').toLowerCase();
+
     const model = await prisma.trainedModel.findFirst({
       where: {
         id: modelId,
@@ -241,6 +247,7 @@ export async function POST(request: NextRequest) {
           skippedImages,
           skippedReason: 'missing_gps_or_dimensions',
           duplicateImages,
+          backend: backendPreference,
         },
       },
     });
@@ -257,6 +264,7 @@ export async function POST(request: NextRequest) {
         skippedImages,
         duplicateImages,
         skippedReason: 'missing_gps_or_dimensions',
+        backend: backendPreference as 'local' | 'roboflow' | 'auto',
       });
 
       return NextResponse.json({
@@ -297,6 +305,7 @@ export async function POST(request: NextRequest) {
       assetIds: assetIdList,
       confidence,
       saveDetections,
+      backend: backendPreference as 'local' | 'roboflow' | 'auto',
     });
 
     return NextResponse.json({

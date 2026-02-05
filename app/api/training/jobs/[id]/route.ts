@@ -9,6 +9,8 @@ import prisma from '@/lib/db';
 import { TrainingStatus } from '@prisma/client';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
 import { syncJobWithEC2 } from '@/lib/services/training-sync';
+import { yoloService } from '@/lib/services/yolo';
+import { releaseGpuLock } from '@/lib/services/gpu-lock';
 
 export async function GET(
   request: NextRequest,
@@ -193,6 +195,38 @@ export async function DELETE(
         errorMessage: 'Cancelled by user',
       },
     });
+
+    if (job.trainingConfig) {
+      try {
+        const parsed = JSON.parse(job.trainingConfig);
+        if (typeof parsed?.gpuLockToken === 'string') {
+          await releaseGpuLock(parsed.gpuLockToken);
+        }
+      } catch {
+        // ignore config parsing errors
+      }
+    }
+
+    if (job.datasetId) {
+      const dataset = await prisma.trainingDataset.findUnique({
+        where: { id: job.datasetId },
+        select: { id: true, version: true, status: true },
+      });
+      if (dataset?.version != null && dataset.status !== 'ARCHIVED') {
+        const activeCount = await prisma.trainingJob.count({
+          where: {
+            datasetId: dataset.id,
+            status: { in: ['QUEUED', 'PREPARING', 'RUNNING', 'UPLOADING'] },
+          },
+        });
+        if (activeCount === 0 && dataset.status !== 'READY') {
+          await prisma.trainingDataset.update({
+            where: { id: dataset.id },
+            data: { status: 'READY' },
+          });
+        }
+      }
+    }
 
     return NextResponse.json({ success: true, job: updatedJob });
   } catch (error) {
