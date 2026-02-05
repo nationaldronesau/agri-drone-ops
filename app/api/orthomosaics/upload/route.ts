@@ -3,14 +3,14 @@ import { checkProjectAccess, getAuthenticatedUser } from "@/lib/auth/api-auth";
 import { z } from "zod";
 import prisma from "@/lib/db";
 import { promisify } from "util";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { S3Service } from "@/lib/services/s3";
 import { getProjectIdFromS3Key } from "@/lib/utils/s3-key";
 import os from "os";
 import path from "path";
 import { mkdtemp, rm, writeFile } from "fs/promises";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 type GeoJsonPolygon = {
   type: "Polygon";
@@ -104,7 +104,10 @@ export async function POST(request: NextRequest) {
     const buffer = await S3Service.downloadFile(key, bucket);
 
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "orthomosaic-"));
-    const tempFilePath = path.join(tempDir, file.name);
+    const rawExt = path.extname(file.name || "").toLowerCase();
+    const allowedExt = new Set([".tif", ".tiff", ".jp2", ".jpg", ".jpeg", ".png"]);
+    const safeExt = allowedExt.has(rawExt) ? rawExt : ".tif";
+    const tempFilePath = path.join(tempDir, `orthomosaic-${Date.now()}${safeExt}`);
 
     try {
       await writeFile(tempFilePath, buffer);
@@ -116,7 +119,10 @@ export async function POST(request: NextRequest) {
       let area: number | null = null;
 
       try {
-        const { stdout } = await execAsync(`gdalinfo -json "${tempFilePath}"`);
+        const { stdout } = await execFileAsync("gdalinfo", ["-json", tempFilePath], {
+          timeout: 30000,
+          maxBuffer: 5 * 1024 * 1024,
+        });
         const metadata = JSON.parse(stdout);
 
         if (metadata.cornerCoordinates) {
