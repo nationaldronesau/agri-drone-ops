@@ -1,6 +1,7 @@
 import prisma from '@/lib/db';
 import { yoloService } from '@/lib/services/yolo';
 import { S3Service } from '@/lib/services/s3';
+import { refreshGpuLock, releaseGpuLock } from '@/lib/services/gpu-lock';
 import { ModelStatus, TrainingJob, TrainingStatus } from '@prisma/client';
 
 const ACTIVE_STATUSES: TrainingStatus[] = [
@@ -9,6 +10,7 @@ const ACTIVE_STATUSES: TrainingStatus[] = [
   TrainingStatus.RUNNING,
   TrainingStatus.UPLOADING,
 ];
+const TRAINING_LOCK_TTL_MS = 15 * 60 * 1000;
 
 function mapEC2Status(ec2Status: string): TrainingStatus {
   const statusMap: Record<string, TrainingStatus> = {
@@ -33,6 +35,16 @@ function parseS3Path(path: string): { bucket: string; keyPrefix: string } | null
 
 function getCanonicalModelPrefix(baseName: string, version: number): string {
   return `models/${baseName}/v${version}`;
+}
+
+function getGpuLockToken(trainingConfig?: string | null): string | null {
+  if (!trainingConfig) return null;
+  try {
+    const parsed = JSON.parse(trainingConfig);
+    return typeof parsed?.gpuLockToken === 'string' ? parsed.gpuLockToken : null;
+  } catch {
+    return null;
+  }
 }
 
 type SyncResult = {
@@ -174,6 +186,54 @@ export async function syncJobWithEC2(
       where: { id: job.id },
       data: updateData,
     });
+
+    const gpuLockToken = getGpuLockToken(updatedJob.trainingConfig);
+    if (gpuLockToken) {
+      if (ACTIVE_STATUSES.includes(updatedJob.status)) {
+        await refreshGpuLock(gpuLockToken, TRAINING_LOCK_TTL_MS);
+      } else if (
+        updatedJob.status === TrainingStatus.COMPLETED ||
+        updatedJob.status === TrainingStatus.FAILED ||
+        updatedJob.status === TrainingStatus.CANCELLED
+      ) {
+        await releaseGpuLock(gpuLockToken);
+      }
+    }
+
+    if (job.datasetId) {
+      const dataset = await prisma.trainingDataset.findUnique({
+        where: { id: job.datasetId },
+        select: { id: true, version: true, status: true },
+      });
+
+      if (dataset?.version != null && dataset.status !== 'ARCHIVED') {
+        if (ACTIVE_STATUSES.includes(updatedJob.status)) {
+          if (dataset.status !== 'TRAINING') {
+            await prisma.trainingDataset.update({
+              where: { id: dataset.id },
+              data: { status: 'TRAINING' },
+            });
+          }
+        } else if (
+          updatedJob.status === TrainingStatus.COMPLETED ||
+          updatedJob.status === TrainingStatus.FAILED ||
+          updatedJob.status === TrainingStatus.CANCELLED
+        ) {
+          const activeCount = await prisma.trainingJob.count({
+            where: {
+              datasetId: dataset.id,
+              status: { in: ACTIVE_STATUSES },
+            },
+          });
+          if (activeCount === 0 && dataset.status !== 'READY') {
+            await prisma.trainingDataset.update({
+              where: { id: dataset.id },
+              data: { status: 'READY' },
+            });
+          }
+        }
+      }
+    }
 
     return { job: updatedJob, syncStatus: 'ok' };
   } catch (error) {

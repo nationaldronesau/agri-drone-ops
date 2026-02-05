@@ -178,6 +178,7 @@ export async function POST(request: NextRequest) {
         teamId: true,
         activeModelId: true,
         autoInferenceEnabled: true,
+        inferenceBackend: true,
         cameraProfileId: true,
       },
     });
@@ -841,6 +842,7 @@ export async function POST(request: NextRequest) {
           };
         } else {
           const modelName = formatModelId(model.name, model.version);
+          const backendPreference = (projectSettings.inferenceBackend || 'AUTO').toLowerCase();
           const processingJob = await prisma.processingJob.create({
             data: {
               projectId,
@@ -858,6 +860,7 @@ export async function POST(request: NextRequest) {
                 skippedImages: autoInferenceSkipped,
                 skippedReason: "missing_gps_or_dimensions",
                 duplicateImages: 0,
+                backend: backendPreference,
                 source: "auto_upload",
               },
             },
@@ -875,6 +878,7 @@ export async function POST(request: NextRequest) {
               skippedImages: autoInferenceSkipped,
               duplicateImages: 0,
               skippedReason: "missing_gps_or_dimensions",
+              backend: backendPreference as 'local' | 'roboflow' | 'auto',
             });
 
             autoInferenceSummary = {
@@ -911,6 +915,7 @@ export async function POST(request: NextRequest) {
                 assetIds: autoInferenceAssetIds,
                 confidence: AUTO_INFERENCE_CONFIDENCE,
                 saveDetections: true,
+                backend: backendPreference as 'local' | 'roboflow' | 'auto',
               });
               autoInferenceSummary = {
                 started: true,

@@ -9,8 +9,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { yoloService, formatModelId } from '@/lib/services/yolo';
 import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
+import { acquireGpuLock, releaseGpuLock } from '@/lib/services/gpu-lock';
 import { TrainingStatus } from '@prisma/client';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
+
+const TRAINING_LOCK_TTL_MS = 15 * 60 * 1000;
 
 export async function POST(
   request: NextRequest,
@@ -40,6 +43,14 @@ export async function POST(
             s3Path: true,
             imageCount: true,
             classes: true,
+            version: true,
+          },
+        },
+        checkpointModel: {
+          select: {
+            id: true,
+            s3Path: true,
+            weightsFile: true,
           },
         },
       },
@@ -98,6 +109,7 @@ export async function POST(
     console.log(`[Training Start] Dataset S3 path: ${job.dataset.s3Path}`);
     console.log(`[Training Start] Config: epochs=${job.epochs}, batch=${job.batchSize}, imageSize=${job.imageSize}`);
 
+    let gpuLockToken: string | null = null;
     try {
       // Ensure GPU is available by unloading SAM3 if needed
       // SAM3 holds ~14GB GPU memory, leaving no room for YOLO training on the 16GB T4
@@ -116,6 +128,22 @@ export async function POST(
         );
       }
 
+      const gpuLock = await acquireGpuLock('yolo-training', TRAINING_LOCK_TTL_MS);
+      if (!gpuLock.acquired) {
+        await prisma.trainingJob.update({
+          where: { id: jobId },
+          data: {
+            status: TrainingStatus.FAILED,
+            errorMessage: 'GPU lock unavailable for training',
+          },
+        });
+        return NextResponse.json(
+          { error: 'Cannot start YOLO training: GPU lock unavailable' },
+          { status: 503 }
+        );
+      }
+      gpuLockToken = gpuLock.token;
+
       const ec2Response = await yoloService.startTraining({
         dataset_s3_path: job.dataset.s3Path,
         model_name: modelName,
@@ -124,6 +152,9 @@ export async function POST(
         batch_size: job.batchSize,
         image_size: job.imageSize,
         learning_rate: job.learningRate,
+        ...(job.checkpointModel
+          ? { checkpoint_s3_path: `${job.checkpointModel.s3Path.replace(/\\/+$/, '')}/${job.checkpointModel.weightsFile}` }
+          : {}),
       });
 
       console.log(`[Training Start] EC2 response:`, ec2Response);
@@ -133,7 +164,7 @@ export async function POST(
         data: {
           ec2JobId: ec2Response.job_id,
           status: TrainingStatus.PREPARING,
-          trainingConfig: JSON.stringify({ ...config, modelName }),
+          trainingConfig: JSON.stringify({ ...config, modelName, gpuLockToken }),
         },
         include: {
           dataset: {
@@ -145,6 +176,13 @@ export async function POST(
           },
         },
       });
+
+      if (job.dataset?.version != null) {
+        await prisma.trainingDataset.update({
+          where: { id: job.datasetId },
+          data: { status: 'TRAINING' },
+        });
+      }
 
       return NextResponse.json({
         success: true,
@@ -163,6 +201,9 @@ export async function POST(
         },
       });
     } catch (ec2Error) {
+      if (gpuLockToken) {
+        await releaseGpuLock(gpuLockToken);
+      }
       console.error('[Training Start] Failed to start training on EC2:', ec2Error);
 
       await prisma.trainingJob.update({
@@ -174,6 +215,21 @@ export async function POST(
             : 'Failed to start training on EC2',
         },
       });
+
+      if (job.dataset?.version != null) {
+        const activeCount = await prisma.trainingJob.count({
+          where: {
+            datasetId: job.datasetId,
+            status: { in: ['QUEUED', 'PREPARING', 'RUNNING', 'UPLOADING'] },
+          },
+        });
+        if (activeCount === 0) {
+          await prisma.trainingDataset.update({
+            where: { id: job.datasetId },
+            data: { status: 'READY' },
+          });
+        }
+      }
 
       return NextResponse.json(
         {

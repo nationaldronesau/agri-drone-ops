@@ -8,12 +8,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { yoloService, estimateTrainingTime, formatModelId } from '@/lib/services/yolo';
 import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
+import { acquireGpuLock, releaseGpuLock } from '@/lib/services/gpu-lock';
 import { TrainingStatus } from '@prisma/client';
 import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
 import { checkRateLimit } from '@/lib/utils/security';
 import { syncJobWithEC2 } from '@/lib/services/training-sync';
 
 const ALLOWED_BASE_MODELS = ['yolo11n', 'yolo11s', 'yolo11m', 'yolo11l', 'yolo11x'] as const;
+const TRAINING_LOCK_TTL_MS = 15 * 60 * 1000;
 
 export async function POST(request: NextRequest) {
   try {
@@ -45,6 +47,7 @@ export async function POST(request: NextRequest) {
       batchSize = 16,
       imageSize = 640,
       learningRate = 0.01,
+      checkpointModelId,
     } = body;
 
     if (!datasetId) {
@@ -76,6 +79,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (dataset.version != null && dataset.status !== 'READY') {
+      return NextResponse.json(
+        { error: `Dataset version is not ready (status: ${dataset.status})` },
+        { status: 400 }
+      );
+    }
+
     const modelBaseName = dataset.name
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
@@ -94,6 +104,24 @@ export async function POST(request: NextRequest) {
     const modelName = formatModelId(modelBaseName, nextVersion);
     const estimate = estimateTrainingTime(dataset.imageCount, epochs, batchSize);
 
+    let checkpointModel: { id: string; s3Path: string; weightsFile: string } | null = null;
+    if (checkpointModelId) {
+      checkpointModel = await prisma.trainedModel.findFirst({
+        where: {
+          id: checkpointModelId,
+          teamId: dataset.teamId,
+        },
+        select: {
+          id: true,
+          s3Path: true,
+          weightsFile: true,
+        },
+      });
+      if (!checkpointModel) {
+        return NextResponse.json({ error: 'Checkpoint model not found' }, { status: 400 });
+      }
+    }
+
     const trainingJob = await prisma.trainingJob.create({
       data: {
         datasetId,
@@ -107,6 +135,7 @@ export async function POST(request: NextRequest) {
         teamId: dataset.teamId,
         createdById: auth.userId,
         trainingConfig: JSON.stringify({ modelName }),
+        checkpointModelId: checkpointModel?.id,
       },
       include: {
         dataset: {
@@ -115,11 +144,13 @@ export async function POST(request: NextRequest) {
             s3Path: true,
             imageCount: true,
             classes: true,
+            version: true,
           },
         },
       },
     });
 
+    let gpuLockToken: string | null = null;
     try {
       // Ensure GPU is available by unloading SAM3 if needed
       // SAM3 holds ~14GB GPU memory, leaving no room for YOLO training on the 16GB T4
@@ -138,6 +169,22 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      const gpuLock = await acquireGpuLock('yolo-training', TRAINING_LOCK_TTL_MS);
+      if (!gpuLock.acquired) {
+        await prisma.trainingJob.update({
+          where: { id: trainingJob.id },
+          data: {
+            status: TrainingStatus.FAILED,
+            errorMessage: 'GPU lock unavailable for training',
+          },
+        });
+        return NextResponse.json(
+          { error: 'Cannot start YOLO training: GPU lock unavailable' },
+          { status: 503 }
+        );
+      }
+      gpuLockToken = gpuLock.token;
+
       const ec2Response = await yoloService.startTraining({
         dataset_s3_path: dataset.s3Path,
         model_name: modelName,
@@ -146,6 +193,14 @@ export async function POST(request: NextRequest) {
         batch_size: batchSize,
         image_size: imageSize,
         learning_rate: learningRate,
+        ...(checkpointModel
+          ? { checkpoint_s3_path: `${checkpointModel.s3Path.replace(/\\/+$/, '')}/${checkpointModel.weightsFile}` }
+          : {}),
+      });
+
+      const trainingConfig = JSON.stringify({
+        modelName,
+        gpuLockToken,
       });
 
       await prisma.trainingJob.update({
@@ -153,8 +208,16 @@ export async function POST(request: NextRequest) {
         data: {
           ec2JobId: ec2Response.job_id,
           status: TrainingStatus.PREPARING,
+          trainingConfig,
         },
       });
+
+      if (trainingJob.dataset?.version != null) {
+        await prisma.trainingDataset.update({
+          where: { id: datasetId },
+          data: { status: 'TRAINING' },
+        });
+      }
 
       return NextResponse.json({
         success: true,
@@ -171,6 +234,9 @@ export async function POST(request: NextRequest) {
         },
       });
     } catch (ec2Error) {
+      if (gpuLockToken) {
+        await releaseGpuLock(gpuLockToken);
+      }
       await prisma.trainingJob.update({
         where: { id: trainingJob.id },
         data: {
@@ -180,6 +246,21 @@ export async function POST(request: NextRequest) {
             : 'Failed to start training on EC2',
         },
       });
+
+      if (trainingJob.dataset?.version != null) {
+        const activeCount = await prisma.trainingJob.count({
+          where: {
+            datasetId,
+            status: { in: ['QUEUED', 'PREPARING', 'RUNNING', 'UPLOADING'] },
+          },
+        });
+        if (activeCount === 0) {
+          await prisma.trainingDataset.update({
+            where: { id: datasetId },
+            data: { status: 'READY' },
+          });
+        }
+      }
 
       return NextResponse.json(
         {

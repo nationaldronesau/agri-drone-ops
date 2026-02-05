@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -47,6 +47,7 @@ interface Project {
   location: string | null;
   activeModelId?: string | null;
   autoInferenceEnabled?: boolean;
+  inferenceBackend?: 'LOCAL' | 'ROBOFLOW' | 'AUTO' | null;
   _count?: { assets: number };
 }
 
@@ -194,6 +195,7 @@ const clampNumber = (value: number, min: number, max: number) => {
 
 export default function TrainingPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [projects, setProjects] = useState<Project[]>([]);
   const [datasets, setDatasets] = useState<TrainingDataset[]>([]);
   const [jobs, setJobs] = useState<TrainingJob[]>([]);
@@ -244,13 +246,22 @@ export default function TrainingPage() {
     epochs: 100,
     batchSize: 16,
     imageSize: 640,
+    checkpointModelId: "",
   });
+
+  useEffect(() => {
+    const datasetIdParam = searchParams.get("datasetId");
+    if (datasetIdParam) {
+      setTrainingForm((prev) => ({ ...prev, datasetId: datasetIdParam }));
+    }
+  }, [searchParams]);
   const [inferenceForm, setInferenceForm] = useState({
     projectId: "",
     confidence: 0.25,
   });
   const [settingsProjectId, setSettingsProjectId] = useState("");
   const [savingAutoInference, setSavingAutoInference] = useState(false);
+  const [savingInferenceBackend, setSavingInferenceBackend] = useState(false);
   const [inferencePreview, setInferencePreview] = useState<{
     totalImages: number;
     skippedImages: number;
@@ -323,6 +334,12 @@ export default function TrainingPage() {
       label: formatMinutes(minutes),
     };
   }, [selectedDataset, trainingForm.batchSize, trainingForm.epochs]);
+
+  const checkpointCandidates = useMemo(
+    () =>
+      models.filter((model) => ["READY", "ACTIVE"].includes(model.status)),
+    [models]
+  );
 
   const loadProjects = useCallback(async () => {
     const response = await fetch("/api/projects?pageSize=200");
@@ -711,6 +728,9 @@ export default function TrainingPage() {
           epochs: trainingForm.epochs,
           batchSize: trainingForm.batchSize,
           imageSize: trainingForm.imageSize,
+          ...(trainingForm.checkpointModelId
+            ? { checkpointModelId: trainingForm.checkpointModelId }
+            : {}),
         }),
       });
       const data = await response.json();
@@ -872,6 +892,41 @@ export default function TrainingPage() {
       setError(err instanceof Error ? err.message : "Failed to update settings");
     } finally {
       setSavingAutoInference(false);
+    }
+  };
+
+  const handleInferenceBackendChange = async (backend: "LOCAL" | "ROBOFLOW" | "AUTO") => {
+    if (!settingsProjectId) {
+      setError("Select a project to update inference settings.");
+      return;
+    }
+    setSavingInferenceBackend(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/projects/${settingsProjectId}/settings`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inferenceBackend: backend }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || "Failed to update inference backend");
+      }
+      setProjects((prev) =>
+        prev.map((project) =>
+          project.id === settingsProjectId
+            ? {
+                ...project,
+                inferenceBackend: data.project?.inferenceBackend ?? backend,
+              }
+            : project
+        )
+      );
+      setNotice(`Inference backend set to ${backend}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update inference backend");
+    } finally {
+      setSavingInferenceBackend(false);
     }
   };
 
@@ -1329,6 +1384,37 @@ export default function TrainingPage() {
                       }
                     />
                   </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="checkpoint-model">Checkpoint (optional)</Label>
+                  <Select
+                    value={trainingForm.checkpointModelId || "none"}
+                    onValueChange={(value) =>
+                      setTrainingForm((prev) => ({
+                        ...prev,
+                        checkpointModelId: value === "none" ? "" : value,
+                      }))
+                    }
+                  >
+                    <SelectTrigger id="checkpoint-model">
+                      <SelectValue placeholder="Train from scratch" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Train from scratch</SelectItem>
+                      {checkpointCandidates.map((model) => (
+                        <SelectItem key={model.id} value={model.id}>
+                          {model.displayName || `${model.name} v${model.version}`}
+                          {typeof model.mAP50 === "number"
+                            ? ` · mAP50 ${model.mAP50.toFixed(2)}`
+                            : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-gray-500">
+                    Use a previous model to warm-start training (recommended for version updates).
+                  </p>
                 </div>
 
                 <div className="grid gap-4 md:grid-cols-2">
@@ -1842,7 +1928,7 @@ export default function TrainingPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-4 md:grid-cols-3">
                 <div className="space-y-2">
                   <Label>Project</Label>
                   <Select
@@ -1875,6 +1961,25 @@ export default function TrainingPage() {
                       Run active model after uploads
                     </span>
                   </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>Inference Backend</Label>
+                  <Select
+                    value={selectedSettingsProject?.inferenceBackend || "AUTO"}
+                    onValueChange={(value) =>
+                      handleInferenceBackendChange(value as "LOCAL" | "ROBOFLOW" | "AUTO")
+                    }
+                    disabled={!settingsProjectId || savingInferenceBackend}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select backend" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="AUTO">Auto (Local + Fallback)</SelectItem>
+                      <SelectItem value="LOCAL">Local EC2</SelectItem>
+                      <SelectItem value="ROBOFLOW">Roboflow</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
               <div className="rounded-md bg-gray-50 px-3 py-2 text-sm text-gray-600">

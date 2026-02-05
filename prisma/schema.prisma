@@ -108,6 +108,8 @@ model Project {
   activeModelId        String?
   activeModel          TrainedModel? @relation("ProjectActiveModel", fields: [activeModelId], references: [id])
   autoInferenceEnabled Boolean       @default(false)
+  features             Json?
+  inferenceBackend     InferenceBackend @default(AUTO)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -136,6 +138,12 @@ enum ProjectPurpose {
   INFRASTRUCTURE
   LIVESTOCK
   ENVIRONMENTAL
+}
+
+enum InferenceBackend {
+  LOCAL
+  ROBOFLOW
+  AUTO
 }
 
 model Asset {
@@ -183,6 +191,7 @@ model Asset {
   processingJobs     ProcessingJob[]
   annotationSessions AnnotationSession[]
   pendingAnnotations PendingAnnotation[]
+  trainingDatasets   TrainingDatasetAsset[]
 
   @@unique([s3Key])
   @@index([projectId])
@@ -711,6 +720,14 @@ enum TrainingSessionStatus {
   FAILED
 }
 
+enum DatasetStatus {
+  CREATING
+  READY
+  TRAINING
+  FAILED
+  ARCHIVED
+}
+
 // ============================================
 // YOLO Training Pipeline Models
 // ============================================
@@ -719,6 +736,17 @@ model TrainingDataset {
   id          String  @id @default(cuid())
   name        String
   description String?
+
+  // Version identification
+  version     Int?
+  displayName String?
+
+  // Snapshot metadata
+  snapshotAt DateTime?
+  status     DatasetStatus @default(READY)
+
+  // Preprocessing config
+  preprocessingConfig Json?
 
   // S3 location
   s3Path   String
@@ -743,8 +771,20 @@ model TrainingDataset {
   augmentationConfig  String? // JSON
   augmentedImageCount Int?
 
+  // Annotation manifest (S3-based)
+  annotationManifestS3Key    String?
+  annotationManifestChecksum String?
+  annotationCount            Int?
+
+  // Idempotency for safe API calls
+  idempotencyKey String? @unique
+
+  // Filters used at creation
+  creationFilters Json?
+
   // Relations
   trainingJobs TrainingJob[]
+  assets       TrainingDatasetAsset[]
 
   // Ownership
   teamId      String
@@ -756,6 +796,27 @@ model TrainingDataset {
 
   @@index([teamId])
   @@index([projectId])
+  @@unique([projectId, version])
+}
+
+model TrainingDatasetAsset {
+  id        String @id @default(cuid())
+  datasetId String
+  assetId   String
+
+  // Snapshot of key asset data at freeze time
+  s3Key        String?
+  gpsLatitude  Float?
+  gpsLongitude Float?
+
+  createdAt DateTime @default(now())
+
+  dataset TrainingDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  asset   Asset           @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([datasetId, assetId])
+  @@index([datasetId])
+  @@index([assetId])
 }
 
 model TrainingJob {
@@ -807,6 +868,10 @@ model TrainingJob {
   trainedModelId String?       @unique
   trainedModel   TrainedModel? @relation(fields: [trainedModelId], references: [id])
 
+  // Checkpoint training
+  checkpointModelId String?
+  checkpointModel   TrainedModel? @relation("CheckpointFrom", fields: [checkpointModelId], references: [id])
+
   // Ownership
   teamId      String
   team        Team    @relation(fields: [teamId], references: [id])
@@ -854,6 +919,7 @@ model TrainedModel {
   baseModel       String
   trainedOnImages Int?
   trainedEpochs   Int?
+  trainedFromThis TrainingJob[] @relation("CheckpointFrom")
 
   // Detection lineage
   detections Detection[]

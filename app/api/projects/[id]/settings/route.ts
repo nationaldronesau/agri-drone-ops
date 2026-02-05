@@ -22,17 +22,25 @@ export async function PATCH(
 
     const body = await request.json().catch(() => ({}));
     const hasAutoInference = typeof body.autoInferenceEnabled === 'boolean';
-    if (!hasAutoInference) {
+    const hasBackend = typeof body.inferenceBackend === 'string';
+    if (!hasAutoInference && !hasBackend) {
       return NextResponse.json(
-        { error: 'autoInferenceEnabled must be a boolean' },
+        { error: 'autoInferenceEnabled or inferenceBackend must be provided' },
         { status: 400 }
       );
+    }
+    if (hasBackend) {
+      const allowed = new Set(['LOCAL', 'ROBOFLOW', 'AUTO']);
+      if (!allowed.has(body.inferenceBackend)) {
+        return NextResponse.json({ error: 'Invalid inferenceBackend' }, { status: 400 });
+      }
     }
 
     const updated = await prisma.project.update({
       where: { id: params.id },
       data: {
-        autoInferenceEnabled: body.autoInferenceEnabled,
+        ...(hasAutoInference ? { autoInferenceEnabled: body.autoInferenceEnabled } : {}),
+        ...(hasBackend ? { inferenceBackend: body.inferenceBackend } : {}),
       },
     });
 
@@ -42,6 +50,7 @@ export async function PATCH(
         id: updated.id,
         autoInferenceEnabled: updated.autoInferenceEnabled,
         activeModelId: updated.activeModelId,
+        inferenceBackend: updated.inferenceBackend,
       },
     });
   } catch (error) {
