@@ -193,9 +193,14 @@ export async function POST(request: NextRequest) {
         batch_size: batchSize,
         image_size: imageSize,
         learning_rate: learningRate,
-        ...(checkpointModel
-          ? { checkpoint_s3_path: `${checkpointModel.s3Path.replace(/\\/+$/, '')}/${checkpointModel.weightsFile}` }
-          : {}),
+        ...(
+          checkpointModel
+            ? {
+                checkpoint_s3_path: `${checkpointModel.s3Path.replace(/\/+$/, '')}/${checkpointModel.weightsFile}`,
+              }
+            : {}
+        ),
+
       });
 
       const trainingConfig = JSON.stringify({
