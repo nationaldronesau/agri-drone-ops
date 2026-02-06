@@ -61,6 +61,8 @@ interface TrainingDataset {
   valCount: number;
   testCount: number;
   classes: string[];
+  augmentationPreset?: string | null;
+  augmentationConfig?: AugmentationConfig | null;
   createdAt: string;
   project?: { id: string; name: string } | null;
 }
@@ -103,6 +105,11 @@ interface TrainedModel {
   displayName?: string | null;
   classes?: string[];
   mAP50?: number | null;
+  mAP5095?: number | null;
+  precision?: number | null;
+  recall?: number | null;
+  f1Score?: number | null;
+  classMetrics?: unknown;
   status: string;
   isActive: boolean;
   createdAt: string;
@@ -146,6 +153,44 @@ interface HealthResponse {
   cached_models: string[];
 }
 
+type AugmentationPreset = "none" | "light" | "medium" | "heavy" | "agricultural";
+
+interface AugmentationConfig {
+  horizontalFlip: boolean;
+  verticalFlip: boolean;
+  rotation: number;
+  brightness: number;
+  saturation: number;
+  blur: boolean;
+  shadow: boolean;
+  copiesPerImage: number;
+}
+
+interface TrainingHistoryPoint {
+  epoch: number;
+  mAP50: number | null;
+  mAP5095: number | null;
+  precision: number | null;
+  recall: number | null;
+  boxLoss: number | null;
+  clsLoss: number | null;
+}
+
+interface JobHistoryState {
+  loading: boolean;
+  warning?: string;
+  points: TrainingHistoryPoint[];
+}
+
+interface ClassMetricRow {
+  className: string;
+  precision?: number | null;
+  recall?: number | null;
+  f1?: number | null;
+  mAP50?: number | null;
+  support?: number | null;
+}
+
 const ACTIVE_STATUSES = new Set(["QUEUED", "PREPARING", "RUNNING", "UPLOADING"]);
 const STATUS_STYLES: Record<string, string> = {
   QUEUED: "bg-slate-100 text-slate-700",
@@ -165,6 +210,59 @@ const INFERENCE_STATUS_STYLES: Record<string, string> = {
   CANCELLED: "bg-gray-100 text-gray-600",
 };
 
+const AUGMENTATION_PRESET_DEFAULTS: Record<AugmentationPreset, AugmentationConfig> = {
+  none: {
+    horizontalFlip: false,
+    verticalFlip: false,
+    rotation: 0,
+    brightness: 0,
+    saturation: 0,
+    blur: false,
+    shadow: false,
+    copiesPerImage: 1,
+  },
+  light: {
+    horizontalFlip: true,
+    verticalFlip: false,
+    rotation: 10,
+    brightness: 10,
+    saturation: 10,
+    blur: false,
+    shadow: false,
+    copiesPerImage: 2,
+  },
+  medium: {
+    horizontalFlip: true,
+    verticalFlip: true,
+    rotation: 20,
+    brightness: 20,
+    saturation: 20,
+    blur: true,
+    shadow: false,
+    copiesPerImage: 3,
+  },
+  heavy: {
+    horizontalFlip: true,
+    verticalFlip: true,
+    rotation: 35,
+    brightness: 30,
+    saturation: 30,
+    blur: true,
+    shadow: true,
+    copiesPerImage: 4,
+  },
+  agricultural: {
+    horizontalFlip: true,
+    verticalFlip: true,
+    rotation: 15,
+    brightness: 25,
+    saturation: 20,
+    blur: true,
+    shadow: true,
+    copiesPerImage: 3,
+  },
+};
+
 const formatStatus = (status: string) =>
   status
     .toLowerCase()
@@ -173,6 +271,9 @@ const formatStatus = (status: string) =>
 
 const formatMetric = (value?: number | null) =>
   typeof value === "number" ? value.toFixed(2) : "--";
+
+const formatPercentMetric = (value?: number | null) =>
+  typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "--";
 
 const formatDate = (value?: string | null) => {
   if (!value) return "--";
@@ -192,6 +293,197 @@ const clampNumber = (value: number, min: number, max: number) => {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
 };
+
+const toPercentValue = (value?: number | null) =>
+  typeof value === "number" && Number.isFinite(value)
+    ? Math.min(100, Math.max(0, value * 100))
+    : 0;
+
+const cloneAugmentationConfig = (config: AugmentationConfig): AugmentationConfig => ({ ...config });
+
+const normalizeHistoryPoint = (entry: Record<string, unknown>): TrainingHistoryPoint | null => {
+  const epoch = Number(entry.epoch);
+  if (!Number.isFinite(epoch) || epoch < 1) return null;
+
+  const readMetric = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) ? value : null;
+
+  return {
+    epoch,
+    mAP50: readMetric(entry.mAP50),
+    mAP5095: readMetric(entry.mAP5095),
+    precision: readMetric(entry.precision),
+    recall: readMetric(entry.recall),
+    boxLoss: readMetric(entry.box_loss) ?? readMetric(entry.boxLoss),
+    clsLoss: readMetric(entry.cls_loss) ?? readMetric(entry.clsLoss),
+  };
+};
+
+const buildLinePath = (points: Array<{ x: number; y: number }>) => {
+  if (points.length === 0) return "";
+  return points
+    .map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
+    .join(" ");
+};
+
+const extractClassMetrics = (source: unknown): ClassMetricRow[] => {
+  if (!source) return [];
+
+  const readMetric = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) ? value : null;
+
+  if (Array.isArray(source)) {
+    return source
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return null;
+        const record = entry as Record<string, unknown>;
+        const classNameRaw =
+          record.className ?? record.class ?? record.name ?? record.label;
+        if (typeof classNameRaw !== "string" || !classNameRaw.trim()) return null;
+        return {
+          className: classNameRaw,
+          precision: readMetric(record.precision),
+          recall: readMetric(record.recall),
+          f1: readMetric(record.f1 ?? record.f1Score),
+          mAP50: readMetric(record.mAP50),
+          support: readMetric(record.support),
+        };
+      })
+      .filter((entry): entry is ClassMetricRow => Boolean(entry));
+  }
+
+  if (typeof source !== "object") return [];
+
+  return Object.entries(source as Record<string, unknown>)
+    .map(([className, metrics]) => {
+      if (!metrics || typeof metrics !== "object") return null;
+      const record = metrics as Record<string, unknown>;
+      return {
+        className,
+        precision: readMetric(record.precision),
+        recall: readMetric(record.recall),
+        f1: readMetric(record.f1 ?? record.f1Score),
+        mAP50: readMetric(record.mAP50),
+        support: readMetric(record.support),
+      };
+    })
+    .filter((entry): entry is ClassMetricRow => Boolean(entry));
+};
+
+type SparklineSeriesKey = keyof Pick<
+  TrainingHistoryPoint,
+  "mAP50" | "mAP5095" | "precision" | "recall" | "boxLoss" | "clsLoss"
+>;
+
+interface SparklineSeries {
+  key: SparklineSeriesKey;
+  label: string;
+  color: string;
+}
+
+function MetricSparkline({
+  points,
+  series,
+  domain,
+}: {
+  points: TrainingHistoryPoint[];
+  series: SparklineSeries[];
+  domain?: [number, number];
+}) {
+  const width = 360;
+  const height = 120;
+  const padding = 10;
+  const epochs = points.map((point) => point.epoch);
+  const minEpoch = Math.min(...epochs);
+  const maxEpoch = Math.max(...epochs);
+  const epochRange = Math.max(1, maxEpoch - minEpoch);
+
+  const allValues = points.flatMap((point) =>
+    series
+      .map((entry) => point[entry.key])
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+  );
+
+  if (points.length < 2 || allValues.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed border-gray-200 bg-gray-50 px-3 py-4 text-xs text-gray-500">
+        Waiting for epoch history...
+      </div>
+    );
+  }
+
+  const yMin = domain ? domain[0] : Math.min(...allValues);
+  const yMax = domain ? domain[1] : Math.max(...allValues);
+  const valueRange = Math.max(0.0001, yMax - yMin);
+  const innerWidth = width - padding * 2;
+  const innerHeight = height - padding * 2;
+
+  const toX = (epoch: number) => padding + ((epoch - minEpoch) / epochRange) * innerWidth;
+  const toY = (value: number) => height - padding - ((value - yMin) / valueRange) * innerHeight;
+
+  const paths = series
+    .map((entry) => {
+      const coordinates = points
+        .map((point) => {
+          const value = point[entry.key];
+          if (typeof value !== "number" || !Number.isFinite(value)) return null;
+          return { x: toX(point.epoch), y: toY(value) };
+        })
+        .filter((point): point is { x: number; y: number } => Boolean(point));
+      if (coordinates.length < 2) return null;
+      return { ...entry, path: buildLinePath(coordinates) };
+    })
+    .filter((entry): entry is SparklineSeries & { path: string } => Boolean(entry));
+
+  if (paths.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed border-gray-200 bg-gray-50 px-3 py-4 text-xs text-gray-500">
+        Waiting for epoch history...
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="h-24 w-full rounded-md border border-gray-200 bg-white">
+        <svg viewBox={`0 0 ${width} ${height}`} className="h-full w-full" role="img" aria-label="Training metric trend">
+          {[0.25, 0.5, 0.75].map((ratio) => {
+            const y = padding + innerHeight * ratio;
+            return (
+              <line
+                key={ratio}
+                x1={padding}
+                y1={y}
+                x2={width - padding}
+                y2={y}
+                stroke="#e5e7eb"
+                strokeWidth="1"
+              />
+            );
+          })}
+          {paths.map((entry) => (
+            <path
+              key={entry.key}
+              d={entry.path}
+              fill="none"
+              stroke={entry.color}
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          ))}
+        </svg>
+      </div>
+      <div className="flex flex-wrap gap-3 text-[11px] text-gray-600">
+        {paths.map((entry) => (
+          <span key={entry.key} className="flex items-center gap-1">
+            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: entry.color }} />
+            {entry.label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function TrainingPage() {
   const router = useRouter();
@@ -231,6 +523,10 @@ export default function TrainingPage() {
     includeAIDetections: true,
     includeManualAnnotations: true,
     minConfidence: 0.5,
+    augmentationPreset: "agricultural" as AugmentationPreset,
+    augmentationConfig: cloneAugmentationConfig(
+      AUGMENTATION_PRESET_DEFAULTS.agricultural
+    ),
   });
 
   const [availableClasses, setAvailableClasses] = useState<
@@ -275,8 +571,10 @@ export default function TrainingPage() {
   const [cancelInferenceJobId, setCancelInferenceJobId] = useState<string | null>(null);
   const [activatingModelId, setActivatingModelId] = useState<string | null>(null);
   const [downloadingModelId, setDownloadingModelId] = useState<string | null>(null);
+  const [jobHistory, setJobHistory] = useState<Record<string, JobHistoryState>>({});
   const pollingInFlight = useRef(false);
   const inferencePollingInFlight = useRef(false);
+  const historyPollingInFlight = useRef(false);
 
   const activeJobs = useMemo(
     () => jobs.filter((job) => ACTIVE_STATUSES.has(job.status)),
@@ -339,6 +637,35 @@ export default function TrainingPage() {
     () =>
       models.filter((model) => ["READY", "ACTIVE"].includes(model.status)),
     [models]
+  );
+  const comparableModels = useMemo(
+    () =>
+      models.filter((model) => {
+        if (!["READY", "ACTIVE", "ARCHIVED"].includes(model.status)) return false;
+        return (
+          typeof model.mAP50 === "number" ||
+          typeof model.mAP5095 === "number" ||
+          typeof model.precision === "number" ||
+          typeof model.recall === "number" ||
+          typeof model.f1Score === "number"
+        );
+      }),
+    [models]
+  );
+  const rankedModels = useMemo(
+    () =>
+      [...comparableModels].sort((a, b) => {
+        const aScore = typeof a.mAP50 === "number" ? a.mAP50 : -1;
+        const bScore = typeof b.mAP50 === "number" ? b.mAP50 : -1;
+        if (aScore !== bScore) return bScore - aScore;
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      }),
+    [comparableModels]
+  );
+  const bestModel = rankedModels[0] || null;
+  const bestModelClassMetrics = useMemo(
+    () => extractClassMetrics(bestModel?.classMetrics).slice(0, 6),
+    [bestModel]
   );
 
   const loadProjects = useCallback(async () => {
@@ -410,6 +737,50 @@ export default function TrainingPage() {
         available: false,
         error: err instanceof Error ? err.message : "Service unavailable",
       });
+    }
+  }, []);
+
+  const loadJobMetricsHistory = useCallback(async (jobId: string) => {
+    setJobHistory((prev) => ({
+      ...prev,
+      [jobId]: {
+        loading: prev[jobId]?.points.length ? prev[jobId].loading : true,
+        warning: prev[jobId]?.warning,
+        points: prev[jobId]?.points || [],
+      },
+    }));
+
+    try {
+      const response = await fetch(`/api/training/jobs/${jobId}/metrics`);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || "Failed to load metrics history");
+      }
+
+      const points = Array.isArray(data.history)
+        ? data.history
+            .map((entry: Record<string, unknown>) => normalizeHistoryPoint(entry))
+            .filter((entry): entry is TrainingHistoryPoint => Boolean(entry))
+            .sort((a, b) => a.epoch - b.epoch)
+        : [];
+
+      setJobHistory((prev) => ({
+        ...prev,
+        [jobId]: {
+          loading: false,
+          warning: data.warning,
+          points,
+        },
+      }));
+    } catch (err) {
+      setJobHistory((prev) => ({
+        ...prev,
+        [jobId]: {
+          loading: false,
+          warning: err instanceof Error ? err.message : "Failed to load history",
+          points: prev[jobId]?.points || [],
+        },
+      }));
     }
   }, []);
 
@@ -597,6 +968,26 @@ export default function TrainingPage() {
   }, [activeJobIds]);
 
   useEffect(() => {
+    if (!activeJobIds) return;
+    const jobIds = activeJobIds.split(",").filter(Boolean);
+    if (jobIds.length === 0) return;
+
+    const pollHistory = async () => {
+      if (historyPollingInFlight.current) return;
+      historyPollingInFlight.current = true;
+      try {
+        await Promise.all(jobIds.map((jobId) => loadJobMetricsHistory(jobId)));
+      } finally {
+        historyPollingInFlight.current = false;
+      }
+    };
+
+    pollHistory();
+    const interval = setInterval(pollHistory, 10000);
+    return () => clearInterval(interval);
+  }, [activeJobIds, loadJobMetricsHistory]);
+
+  useEffect(() => {
     if (!activeInferenceIds) return;
 
     const interval = setInterval(async () => {
@@ -688,6 +1079,11 @@ export default function TrainingPage() {
           includeAIDetections: datasetForm.includeAIDetections,
           includeManualAnnotations: datasetForm.includeManualAnnotations,
           minConfidence: datasetForm.minConfidence,
+          augmentationPreset: datasetForm.augmentationPreset,
+          augmentationConfig:
+            datasetForm.augmentationPreset === "none"
+              ? null
+              : datasetForm.augmentationConfig,
         }),
       });
       const data = await response.json();
@@ -995,7 +1391,19 @@ export default function TrainingPage() {
     [models]
   );
 
+  const applyAugmentationPreset = useCallback((preset: AugmentationPreset) => {
+    setDatasetForm((prev) => ({
+      ...prev,
+      augmentationPreset: preset,
+      augmentationConfig: cloneAugmentationConfig(AUGMENTATION_PRESET_DEFAULTS[preset]),
+    }));
+  }, []);
+
   const splitTotal = datasetForm.splitTrain + datasetForm.splitVal + datasetForm.splitTest;
+  const projectedAugmentedImages = useMemo(() => {
+    if (!preview) return null;
+    return preview.imageCount * Math.max(1, datasetForm.augmentationConfig.copiesPerImage);
+  }, [preview, datasetForm.augmentationConfig.copiesPerImage]);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -1233,6 +1641,175 @@ export default function TrainingPage() {
                   </div>
                 </div>
 
+                <div className="space-y-4 rounded-md border border-gray-200 bg-gray-50 p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <Label htmlFor="augmentation-preset">Augmentation profile</Label>
+                    <span className="text-xs text-gray-500">
+                      Stored with this dataset for reproducibility.
+                    </span>
+                  </div>
+
+                  <Select
+                    value={datasetForm.augmentationPreset}
+                    onValueChange={(value) =>
+                      applyAugmentationPreset(value as AugmentationPreset)
+                    }
+                  >
+                    <SelectTrigger id="augmentation-preset">
+                      <SelectValue placeholder="Select preset" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">None</SelectItem>
+                      <SelectItem value="light">Light</SelectItem>
+                      <SelectItem value="medium">Medium</SelectItem>
+                      <SelectItem value="heavy">Heavy</SelectItem>
+                      <SelectItem value="agricultural">Agricultural</SelectItem>
+                    </SelectContent>
+                  </Select>
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="aug-rotation">Rotation (+/- degrees)</Label>
+                      <Input
+                        id="aug-rotation"
+                        type="number"
+                        min={0}
+                        max={180}
+                        value={datasetForm.augmentationConfig.rotation}
+                        onChange={(event) =>
+                          setDatasetForm((prev) => ({
+                            ...prev,
+                            augmentationConfig: {
+                              ...prev.augmentationConfig,
+                              rotation: clampNumber(Number(event.target.value), 0, 180),
+                            },
+                          }))
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="aug-copies">Copies per image</Label>
+                      <Input
+                        id="aug-copies"
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={datasetForm.augmentationConfig.copiesPerImage}
+                        onChange={(event) =>
+                          setDatasetForm((prev) => ({
+                            ...prev,
+                            augmentationConfig: {
+                              ...prev.augmentationConfig,
+                              copiesPerImage: clampNumber(Number(event.target.value), 1, 10),
+                            },
+                          }))
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="aug-brightness">Brightness (+/- %)</Label>
+                      <Input
+                        id="aug-brightness"
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={datasetForm.augmentationConfig.brightness}
+                        onChange={(event) =>
+                          setDatasetForm((prev) => ({
+                            ...prev,
+                            augmentationConfig: {
+                              ...prev.augmentationConfig,
+                              brightness: clampNumber(Number(event.target.value), 0, 100),
+                            },
+                          }))
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="aug-saturation">Saturation (+/- %)</Label>
+                      <Input
+                        id="aug-saturation"
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={datasetForm.augmentationConfig.saturation}
+                        onChange={(event) =>
+                          setDatasetForm((prev) => ({
+                            ...prev,
+                            augmentationConfig: {
+                              ...prev.augmentationConfig,
+                              saturation: clampNumber(Number(event.target.value), 0, 100),
+                            },
+                          }))
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-4 text-sm">
+                    <label className="flex items-center gap-2">
+                      <Checkbox
+                        checked={datasetForm.augmentationConfig.horizontalFlip}
+                        onCheckedChange={(value) =>
+                          setDatasetForm((prev) => ({
+                            ...prev,
+                            augmentationConfig: {
+                              ...prev.augmentationConfig,
+                              horizontalFlip: Boolean(value),
+                            },
+                          }))
+                        }
+                      />
+                      <span>H-Flip</span>
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <Checkbox
+                        checked={datasetForm.augmentationConfig.verticalFlip}
+                        onCheckedChange={(value) =>
+                          setDatasetForm((prev) => ({
+                            ...prev,
+                            augmentationConfig: {
+                              ...prev.augmentationConfig,
+                              verticalFlip: Boolean(value),
+                            },
+                          }))
+                        }
+                      />
+                      <span>V-Flip</span>
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <Checkbox
+                        checked={datasetForm.augmentationConfig.blur}
+                        onCheckedChange={(value) =>
+                          setDatasetForm((prev) => ({
+                            ...prev,
+                            augmentationConfig: {
+                              ...prev.augmentationConfig,
+                              blur: Boolean(value),
+                            },
+                          }))
+                        }
+                      />
+                      <span>Blur</span>
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <Checkbox
+                        checked={datasetForm.augmentationConfig.shadow}
+                        onCheckedChange={(value) =>
+                          setDatasetForm((prev) => ({
+                            ...prev,
+                            augmentationConfig: {
+                              ...prev.augmentationConfig,
+                              shadow: Boolean(value),
+                            },
+                          }))
+                        }
+                      />
+                      <span>Shadow</span>
+                    </label>
+                  </div>
+                </div>
+
                 <Card className="border-dashed border-gray-200">
                   <CardHeader>
                     <CardTitle className="text-base">Preview counts</CardTitle>
@@ -1272,6 +1849,11 @@ export default function TrainingPage() {
                             </Badge>
                           ))}
                         </div>
+                        <p className="text-xs text-gray-500">
+                          With {datasetForm.augmentationConfig.copiesPerImage} copies/image:
+                          {" "}
+                          {projectedAugmentedImages ?? "--"} effective training images.
+                        </p>
                       </>
                     ) : (
                       <p className="text-sm text-gray-500">
@@ -1679,6 +2261,8 @@ export default function TrainingPage() {
                         ? Math.min(100, Math.round(rawProgress > 1 ? rawProgress : rawProgress * 100))
                         : 0;
                   const metrics = job.currentMetrics;
+                  const historyState = jobHistory[job.id];
+                  const historyPoints = historyState?.points || [];
                   const startedAt = job.startedAt ? new Date(job.startedAt) : null;
                   const elapsedMinutes = startedAt
                     ? Math.max(0, Math.round((Date.now() - startedAt.getTime()) / 60000))
@@ -1731,6 +2315,40 @@ export default function TrainingPage() {
                           <p className="text-xs text-gray-500">Recall</p>
                           <p className="font-semibold">{formatMetric(metrics?.recall)}</p>
                         </div>
+                      </div>
+
+                      <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                        <div className="mb-3 flex items-center justify-between">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+                            Live Curves
+                          </p>
+                          <span className="text-xs text-gray-500">
+                            {historyState?.loading && historyPoints.length === 0
+                              ? "Loading..."
+                              : `${historyPoints.length} epochs`}
+                          </span>
+                        </div>
+                        <div className="space-y-3">
+                          <MetricSparkline
+                            points={historyPoints}
+                            domain={[0, 1]}
+                            series={[
+                              { key: "mAP50", label: "mAP50", color: "#16a34a" },
+                              { key: "precision", label: "Precision", color: "#2563eb" },
+                              { key: "recall", label: "Recall", color: "#ea580c" },
+                            ]}
+                          />
+                          <MetricSparkline
+                            points={historyPoints}
+                            series={[
+                              { key: "boxLoss", label: "Box Loss", color: "#7c3aed" },
+                              { key: "clsLoss", label: "Class Loss", color: "#dc2626" },
+                            ]}
+                          />
+                        </div>
+                        {historyState?.warning ? (
+                          <p className="mt-2 text-xs text-amber-700">{historyState.warning}</p>
+                        ) : null}
                       </div>
 
                       {job.syncStatus === "failed" && (
@@ -2081,6 +2699,101 @@ export default function TrainingPage() {
               )}
             </CardContent>
           </Card>
+
+          <Card className="lg:col-span-2">
+            <CardHeader>
+              <CardTitle>Model Comparison</CardTitle>
+              <CardDescription>
+                Completed model results ranked by mAP50.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {loading ? (
+                <p className="text-sm text-gray-500">Loading model metrics...</p>
+              ) : rankedModels.length === 0 ? (
+                <p className="text-sm text-gray-500">
+                  No completed models with metrics available yet.
+                </p>
+              ) : (
+                <>
+                  <div className="space-y-3">
+                    {rankedModels.slice(0, 5).map((model) => (
+                      <div
+                        key={model.id}
+                        className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <p className="font-semibold text-gray-900">
+                              {model.displayName || `${model.name} v${model.version}`}
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              Trained {formatDate(model.createdAt)}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            {model.isActive ? (
+                              <Badge className="bg-emerald-100 text-emerald-700">Active</Badge>
+                            ) : null}
+                            <Badge variant="secondary">{formatStatus(model.status)}</Badge>
+                          </div>
+                        </div>
+                        <div className="mt-4 grid gap-3 md:grid-cols-4">
+                          {[
+                            { label: "mAP50", value: model.mAP50 },
+                            { label: "mAP50-95", value: model.mAP5095 },
+                            { label: "Precision", value: model.precision },
+                            { label: "Recall", value: model.recall },
+                          ].map((metric) => (
+                            <div key={metric.label} className="space-y-1">
+                              <div className="flex items-center justify-between text-xs text-gray-500">
+                                <span>{metric.label}</span>
+                                <span>{formatPercentMetric(metric.value)}</span>
+                              </div>
+                              <Progress value={toPercentValue(metric.value)} />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {bestModelClassMetrics.length > 0 && bestModel ? (
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+                        Best Model Class Metrics:{" "}
+                        {bestModel.displayName || `${bestModel.name} v${bestModel.version}`}
+                      </p>
+                      <div className="mt-3 grid gap-2 md:grid-cols-2">
+                        {bestModelClassMetrics.map((entry) => (
+                          <div
+                            key={entry.className}
+                            className="rounded-md border border-gray-200 bg-white px-3 py-2"
+                          >
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="font-medium text-gray-900">{entry.className}</span>
+                              <span className="text-xs text-gray-500">
+                                Support{" "}
+                                {typeof entry.support === "number"
+                                  ? Math.round(entry.support)
+                                  : "--"}
+                              </span>
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-3 text-xs text-gray-600">
+                              <span>P {formatPercentMetric(entry.precision)}</span>
+                              <span>R {formatPercentMetric(entry.recall)}</span>
+                              <span>F1 {formatPercentMetric(entry.f1)}</span>
+                              <span>mAP50 {formatPercentMetric(entry.mAP50)}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </CardContent>
+          </Card>
         </section>
 
         <div className="grid gap-6 lg:grid-cols-3">
@@ -2106,6 +2819,12 @@ export default function TrainingPage() {
                       </p>
                       <p className="text-xs text-gray-500">
                         Train/Val/Test: {dataset.trainCount}/{dataset.valCount}/{dataset.testCount}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        Augmentation: {dataset.augmentationPreset || "none"}
+                        {dataset.augmentationConfig?.copiesPerImage
+                          ? ` (${dataset.augmentationConfig.copiesPerImage}x copies)`
+                          : ""}
                       </p>
                     </div>
                     <Badge variant="secondary">{formatDate(dataset.createdAt)}</Badge>

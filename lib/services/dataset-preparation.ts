@@ -46,6 +46,8 @@ export interface DatasetConfig {
   datasetId?: string;
   s3BasePath?: string;
   skipCreateRecord?: boolean;
+  augmentationPreset?: string;
+  augmentationConfig?: Record<string, unknown> | null;
 }
 
 interface PreparedDataset {
@@ -206,6 +208,8 @@ class DatasetPreparationService {
     );
 
     const s3FullPath = `s3://${this.bucket}/${s3BasePath}/`;
+    const shouldPersistAugmentation =
+      typeof config.augmentationPreset === 'string' && config.augmentationPreset !== 'none';
     if (!config.skipCreateRecord) {
       await prisma.trainingDataset.create({
         data: {
@@ -220,6 +224,11 @@ class DatasetPreparationService {
           trainCount: splitCounts.train,
           valCount: splitCounts.val,
           testCount: splitCounts.test,
+          augmentationPreset: shouldPersistAugmentation ? config.augmentationPreset : undefined,
+          augmentationConfig:
+            shouldPersistAugmentation && config.augmentationConfig
+              ? JSON.stringify(config.augmentationConfig)
+              : null,
           teamId,
           createdById: config.createdById,
         },

@@ -10,6 +10,14 @@ import { datasetPreparation } from '@/lib/services/dataset-preparation';
 import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
 import { checkRateLimit } from '@/lib/utils/security';
 
+const ALLOWED_AUGMENTATION_PRESETS = new Set([
+  'none',
+  'light',
+  'medium',
+  'heavy',
+  'agricultural',
+]);
+
 export async function POST(request: NextRequest) {
   try {
     const auth = await getAuthenticatedUser();
@@ -43,6 +51,8 @@ export async function POST(request: NextRequest) {
       includeAIDetections = true,
       includeManualAnnotations = true,
       minConfidence = 0.5,
+      augmentationPreset = 'none',
+      augmentationConfig,
     } = body;
 
     if (!name || typeof name !== 'string') {
@@ -65,6 +75,27 @@ export async function POST(request: NextRequest) {
       if (total <= 0) {
         return NextResponse.json({ error: 'splitRatio must have positive values' }, { status: 400 });
       }
+    }
+
+    if (
+      augmentationPreset != null &&
+      (typeof augmentationPreset !== 'string' ||
+        !ALLOWED_AUGMENTATION_PRESETS.has(augmentationPreset))
+    ) {
+      return NextResponse.json(
+        { error: 'augmentationPreset must be one of none/light/medium/heavy/agricultural' },
+        { status: 400 }
+      );
+    }
+
+    if (
+      augmentationConfig != null &&
+      (typeof augmentationConfig !== 'object' || Array.isArray(augmentationConfig))
+    ) {
+      return NextResponse.json(
+        { error: 'augmentationConfig must be an object when provided' },
+        { status: 400 }
+      );
     }
 
     const project = await prisma.project.findFirst({
@@ -113,12 +144,36 @@ export async function POST(request: NextRequest) {
       includeManualAnnotations,
       minConfidence,
       createdById: auth.userId,
+      augmentationPreset,
+      augmentationConfig,
     });
 
+    const datasetPatch: {
+      description?: string;
+      augmentationPreset?: string;
+      augmentationConfig?: string;
+    } = {};
     if (description) {
+      datasetPatch.description = description;
+    }
+
+    if (augmentationPreset && augmentationPreset !== 'none') {
+      datasetPatch.augmentationPreset = augmentationPreset;
+    }
+
+    if (
+      augmentationPreset &&
+      augmentationPreset !== 'none' &&
+      augmentationConfig &&
+      typeof augmentationConfig === 'object'
+    ) {
+      datasetPatch.augmentationConfig = JSON.stringify(augmentationConfig);
+    }
+
+    if (Object.keys(datasetPatch).length > 0) {
       await prisma.trainingDataset.update({
         where: { id: result.datasetId },
-        data: { description },
+        data: datasetPatch,
       });
     }
 
@@ -135,6 +190,14 @@ export async function POST(request: NextRequest) {
         valCount: result.valCount,
         testCount: result.testCount,
         classes: result.classes,
+        augmentationPreset:
+          augmentationPreset && augmentationPreset !== 'none'
+            ? augmentationPreset
+            : null,
+        augmentationConfig:
+          augmentationPreset && augmentationPreset !== 'none'
+            ? augmentationConfig || null
+            : null,
       },
     });
   } catch (error) {
