@@ -34,6 +34,8 @@ export default function ProjectsPage() {
   const [cameraProfilesError, setCameraProfilesError] = useState<string | null>(null);
   const [updatingProjectId, setUpdatingProjectId] = useState<string | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [createProjectError, setCreateProjectError] = useState<string | null>(null);
   const [newProject, setNewProject] = useState({ 
     name: '', 
     description: '', 
@@ -85,20 +87,36 @@ export default function ProjectsPage() {
     if (!newProject.name.trim()) return;
 
     try {
+      setCreatingProject(true);
+      setCreateProjectError(null);
       const response = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newProject)
       });
 
-      if (response.ok) {
-        const project = await response.json();
-        setProjects([project, ...projects]);
-        setNewProject({ name: '', description: '', location: '', purpose: 'WEED_DETECTION', season: '' });
-        setCreateDialogOpen(false);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to create project');
       }
+
+      const project = await response.json();
+      setProjects((previous) => [project, ...previous]);
+      setNewProject({ name: '', description: '', location: '', purpose: 'WEED_DETECTION', season: '' });
+      setCreateDialogOpen(false);
     } catch (error) {
       console.error('Failed to create project:', error);
+      setCreateProjectError(error instanceof Error ? error.message : 'Failed to create project');
+    } finally {
+      setCreatingProject(false);
+    }
+  };
+
+  const handleCreateDialogOpenChange = (open: boolean) => {
+    setCreateDialogOpen(open);
+    if (!open) {
+      setCreateProjectError(null);
+      setNewProject({ name: '', description: '', location: '', purpose: 'WEED_DETECTION', season: '' });
     }
   };
 
@@ -155,7 +173,7 @@ export default function ProjectsPage() {
                 </span>
               </div>
             </div>
-            <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+            <Dialog open={createDialogOpen} onOpenChange={handleCreateDialogOpenChange}>
               <DialogTrigger asChild>
                 <Button className="bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600">
                   <Plus className="w-4 h-4 mr-2" />
@@ -228,13 +246,17 @@ export default function ProjectsPage() {
                       onChange={(e) => setNewProject({ ...newProject, description: e.target.value })}
                     />
                   </div>
+
+                  {createProjectError && (
+                    <p className="text-sm text-red-600">{createProjectError}</p>
+                  )}
                   
                   <div className="flex justify-end space-x-2">
-                    <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
+                    <Button variant="outline" onClick={() => handleCreateDialogOpenChange(false)} disabled={creatingProject}>
                       Cancel
                     </Button>
-                    <Button onClick={createProject} disabled={!newProject.name.trim()}>
-                      Create Project
+                    <Button onClick={createProject} disabled={creatingProject || !newProject.name.trim()}>
+                      {creatingProject ? 'Creating...' : 'Create Project'}
                     </Button>
                   </div>
                 </div>
@@ -262,49 +284,15 @@ export default function ProjectsPage() {
             <CardContent>
               <FolderOpen className="w-16 h-16 text-gray-400 mx-auto mb-4" />
               <p className="text-gray-500 mb-4">No projects created yet</p>
-              <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button className="bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600">
-                    Create Your First Project
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Create New Project</DialogTitle>
-                    <DialogDescription>
-                      Create a new project to organize your drone imagery and analysis results.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4">
-                    <div>
-                      <Label htmlFor="name">Project Name</Label>
-                      <Input
-                        id="name"
-                        placeholder="e.g., North Field Survey 2024"
-                        value={newProject.name}
-                        onChange={(e) => setNewProject({ ...newProject, name: e.target.value })}
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="description">Description (Optional)</Label>
-                      <Input
-                        id="description"
-                        placeholder="Brief description of the project..."
-                        value={newProject.description}
-                        onChange={(e) => setNewProject({ ...newProject, description: e.target.value })}
-                      />
-                    </div>
-                    <div className="flex justify-end space-x-2">
-                      <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
-                        Cancel
-                      </Button>
-                      <Button onClick={createProject} disabled={!newProject.name.trim()}>
-                        Create Project
-                      </Button>
-                    </div>
-                  </div>
-                </DialogContent>
-              </Dialog>
+              <Button
+                className="bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600"
+                onClick={() => {
+                  setCreateProjectError(null);
+                  setCreateDialogOpen(true);
+                }}
+              >
+                Create Your First Project
+              </Button>
             </CardContent>
           </Card>
         ) : (
