@@ -20,6 +20,7 @@ export interface TrainingConfig {
   image_size?: number;
   learning_rate?: number;
   checkpoint_s3_path?: string;
+  augmentation?: Record<string, unknown>;
 }
 
 export interface TrainingJobResponse {
@@ -281,19 +282,58 @@ export class YOLOService {
   }
 
   async startTraining(config: TrainingConfig): Promise<TrainingJobResponse> {
-    return this.request<TrainingJobResponse>('/api/v1/train', {
-      method: 'POST',
-      body: JSON.stringify({
-        dataset_s3_path: config.dataset_s3_path,
-        model_name: config.model_name,
-        base_model: config.base_model || 'yolo11m',
-        epochs: config.epochs || 100,
-        batch_size: config.batch_size || 16,
-        image_size: config.image_size || 640,
-        learning_rate: config.learning_rate || 0.01,
-        ...(config.checkpoint_s3_path ? { checkpoint_s3_path: config.checkpoint_s3_path } : {}),
-      }),
-    });
+    const basePayload: Record<string, unknown> = {
+      dataset_s3_path: config.dataset_s3_path,
+      model_name: config.model_name,
+      base_model: config.base_model || 'yolo11m',
+      epochs: config.epochs || 100,
+      batch_size: config.batch_size || 16,
+      image_size: config.image_size || 640,
+      learning_rate: config.learning_rate || 0.01,
+      ...(config.checkpoint_s3_path ? { checkpoint_s3_path: config.checkpoint_s3_path } : {}),
+    };
+
+    const augmentationPayload = config.augmentation && typeof config.augmentation === 'object'
+      ? {
+          ...basePayload,
+          augmentation: config.augmentation,
+          ...(typeof config.augmentation.fliplr === 'number'
+            ? { fliplr: config.augmentation.fliplr }
+            : {}),
+          ...(typeof config.augmentation.flipud === 'number'
+            ? { flipud: config.augmentation.flipud }
+            : {}),
+          ...(typeof config.augmentation.degrees === 'number'
+            ? { degrees: config.augmentation.degrees }
+            : {}),
+          ...(typeof config.augmentation.hsv_v === 'number'
+            ? { hsv_v: config.augmentation.hsv_v }
+            : {}),
+          ...(typeof config.augmentation.hsv_s === 'number'
+            ? { hsv_s: config.augmentation.hsv_s }
+            : {}),
+        }
+      : null;
+
+    try {
+      return await this.request<TrainingJobResponse>('/api/v1/train', {
+        method: 'POST',
+        body: JSON.stringify(augmentationPayload || basePayload),
+      });
+    } catch (error) {
+      // Backward-compatible fallback for older YOLO services that reject augmentation fields.
+      if (
+        augmentationPayload &&
+        error instanceof YOLOServiceError &&
+        (error.statusCode === 400 || error.statusCode === 422)
+      ) {
+        return this.request<TrainingJobResponse>('/api/v1/train', {
+          method: 'POST',
+          body: JSON.stringify(basePayload),
+        });
+      }
+      throw error;
+    }
   }
 
   async getTrainingStatus(jobId: string): Promise<TrainingStatus> {

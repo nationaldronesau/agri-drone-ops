@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { ArrowLeft, Plus, FolderOpen, Camera, MapPin, Calendar } from "lucide-react";
+import { ArrowLeft, Plus, FolderOpen, Camera, MapPin, Calendar, Settings } from "lucide-react";
 import Link from "next/link";
 
 interface Project {
@@ -405,11 +405,19 @@ export default function ProjectsPage() {
                         </Button>
                       </Link>
                     </div>
-                    <Link href={`/projects/${project.id}/versions`} className="block">
-                      <Button variant="outline" size="sm" className="w-full">
-                        Versions
-                      </Button>
-                    </Link>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Link href={`/projects/${project.id}/versions`} className="block">
+                        <Button variant="outline" size="sm" className="w-full">
+                          Versions
+                        </Button>
+                      </Link>
+                      <Link href={`/projects/${project.id}/settings`} className="block">
+                        <Button variant="outline" size="sm" className="w-full">
+                          <Settings className="w-4 h-4 mr-1" />
+                          Settings
+                        </Button>
+                      </Link>
+                    </div>
                   </div>
                 </CardContent>
               </Card>

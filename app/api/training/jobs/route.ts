@@ -13,6 +13,7 @@ import { TrainingStatus } from '@prisma/client';
 import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
 import { checkRateLimit } from '@/lib/utils/security';
 import { syncJobWithEC2 } from '@/lib/services/training-sync';
+import { buildTrainingAugmentationFromDataset } from '@/lib/services/training-augmentation';
 
 const ALLOWED_BASE_MODELS = ['yolo11n', 'yolo11s', 'yolo11m', 'yolo11l', 'yolo11x'] as const;
 const TRAINING_LOCK_TTL_MS = 15 * 60 * 1000;
@@ -103,6 +104,7 @@ export async function POST(request: NextRequest) {
     const nextVersion = existing ? existing.version + 1 : 1;
     const modelName = formatModelId(modelBaseName, nextVersion);
     const estimate = estimateTrainingTime(dataset.imageCount, epochs, batchSize);
+    const augmentation = buildTrainingAugmentationFromDataset(dataset);
 
     let checkpointModel: { id: string; s3Path: string; weightsFile: string } | null = null;
     if (checkpointModelId) {
@@ -134,7 +136,10 @@ export async function POST(request: NextRequest) {
         estimatedMinutes: estimate.minutes,
         teamId: dataset.teamId,
         createdById: auth.userId,
-        trainingConfig: JSON.stringify({ modelName }),
+        trainingConfig: JSON.stringify({
+          modelName,
+          ...(augmentation ? { augmentation } : {}),
+        }),
         checkpointModelId: checkpointModel?.id,
       },
       include: {
@@ -193,6 +198,7 @@ export async function POST(request: NextRequest) {
         batch_size: batchSize,
         image_size: imageSize,
         learning_rate: learningRate,
+        ...(augmentation ? { augmentation } : {}),
         ...(
           checkpointModel
             ? {
@@ -205,6 +211,7 @@ export async function POST(request: NextRequest) {
 
       const trainingConfig = JSON.stringify({
         modelName,
+        ...(augmentation ? { augmentation } : {}),
         gpuLockToken,
       });
 

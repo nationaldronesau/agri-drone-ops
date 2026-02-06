@@ -12,6 +12,7 @@ import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
 import { acquireGpuLock, releaseGpuLock } from '@/lib/services/gpu-lock';
 import { TrainingStatus } from '@prisma/client';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
+import { buildTrainingAugmentationFromDataset } from '@/lib/services/training-augmentation';
 
 const TRAINING_LOCK_TTL_MS = 15 * 60 * 1000;
 
@@ -44,6 +45,8 @@ export async function POST(
             imageCount: true,
             classes: true,
             version: true,
+            augmentationPreset: true,
+            augmentationConfig: true,
           },
         },
         checkpointModel: {
@@ -84,6 +87,12 @@ export async function POST(
 
     // Get model name from config or generate one
     const config = job.trainingConfig ? JSON.parse(job.trainingConfig) : {};
+    const storedAugmentation =
+      config && typeof config === 'object' && config.augmentation && typeof config.augmentation === 'object'
+        ? (config.augmentation as Record<string, unknown>)
+        : null;
+    const datasetAugmentation = buildTrainingAugmentationFromDataset(job.dataset);
+    const augmentation = storedAugmentation || datasetAugmentation;
     let modelName = config.modelName;
 
     if (!modelName) {
@@ -152,6 +161,7 @@ export async function POST(
         batch_size: job.batchSize,
         image_size: job.imageSize,
         learning_rate: job.learningRate,
+        ...(augmentation ? { augmentation } : {}),
         ...(
           job.checkpointModel
             ? {
@@ -168,7 +178,12 @@ export async function POST(
         data: {
           ec2JobId: ec2Response.job_id,
           status: TrainingStatus.PREPARING,
-          trainingConfig: JSON.stringify({ ...config, modelName, gpuLockToken }),
+          trainingConfig: JSON.stringify({
+            ...config,
+            modelName,
+            ...(augmentation ? { augmentation } : {}),
+            gpuLockToken,
+          }),
         },
         include: {
           dataset: {

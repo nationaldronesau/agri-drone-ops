@@ -9,6 +9,7 @@ import { acquireGpuLock, releaseGpuLock } from '@/lib/services/gpu-lock';
 import { S3Service } from '@/lib/services/s3';
 import { fetchImageSafely, isUrlAllowed } from '@/lib/utils/security';
 import { rescaleToOriginalWithMeta } from '@/lib/utils/georeferencing';
+import { buildTrainingAugmentationFromInput } from '@/lib/services/training-augmentation';
 import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
 import type { AnnotationBox } from '@/types/roboflow';
 
@@ -100,6 +101,8 @@ export async function POST(
       batchSize?: number;
       imageSize?: number;
       learningRate?: number;
+      augmentationPreset?: string;
+      augmentationConfig?: Record<string, unknown>;
     } | undefined;
 
     if (!target || !['roboflow', 'yolo', 'both'].includes(target)) {
@@ -285,7 +288,13 @@ export async function POST(
         minConfidence: yoloConfig.confidenceThreshold ?? 0.5,
         createdAfter: session.createdAt,
         createdById: auth.userId,
+        augmentationPreset: yoloConfig.augmentationPreset,
+        augmentationConfig: yoloConfig.augmentationConfig,
       });
+      const augmentation = buildTrainingAugmentationFromInput(
+        yoloConfig.augmentationPreset,
+        yoloConfig.augmentationConfig
+      );
 
       const modelBaseName = yoloConfig.datasetName
         .toLowerCase()
@@ -317,7 +326,10 @@ export async function POST(
           estimatedMinutes: estimate.minutes,
           teamId: session.teamId,
           createdById: auth.userId,
-          trainingConfig: JSON.stringify({ modelName }),
+          trainingConfig: JSON.stringify({
+            modelName,
+            ...(augmentation ? { augmentation } : {}),
+          }),
         },
       });
 
@@ -363,6 +375,7 @@ export async function POST(
           batch_size: yoloConfig.batchSize || 16,
           image_size: yoloConfig.imageSize || 640,
           learning_rate: yoloConfig.learningRate || 0.01,
+          ...(augmentation ? { augmentation } : {}),
         });
 
         await prisma.trainingJob.update({
@@ -372,6 +385,7 @@ export async function POST(
             status: 'PREPARING',
             trainingConfig: JSON.stringify({
               modelName,
+              ...(augmentation ? { augmentation } : {}),
               gpuLockToken: gpuLock.token,
             }),
           },
