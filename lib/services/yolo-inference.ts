@@ -1,4 +1,4 @@
-import { yoloService } from '@/lib/services/yolo';
+import YOLOService, { yoloService } from '@/lib/services/yolo';
 import { roboflowService, ROBOFLOW_MODELS, ModelType } from '@/lib/services/roboflow';
 import { fetchImageSafely } from '@/lib/utils/security';
 
@@ -19,6 +19,19 @@ export interface DetectionResult {
   backend: 'local' | 'roboflow';
   inferenceTimeMs?: number;
 }
+
+const inferenceBaseUrl =
+  process.env.YOLO_INFERENCE_URL ||
+  process.env.SAM3_SERVICE_URL ||
+  process.env.SAM3_API_URL ||
+  null;
+
+const yoloInferenceClient = inferenceBaseUrl
+  ? new YOLOService({
+      baseUrl: inferenceBaseUrl,
+      apiKey: process.env.YOLO_SERVICE_API_KEY,
+    })
+  : yoloService;
 
 function getDefaultRoboflowModels(): ModelType[] {
   return Object.entries(ROBOFLOW_MODELS)
@@ -68,7 +81,7 @@ class YOLOInferenceService {
       throw new Error('Local inference requires s3Path or imageBase64');
     }
 
-    const response = await yoloService.detect({
+    const response = await yoloInferenceClient.detect({
       s3_path: request.s3Path ?? undefined,
       image: request.imageBase64,
       model: request.modelName,
@@ -107,3 +120,4 @@ class YOLOInferenceService {
 }
 
 export const yoloInferenceService = new YOLOInferenceService();
+export { yoloInferenceClient };
