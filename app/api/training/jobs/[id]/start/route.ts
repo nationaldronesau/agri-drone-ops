@@ -152,9 +152,13 @@ export async function POST(
         batch_size: job.batchSize,
         image_size: job.imageSize,
         learning_rate: job.learningRate,
-        ...(job.checkpointModel
-          ? { checkpoint_s3_path: `${job.checkpointModel.s3Path.replace(/\\/+$/, '')}/${job.checkpointModel.weightsFile}` }
-          : {}),
+        ...(
+          job.checkpointModel
+            ? {
+                checkpoint_s3_path: `${job.checkpointModel.s3Path.replace(/\/+$/, '')}/${job.checkpointModel.weightsFile}`,
+              }
+            : {}
+        ),
       });
 
       console.log(`[Training Start] EC2 response:`, ec2Response);
