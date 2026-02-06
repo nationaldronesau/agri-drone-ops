@@ -11,6 +11,7 @@ services:
     environment:
       # Use SQLite for development
       DATABASE_URL: "file:./dev.db"
+      # DATABASE_URL: "mysql://willy:willy@host.docker.internal:3306/agrodrone"
       NODE_ENV: development
       # Disable auth for development
       NEXT_PUBLIC_AUTH_MODE: disabled
@@ -19,6 +20,8 @@ services:
       - .:/app
       - /app/node_modules
       - /app/.next
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: npm run dev
 
   # SAM3 Segmentation Service (OPTIONAL - use Roboflow Cloud instead)
