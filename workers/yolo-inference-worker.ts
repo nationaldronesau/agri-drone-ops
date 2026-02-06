@@ -12,7 +12,7 @@ import {
   type YoloInferenceJobData,
   type YoloInferenceJobResult,
 } from '../lib/queue/yolo-inference-queue';
-import { yoloService } from '../lib/services/yolo';
+import { yoloInferenceClient } from '../lib/services/yolo-inference';
 import { S3Service } from '../lib/services/s3';
 import { fetchImageSafely } from '../lib/utils/security';
 import { normalizeDetectionType } from '../lib/utils/detection-types';
@@ -160,12 +160,12 @@ async function handleInferenceJob(
 
       const s3Path = getS3Path(asset);
       const response = s3Path
-        ? await yoloService.detect({
+        ? await yoloInferenceClient.detect({
             s3_path: s3Path,
             model: storedJob.modelName,
             confidence: storedJob.confidence,
           })
-        : await yoloService.detect({
+        : await yoloInferenceClient.detect({
             image: await getImageBase64({ id: asset.id, storageUrl: asset.storageUrl }),
             model: storedJob.modelName,
             confidence: storedJob.confidence,
