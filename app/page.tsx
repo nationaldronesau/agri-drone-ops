@@ -49,7 +49,7 @@ export default function Home() {
                   Dashboard
                 </Button>
               </Link>
-              <Link href="/auth/signin">
+              <Link href="/dashboard">
                 <Button variant="ghost" className="text-slate-300 hover:text-white hover:bg-white/5">
                   Sign In
                 </Button>

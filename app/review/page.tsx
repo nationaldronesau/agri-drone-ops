@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Slider } from '@/components/ui/slider';
 import { ReviewViewer, type ReviewItem } from '@/components/review/ReviewViewer';
 import { YOLOConfigModal, type YOLOTrainingConfig } from '@/components/review/YOLOConfigModal';
-import { ArrowLeft, Brain, Download, ExternalLink, Sparkles } from 'lucide-react';
+import { Brain, Download, ExternalLink, Sparkles } from 'lucide-react';
 
 interface ReviewSession {
   id: string;
@@ -299,7 +299,7 @@ function ReviewPageContent() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-sm text-gray-500">
+      <div className="flex items-center justify-center p-6 lg:p-8 text-sm text-gray-500">
         Loading review session...
       </div>
     );
@@ -307,7 +307,7 @@ function ReviewPageContent() {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gray-50 px-3 py-6">
+      <div className="p-6 lg:p-8">
         <div className="mx-auto max-w-xl">
           <Card>
             <CardContent className="space-y-4 py-8 text-center">
@@ -328,21 +328,10 @@ function ReviewPageContent() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 px-3 py-6">
+    <div className="p-6 lg:p-8">
       <div className="mx-auto max-w-[1500px] space-y-6">
-        {/* Navigation Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Link href="/training-hub">
-              <Button variant="ghost" size="sm" className="gap-2">
-                <ArrowLeft className="h-4 w-4" />
-                Training Hub
-              </Button>
-            </Link>
-            <span className="text-gray-300">/</span>
-            <span className="text-sm font-medium text-gray-600">Review Session</span>
-          </div>
-          {yoloTrainingJobId && (
+        {yoloTrainingJobId && (
+          <div className="flex justify-end">
             <Link href="/training">
               <Button variant="outline" size="sm" className="gap-2 border-blue-200 text-blue-600 hover:bg-blue-50">
                 <Brain className="h-4 w-4" />
@@ -350,8 +339,8 @@ function ReviewPageContent() {
                 <ExternalLink className="h-3 w-3" />
               </Button>
             </Link>
-          )}
-        </div>
+          </div>
+        )}
 
         <Card>
           <CardContent className="flex flex-col gap-4 py-6 md:flex-row md:items-center md:justify-between">
@@ -567,7 +556,7 @@ function ReviewPageContent() {
 
 export default function ReviewPage() {
   return (
-    <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-500" /></div>}>
+    <Suspense fallback={<div className="flex items-center justify-center p-6 lg:p-8"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-500" /></div>}>
       <ReviewPageContent />
     </Suspense>
   );

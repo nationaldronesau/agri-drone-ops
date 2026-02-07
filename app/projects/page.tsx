@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { ArrowLeft, Plus, FolderOpen, Camera, MapPin, Calendar, Settings } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Plus, FolderOpen, Camera, MapPin, Calendar, Settings } from "lucide-react";
 import Link from "next/link";
 
 interface Project {
@@ -154,125 +155,103 @@ export default function ProjectsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <Link href="/dashboard">
-                <Button variant="ghost" size="sm">
-                  <ArrowLeft className="w-4 h-4 mr-2" />
-                  Back to Dashboard
-                </Button>
-              </Link>
-              <div className="flex items-center space-x-2">
-                <div className="w-8 h-8 bg-gradient-to-r from-green-500 to-blue-500 rounded-lg"></div>
-                <span className="text-xl font-bold bg-gradient-to-r from-green-600 to-blue-600 bg-clip-text text-transparent">
-                  AgriDrone Ops
-                </span>
-              </div>
-            </div>
-            <Dialog open={createDialogOpen} onOpenChange={handleCreateDialogOpenChange}>
-              <DialogTrigger asChild>
-                <Button className="bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600">
-                  <Plus className="w-4 h-4 mr-2" />
-                  New Project
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Create New Project</DialogTitle>
-                  <DialogDescription>
-                    Create a new project to organize your drone imagery and analysis results.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4">
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div>
-                      <Label htmlFor="name">Project Name</Label>
-                      <Input
-                        id="name"
-                        placeholder="e.g., North Field Survey"
-                        value={newProject.name}
-                        onChange={(e) => setNewProject({ ...newProject, name: e.target.value })}
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="location">Farm/Location</Label>
-                      <Input
-                        id="location"
-                        placeholder="e.g., Smiths Farm - North Paddock"
-                        value={newProject.location}
-                        onChange={(e) => setNewProject({ ...newProject, location: e.target.value })}
-                      />
-                    </div>
-                  </div>
-                  
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div>
-                      <Label htmlFor="purpose">Survey Purpose</Label>
-                      <select
-                        id="purpose"
-                        value={newProject.purpose}
-                        onChange={(e) => setNewProject({ ...newProject, purpose: e.target.value })}
-                        className="w-full mt-1 px-3 py-2 border border-gray-300 rounded-md text-sm"
-                      >
-                        <option value="WEED_DETECTION">Weed Detection</option>
-                        <option value="CROP_HEALTH">Crop Health</option>
-                        <option value="SOIL_ANALYSIS">Soil Analysis</option>
-                        <option value="INFRASTRUCTURE">Infrastructure</option>
-                        <option value="LIVESTOCK">Livestock</option>
-                        <option value="ENVIRONMENTAL">Environmental</option>
-                      </select>
-                    </div>
-                    <div>
-                      <Label htmlFor="season">Season/Year</Label>
-                      <Input
-                        id="season"
-                        placeholder="e.g., 2024 Spring, Winter Survey"
-                        value={newProject.season}
-                        onChange={(e) => setNewProject({ ...newProject, season: e.target.value })}
-                      />
-                    </div>
-                  </div>
-                  
+    <div className="p-6 lg:p-8">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 mb-1">Projects</h1>
+            <p className="text-sm text-gray-500">
+              Organize your drone surveys and analysis into projects
+            </p>
+          </div>
+          <Dialog open={createDialogOpen} onOpenChange={handleCreateDialogOpenChange}>
+            <DialogTrigger asChild>
+              <Button className="bg-violet-600 hover:bg-violet-700">
+                <Plus className="w-4 h-4 mr-2" />
+                New Project
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Create New Project</DialogTitle>
+                <DialogDescription>
+                  Create a new project to organize your drone imagery and analysis results.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="grid md:grid-cols-2 gap-4">
                   <div>
-                    <Label htmlFor="description">Description (Optional)</Label>
+                    <Label htmlFor="name">Project Name</Label>
                     <Input
-                      id="description"
-                      placeholder="Brief description of the project..."
-                      value={newProject.description}
-                      onChange={(e) => setNewProject({ ...newProject, description: e.target.value })}
+                      id="name"
+                      placeholder="e.g., North Field Survey"
+                      value={newProject.name}
+                      onChange={(e) => setNewProject({ ...newProject, name: e.target.value })}
                     />
                   </div>
-
-                  {createProjectError && (
-                    <p className="text-sm text-red-600">{createProjectError}</p>
-                  )}
-                  
-                  <div className="flex justify-end space-x-2">
-                    <Button variant="outline" onClick={() => handleCreateDialogOpenChange(false)} disabled={creatingProject}>
-                      Cancel
-                    </Button>
-                    <Button onClick={createProject} disabled={creatingProject || !newProject.name.trim()}>
-                      {creatingProject ? 'Creating...' : 'Create Project'}
-                    </Button>
+                  <div>
+                    <Label htmlFor="location">Farm/Location</Label>
+                    <Input
+                      id="location"
+                      placeholder="e.g., Smiths Farm - North Paddock"
+                      value={newProject.location}
+                      onChange={(e) => setNewProject({ ...newProject, location: e.target.value })}
+                    />
                   </div>
                 </div>
-              </DialogContent>
-            </Dialog>
-          </div>
-        </div>
-      </header>
 
-      {/* Main Content */}
-      <main className="container mx-auto px-4 py-8">
-        <div className="mb-6">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Projects</h1>
-          <p className="text-gray-600">
-            Organize your drone surveys and analysis into projects
-          </p>
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="purpose">Survey Purpose</Label>
+                    <Select value={newProject.purpose} onValueChange={(value) => setNewProject({ ...newProject, purpose: value })}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select purpose" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="WEED_DETECTION">Weed Detection</SelectItem>
+                        <SelectItem value="CROP_HEALTH">Crop Health</SelectItem>
+                        <SelectItem value="SOIL_ANALYSIS">Soil Analysis</SelectItem>
+                        <SelectItem value="INFRASTRUCTURE">Infrastructure</SelectItem>
+                        <SelectItem value="LIVESTOCK">Livestock</SelectItem>
+                        <SelectItem value="ENVIRONMENTAL">Environmental</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label htmlFor="season">Season/Year</Label>
+                    <Input
+                      id="season"
+                      placeholder="e.g., 2024 Spring, Winter Survey"
+                      value={newProject.season}
+                      onChange={(e) => setNewProject({ ...newProject, season: e.target.value })}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="description">Description (Optional)</Label>
+                  <Input
+                    id="description"
+                    placeholder="Brief description of the project..."
+                    value={newProject.description}
+                    onChange={(e) => setNewProject({ ...newProject, description: e.target.value })}
+                  />
+                </div>
+
+                {createProjectError && (
+                  <p className="text-sm text-red-600">{createProjectError}</p>
+                )}
+
+                <div className="flex justify-end space-x-2">
+                  <Button variant="outline" onClick={() => handleCreateDialogOpenChange(false)} disabled={creatingProject}>
+                    Cancel
+                  </Button>
+                  <Button onClick={createProject} disabled={creatingProject || !newProject.name.trim()}>
+                    {creatingProject ? 'Creating...' : 'Create Project'}
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
         </div>
 
         {loading ? (
@@ -327,7 +306,7 @@ export default function ProjectsPage() {
                     
                     <div className="flex items-center justify-between text-sm">
                       <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs">
-                        {project.purpose.replace('_', ' ')}
+                        {project.purpose.replaceAll('_', ' ')}
                       </span>
                       {project.season && (
                         <span className="text-gray-600">{project.season}</span>
@@ -349,60 +328,43 @@ export default function ProjectsPage() {
                       <Label htmlFor={`cameraProfile-${project.id}`} className="text-xs text-gray-500">
                         Default Camera Profile
                       </Label>
-                      <select
-                        id={`cameraProfile-${project.id}`}
+                      <Select
                         value={project.cameraProfileId ?? 'none'}
-                        onChange={(event) =>
-                          updateProjectCameraProfile(
-                            project.id,
-                            event.target.value === 'none' ? null : event.target.value
-                          )
-                        }
+                        onValueChange={(value) => updateProjectCameraProfile(project.id, value === 'none' ? null : value)}
                         disabled={updatingProjectId === project.id}
-                        className="w-full mt-1 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
                       >
-                        <option value="none">No default</option>
-                        {cameraProfiles.map((profile) => (
-                          <option key={profile.id} value={profile.id}>
-                            {profile.name}
-                          </option>
-                        ))}
-                      </select>
+                        <SelectTrigger className="text-sm">
+                          <SelectValue placeholder="No default" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">No default</SelectItem>
+                          {cameraProfiles.map((profile) => (
+                            <SelectItem key={profile.id} value={profile.id}>
+                              {profile.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                       {cameraProfilesError && (
                         <p className="text-xs text-red-600">{cameraProfilesError}</p>
                       )}
                     </div>
                     
-                    <div className="flex space-x-2">
-                      <Link href={`/upload?project=${project.id}`} className="flex-1">
-                        <Button variant="outline" size="sm" className="w-full">
-                          <Camera className="w-4 h-4 mr-1" />
-                          Upload
-                        </Button>
-                      </Link>
+                    <div className="flex items-center gap-2 pt-2 border-t">
                       <Link href={`/images?project=${project.id}`} className="flex-1">
-                        <Button variant="outline" size="sm" className="w-full">
-                          <FolderOpen className="w-4 h-4 mr-1" />
+                        <Button variant="outline" size="sm" className="w-full text-xs">
+                          <FolderOpen className="w-3.5 h-3.5 mr-1" />
                           View
                         </Button>
                       </Link>
-                      <Link href={`/map?project=${project.id}`} className="flex-1">
-                        <Button variant="outline" size="sm" className="w-full">
-                          <MapPin className="w-4 h-4 mr-1" />
-                          Map
+                      <Link href={`/upload?project=${project.id}`}>
+                        <Button variant="outline" size="sm" className="text-xs">
+                          <Camera className="w-3.5 h-3.5" />
                         </Button>
                       </Link>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Link href={`/projects/${project.id}/versions`} className="block">
-                        <Button variant="outline" size="sm" className="w-full">
-                          Versions
-                        </Button>
-                      </Link>
-                      <Link href={`/projects/${project.id}/settings`} className="block">
-                        <Button variant="outline" size="sm" className="w-full">
-                          <Settings className="w-4 h-4 mr-1" />
-                          Settings
+                      <Link href={`/projects/${project.id}/settings`}>
+                        <Button variant="ghost" size="sm" className="text-xs text-gray-400 hover:text-gray-700">
+                          <Settings className="w-3.5 h-3.5" />
                         </Button>
                       </Link>
                     </div>
@@ -412,7 +374,6 @@ export default function ProjectsPage() {
             ))}
           </div>
         )}
-      </main>
     </div>
   );
 }

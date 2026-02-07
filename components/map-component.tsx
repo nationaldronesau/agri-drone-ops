@@ -5,7 +5,7 @@ import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
 import { Button } from "@/components/ui/button";
 import Image from "next/image";
-import { ArrowLeft, Layers, AlertTriangle } from "lucide-react";
+import { Layers, AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import "leaflet/dist/leaflet.css";
@@ -275,23 +275,16 @@ export default function MapComponent() {
   const { center, zoom } = calculateMapBounds();
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <Link href="/dashboard">
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-2" /> Back
-            </Button>
-          </Link>
-          <Button variant={satelliteLayer ? "default" : "outline"} onClick={() => setSatelliteLayer(!satelliteLayer)}>
-            <Layers className="w-4 h-4 mr-2" /> Satellite
-          </Button>
-        </div>
-      </header>
+    <div className="p-4 lg:p-6">
+      {/* Map Controls */}
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-xl font-bold text-gray-900">Interactive Map</h1>
+        <Button variant={satelliteLayer ? "default" : "outline"} size="sm" onClick={() => setSatelliteLayer(!satelliteLayer)}>
+          <Layers className="w-4 h-4 mr-2" /> Satellite
+        </Button>
+      </div>
 
-      {/* Map Section */}
-      <main className="container mx-auto px-4 py-8">
+      <div>
         {orthomosaicError && (
           <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
             {orthomosaicError}
@@ -427,7 +420,7 @@ export default function MapComponent() {
             )}
           </MapContainer>
         )}
-      </main>
+      </div>
     </div>
   );
 }
