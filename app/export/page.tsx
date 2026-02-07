@@ -3,8 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Download, FileText, Map, AlertTriangle, Database } from "lucide-react";
-import Link from "next/link";
+import { Download, FileText, Map, AlertTriangle, Database } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -215,31 +214,7 @@ export default function ExportPage() {
   const sam3Count = filteredDetections.filter(d => d.type === 'sam3').length;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <Link href="/dashboard">
-                <Button variant="ghost" size="sm">
-                  <ArrowLeft className="w-4 h-4 mr-2" />
-                  Back to Dashboard
-                </Button>
-              </Link>
-              <div className="flex items-center space-x-2">
-                <div className="w-8 h-8 bg-gradient-to-r from-green-500 to-blue-500 rounded-lg"></div>
-                <span className="text-xl font-bold bg-gradient-to-r from-green-600 to-blue-600 bg-clip-text text-transparent">
-                  AgriDrone Ops
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <main className="container mx-auto px-4 py-8">
+    <div className="p-6 lg:p-8">
         <div className="max-w-4xl mx-auto space-y-6">
           <WorkflowGuide current="export" />
           <Card>
@@ -468,7 +443,7 @@ export default function ExportPage() {
                 <Button
                   onClick={handleExport}
                   disabled={filteredDetections.length === 0 || loading}
-                  className="bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600"
+                  className="bg-violet-600 hover:bg-violet-700"
                 >
                   {loading ? (
                     <>
@@ -522,7 +497,6 @@ export default function ExportPage() {
             </CardContent>
           </Card>
         </div>
-      </main>
     </div>
   );
 }

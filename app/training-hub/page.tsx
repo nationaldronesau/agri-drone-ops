@@ -11,7 +11,6 @@ import {
   Target,
   Database,
   ArrowRight,
-  Leaf,
   CheckCircle2,
   AlertCircle,
   Wand2,
@@ -211,49 +210,33 @@ export default function TrainingHubPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-blue-50">
-      {/* Header */}
-      <header className="bg-white/80 backdrop-blur-sm border-b sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-gradient-to-r from-green-500 to-blue-500 flex items-center justify-center">
-                <Leaf className="w-6 h-6 text-white" />
-              </div>
-              <div>
-                <h1 className="text-2xl font-bold bg-gradient-to-r from-green-600 to-blue-600 bg-clip-text text-transparent">
-                  Training Hub
-                </h1>
-                <p className="text-sm text-gray-500">Train AI to detect new species</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => fetchProjects(true)}
-                disabled={syncing}
-              >
-                <RefreshCw className={`w-4 h-4 mr-2 ${syncing ? 'animate-spin' : ''}`} />
-                Sync Projects
-              </Button>
-              <Link href="/training">
-                <Button variant="outline" size="sm" className="gap-2">
-                  <Brain className="w-4 h-4" />
-                  YOLO Training
-                </Button>
-              </Link>
-              <Link href="/dashboard">
-                <Button variant="ghost" size="sm">
-                  Back to Dashboard
-                </Button>
-              </Link>
-            </div>
-          </div>
+    <div className="p-6 lg:p-8">
+      {/* Page Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 mb-1">Training Hub</h1>
+          <p className="text-sm text-gray-500">Train AI to detect new species</p>
         </div>
-      </header>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => fetchProjects(true)}
+            disabled={syncing}
+          >
+            <RefreshCw className={`w-4 h-4 mr-2 ${syncing ? 'animate-spin' : ''}`} />
+            Sync Projects
+          </Button>
+          <Link href="/training">
+            <Button variant="outline" size="sm" className="gap-2">
+              <Brain className="w-4 h-4" />
+              YOLO Training
+            </Button>
+          </Link>
+        </div>
+      </div>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div>
         {sam3WarmupMessage && (
           <Card className="border-blue-200 bg-blue-50 mb-6">
             <CardContent className="py-4">
@@ -605,7 +588,7 @@ export default function TrainingHubPage() {
             </div>
           )}
         </div>
-      </main>
+      </div>
 
       {/* Delete Batch Confirmation Dialog */}
       <AlertDialog open={!!batchToDelete} onOpenChange={(open) => !open && setBatchToDelete(null)}>

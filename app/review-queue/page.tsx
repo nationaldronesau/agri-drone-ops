@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { ArrowLeft, ClipboardList, UserPlus, UserMinus } from "lucide-react";
+import { ClipboardList, UserPlus, UserMinus } from "lucide-react";
 
 type QueueFilter = "me" | "unassigned" | "all";
 
@@ -91,29 +91,7 @@ export default function ReviewQueuePage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <Link href="/dashboard">
-                <Button variant="ghost" size="sm">
-                  <ArrowLeft className="w-4 h-4 mr-2" />
-                  Back to Dashboard
-                </Button>
-              </Link>
-              <div className="flex items-center space-x-2">
-                <div className="w-8 h-8 bg-gradient-to-r from-green-500 to-blue-500 rounded-lg" />
-                <span className="text-xl font-bold bg-gradient-to-r from-green-600 to-blue-600 bg-clip-text text-transparent">
-                  AgriDrone Ops
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      <main className="container mx-auto px-4 py-8 space-y-6">
+    <div className="p-6 lg:p-8 space-y-6">
         <div className="flex items-center gap-3">
           <ClipboardList className="w-6 h-6 text-blue-600" />
           <div>
@@ -202,7 +180,6 @@ export default function ReviewQueuePage() {
             ))}
           </div>
         )}
-      </main>
     </div>
   );
 }

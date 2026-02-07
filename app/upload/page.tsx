@@ -21,7 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AlertCircle, ArrowLeft, Brain, Upload, Map, Images, Tags, ArrowRight, CheckCircle2 } from "lucide-react";
+import { AlertCircle, Brain, Upload, Map, Images, Tags, ArrowRight, CheckCircle2 } from "lucide-react";
 import { UppyUploader, type UploadApiResponse } from "@/components/UppyUploader";
 import { ModelSelector, type RoboflowModel } from "@/components/detection/ModelSelector";
 
@@ -159,20 +159,6 @@ function UploadPageContent() {
   const handleProcessingComplete = useCallback((response: UploadApiResponse) => {
     setUploadResponse(response);
     setProcessing(false);
-
-    const successful = response.files.filter((file) => file.success).length;
-    const detections = response.files.reduce(
-      (total, file) => total + (file.detections?.length ?? 0),
-      0,
-    );
-
-    if (detections > 0) {
-      alert(
-        `Success! Uploaded ${successful} files with ${detections} detections.`,
-      );
-    } else {
-      alert(`Success! Uploaded ${successful} files.`);
-    }
   }, []);
 
   const handleProcessingError = useCallback((error: Error) => {
@@ -182,30 +168,8 @@ function UploadPageContent() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <Link href="/dashboard">
-                <Button variant="ghost" size="sm">
-                  <ArrowLeft className="mr-2 h-4 w-4" />
-                  Back to Dashboard
-                </Button>
-              </Link>
-              <div className="flex items-center space-x-2">
-                <div className="h-8 w-8 rounded-lg bg-gradient-to-r from-green-500 to-blue-500" />
-                <span className="bg-gradient-to-r from-green-600 to-blue-600 bg-clip-text text-xl font-bold text-transparent">
-                  AgriDrone Ops
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      <main className="container mx-auto px-4 py-8">
-        <div className="mx-auto max-w-5xl space-y-6">
+    <div className="p-6 lg:p-8">
+      <div className="mx-auto max-w-5xl space-y-6">
           <Card>
             <CardHeader>
               <CardTitle className="text-2xl">Upload Drone Images</CardTitle>
@@ -542,8 +506,7 @@ function UploadPageContent() {
               </section>
             </CardContent>
           </Card>
-        </div>
-      </main>
+      </div>
     </div>
   );
 }

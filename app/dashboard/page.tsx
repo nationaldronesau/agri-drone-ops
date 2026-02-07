@@ -1,303 +1,144 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { SignOutButton } from "@/components/auth/sign-out-button";
-import { Upload, Zap, Map, Plus, Users, Settings, Folder, Download, Mountain, Sparkles, Brain, ClipboardList, Camera } from "lucide-react";
+import { Upload, Map, Download, Sparkles, ArrowRight, Images } from "lucide-react";
 import Link from "next/link";
 
 export default function Dashboard() {
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2">
-              <div className="w-8 h-8 bg-gradient-to-r from-green-500 to-blue-500 rounded-lg"></div>
-              <span className="text-xl font-bold bg-gradient-to-r from-green-600 to-blue-600 bg-clip-text text-transparent">
-                AgriDrone Ops
-              </span>
-            </div>
-            <div className="flex items-center space-x-4">
-              <Button asChild variant="ghost" size="sm">
-                <Link href="/projects">
-                  <Users className="w-4 h-4 mr-2" />
-                  My Team
-                </Link>
-              </Button>
-              <Button asChild variant="ghost" size="sm">
-                <Link href="/projects">
-                  <Settings className="w-4 h-4 mr-2" />
-                  Settings
-                </Link>
-              </Button>
-              <SignOutButton />
-            </div>
-          </div>
-        </div>
-      </header>
+    <div className="p-6 lg:p-8">
+      {/* Welcome Section */}
+      <div className="mb-8">
+        <h1 className="text-2xl font-bold text-gray-900 mb-1">Welcome back</h1>
+        <p className="text-gray-500">Manage your agricultural drone operations and AI-powered weed detection.</p>
+      </div>
 
-      {/* Main Content */}
-      <main className="container mx-auto px-4 py-8">
-        {/* Welcome Section */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Welcome to AgriDrone Ops</h1>
-          <p className="text-gray-600">Manage your agricultural drone operations and AI-powered weed detection.</p>
-        </div>
-
-        {/* Quick Actions */}
-        <div className="grid md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-6 mb-8">
-          <Link href="/review-queue">
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-blue-200">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <ClipboardList className="w-8 h-8 text-blue-600" />
-                  <Plus className="w-5 h-5 text-gray-400" />
-                </div>
-              </CardHeader>
-              <CardContent>
-                <CardTitle className="text-lg mb-2">Review Queue</CardTitle>
-                <CardDescription>See assigned sessions</CardDescription>
+      {/* Quick Actions — compact row */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-8">
+        {[
+          { label: "Upload", href: "/upload", icon: Upload, color: "text-green-600" },
+          { label: "Images", href: "/images", icon: Images, color: "text-blue-600" },
+          { label: "Map", href: "/map", icon: Map, color: "text-blue-600" },
+          { label: "Export", href: "/export", icon: Download, color: "text-orange-600" },
+          { label: "Training Hub", href: "/training-hub", icon: Sparkles, color: "text-violet-600" },
+        ].map((action) => (
+          <Link key={action.href} href={action.href}>
+            <Card className="hover:shadow-md hover:border-violet-200 transition-all cursor-pointer group">
+              <CardContent className="flex items-center gap-3 p-4">
+                <action.icon className={`h-5 w-5 ${action.color}`} />
+                <span className="text-sm font-medium text-gray-700 group-hover:text-gray-900">{action.label}</span>
+                <ArrowRight className="ml-auto h-3.5 w-3.5 text-gray-300 group-hover:text-violet-400 transition-colors" />
               </CardContent>
             </Card>
           </Link>
+        ))}
+      </div>
 
-          <Link href="/camera-profiles">
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-green-200">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <Camera className="w-8 h-8 text-green-600" />
-                  <Plus className="w-5 h-5 text-gray-400" />
-                </div>
-              </CardHeader>
-              <CardContent>
-                <CardTitle className="text-lg mb-2">Camera Profiles</CardTitle>
-                <CardDescription>Manage calibration</CardDescription>
-              </CardContent>
-            </Card>
-          </Link>
-
-          <Link href="/projects">
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-blue-200">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <Folder className="w-8 h-8 text-blue-600" />
-                  <Plus className="w-5 h-5 text-gray-400" />
-                </div>
-              </CardHeader>
-              <CardContent>
-                <CardTitle className="text-lg mb-2">Projects</CardTitle>
-                <CardDescription>Manage your survey projects</CardDescription>
-              </CardContent>
-            </Card>
-          </Link>
-
-          <Link href="/upload">
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-green-200">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <Upload className="w-8 h-8 text-green-600" />
-                  <Plus className="w-5 h-5 text-gray-400" />
-                </div>
-              </CardHeader>
-              <CardContent>
-                <CardTitle className="text-lg mb-2">Upload Images</CardTitle>
-                <CardDescription>Upload drone imagery for processing</CardDescription>
-              </CardContent>
-            </Card>
-          </Link>
-
-          <Link href="/images">
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-green-200">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <Zap className="w-8 h-8 text-green-600" />
-                  <Plus className="w-5 h-5 text-gray-400" />
-                </div>
-              </CardHeader>
-              <CardContent>
-                <CardTitle className="text-lg mb-2">View Images</CardTitle>
-                <CardDescription>See uploaded images with GPS data</CardDescription>
-              </CardContent>
-            </Card>
-          </Link>
-
-          <Link href="/map">
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-blue-200">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <Map className="w-8 h-8 text-blue-600" />
-                  <Plus className="w-5 h-5 text-gray-400" />
-                </div>
-              </CardHeader>
-              <CardContent>
-                <CardTitle className="text-lg mb-2">View Map</CardTitle>
-                <CardDescription>See images & detections on map</CardDescription>
-              </CardContent>
-            </Card>
-          </Link>
-
-          <Link href="/export">
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-orange-200">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <Download className="w-8 h-8 text-orange-600" />
-                  <Plus className="w-5 h-5 text-gray-400" />
-                </div>
-              </CardHeader>
-              <CardContent>
-                <CardTitle className="text-lg mb-2">Export Data</CardTitle>
-                <CardDescription>Export detections for spray drones</CardDescription>
-              </CardContent>
-            </Card>
-          </Link>
-
-          <Link href="/orthomosaics">
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-purple-200">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <Mountain className="w-8 h-8 text-purple-600" />
-                  <Plus className="w-5 h-5 text-gray-400" />
-                </div>
-              </CardHeader>
-              <CardContent>
-                <CardTitle className="text-lg mb-2">Orthomosaics</CardTitle>
-                <CardDescription>View stitched drone imagery</CardDescription>
-              </CardContent>
-            </Card>
-          </Link>
-
-          <Link href="/training-hub">
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-green-200 bg-gradient-to-br from-green-50 to-blue-50">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <Sparkles className="w-8 h-8 text-green-600" />
-                  <Plus className="w-5 h-5 text-gray-400" />
-                </div>
-              </CardHeader>
-              <CardContent>
-                <CardTitle className="text-lg mb-2">Training Hub</CardTitle>
-                <CardDescription>Train AI to detect new species</CardDescription>
-              </CardContent>
-            </Card>
-          </Link>
-
-          <Link href="/training">
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-blue-200 bg-gradient-to-br from-blue-50 to-green-50">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <Brain className="w-8 h-8 text-blue-600" />
-                  <Plus className="w-5 h-5 text-gray-400" />
-                </div>
-              </CardHeader>
-              <CardContent>
-                <CardTitle className="text-lg mb-2">YOLO Training</CardTitle>
-                <CardDescription>Build datasets and train models</CardDescription>
-              </CardContent>
-            </Card>
-          </Link>
-        </div>
-
+      {/* Main Grid */}
+      <div className="grid lg:grid-cols-3 gap-6">
         {/* Recent Projects */}
-        <div className="grid lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>Recent Projects</CardTitle>
+        <div className="lg:col-span-2">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-4">
+              <div>
+                <CardTitle className="text-lg">Recent Projects</CardTitle>
                 <CardDescription>Your latest agricultural drone projects</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+              </div>
+              <Link href="/projects">
+                <Button variant="outline" size="sm">View All</Button>
+              </Link>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between rounded-lg border border-gray-100 bg-gray-50/50 p-4">
                   <div>
-                    <h3 className="font-medium text-gray-900">Farm Block A - Wattle Detection</h3>
-                    <p className="text-sm text-gray-600">1,245 images • 89 detections • 2 days ago</p>
+                    <h3 className="text-sm font-medium text-gray-900">Farm Block A - Wattle Detection</h3>
+                    <p className="text-xs text-gray-500 mt-0.5">1,245 images &middot; 89 detections &middot; 2 days ago</p>
                   </div>
-                    <Button asChild variant="ghost" size="sm">
-                      <Link href="/projects">View</Link>
-                    </Button>
-                  </div>
-                  <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                    <div>
-                      <h3 className="font-medium text-gray-900">Southern Paddock Survey</h3>
-                      <p className="text-sm text-gray-600">856 images • 156 detections • 5 days ago</p>
-                    </div>
-                    <Button asChild variant="ghost" size="sm">
-                      <Link href="/projects">View</Link>
-                    </Button>
-                  </div>
-                  <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                    <div>
-                      <h3 className="font-medium text-gray-900">Lantana Mapping Project</h3>
-                      <p className="text-sm text-gray-600">2,103 images • 234 detections • 1 week ago</p>
-                    </div>
-                    <Button asChild variant="ghost" size="sm">
-                      <Link href="/projects">View</Link>
-                    </Button>
-                  </div>
+                  <Link href="/projects">
+                    <Button variant="ghost" size="sm" className="text-xs">View</Button>
+                  </Link>
                 </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          <div>
-            <Card>
-              <CardHeader>
-                <CardTitle>Processing Stats</CardTitle>
-                <CardDescription>Your account overview</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Images Processed</span>
-                  <span className="font-medium">4,204</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">AI Detections</span>
-                  <span className="font-medium">479</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Manual Annotations</span>
-                  <span className="font-medium">156</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Active Projects</span>
-                  <span className="font-medium">3</span>
-                </div>
-                <div className="pt-4 border-t">
-                  <div className="flex justify-between mb-2">
-                    <span className="text-gray-600">Storage Used</span>
-                    <span className="text-sm">2.4 GB / 10 GB</span>
+                <div className="flex items-center justify-between rounded-lg border border-gray-100 bg-gray-50/50 p-4">
+                  <div>
+                    <h3 className="text-sm font-medium text-gray-900">Southern Paddock Survey</h3>
+                    <p className="text-xs text-gray-500 mt-0.5">856 images &middot; 156 detections &middot; 5 days ago</p>
                   </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div className="bg-gradient-to-r from-green-500 to-blue-500 h-2 rounded-full" style={{width: '24%'}}></div>
-                  </div>
+                  <Link href="/projects">
+                    <Button variant="ghost" size="sm" className="text-xs">View</Button>
+                  </Link>
                 </div>
-              </CardContent>
-            </Card>
-
-            <Card className="mt-6">
-              <CardHeader>
-                <CardTitle>Quick Tips</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3 text-sm">
-                  <div className="flex items-start gap-2">
-                    <div className="w-2 h-2 bg-green-500 rounded-full mt-2"></div>
-                    <p>Upload images with GPS metadata for automatic georeferencing</p>
+                <div className="flex items-center justify-between rounded-lg border border-gray-100 bg-gray-50/50 p-4">
+                  <div>
+                    <h3 className="text-sm font-medium text-gray-900">Lantana Mapping Project</h3>
+                    <p className="text-xs text-gray-500 mt-0.5">2,103 images &middot; 234 detections &middot; 1 week ago</p>
                   </div>
-                  <div className="flex items-start gap-2">
-                    <div className="w-2 h-2 bg-blue-500 rounded-full mt-2"></div>
-                    <p>Use manual annotation to improve AI model accuracy</p>
-                  </div>
-                  <div className="flex items-start gap-2">
-                    <div className="w-2 h-2 bg-green-500 rounded-full mt-2"></div>
-                    <p>Export coordinates as CSV/KML for your spray drones</p>
-                  </div>
+                  <Link href="/projects">
+                    <Button variant="ghost" size="sm" className="text-xs">View</Button>
+                  </Link>
                 </div>
-              </CardContent>
-            </Card>
-          </div>
+              </div>
+            </CardContent>
+          </Card>
         </div>
-      </main>
+
+        {/* Stats sidebar */}
+        <div className="space-y-6">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg">Processing Stats</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Images Processed</span>
+                <span className="font-semibold text-gray-900">4,204</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">AI Detections</span>
+                <span className="font-semibold text-gray-900">479</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Manual Annotations</span>
+                <span className="font-semibold text-gray-900">156</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Active Projects</span>
+                <span className="font-semibold text-gray-900">3</span>
+              </div>
+              <div className="pt-3 border-t">
+                <div className="flex justify-between mb-1.5">
+                  <span className="text-gray-500">Storage Used</span>
+                  <span className="text-xs font-medium">2.4 GB / 10 GB</span>
+                </div>
+                <div className="w-full rounded-full bg-gray-100 h-1.5">
+                  <div className="h-1.5 rounded-full bg-gradient-to-r from-violet-500 to-blue-500" style={{width: '24%'}} />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg">Quick Tips</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2.5 text-sm text-gray-600">
+                <div className="flex items-start gap-2">
+                  <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-green-500 flex-shrink-0" />
+                  <p>Upload images with GPS metadata for automatic georeferencing</p>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-violet-500 flex-shrink-0" />
+                  <p>Use manual annotation to improve AI model accuracy</p>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-blue-500 flex-shrink-0" />
+                  <p>Export coordinates as CSV/KML for your spray drones</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }
