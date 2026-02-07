@@ -10,7 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ArrowLeft, MapPin, Calendar, Eye, Edit3, FolderOpen } from "lucide-react";
+import { MapPin, Calendar, Eye, Edit3, FolderOpen } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
 
@@ -136,40 +136,11 @@ export default function ImagesPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <Link href="/dashboard">
-                <Button variant="ghost" size="sm">
-                  <ArrowLeft className="w-4 h-4 mr-2" />
-                  Back to Dashboard
-                </Button>
-              </Link>
-              <div className="flex items-center space-x-2">
-                <div className="w-8 h-8 bg-gradient-to-r from-green-500 to-blue-500 rounded-lg"></div>
-                <span className="text-xl font-bold bg-gradient-to-r from-green-600 to-blue-600 bg-clip-text text-transparent">
-                  AgriDrone Ops
-                </span>
-              </div>
-            </div>
-            <Link href="/upload">
-              <Button className="bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600">
-                Upload More Images
-              </Button>
-            </Link>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <main className="container mx-auto px-4 py-8">
+    <div className="p-6 lg:p-8">
         <div className="mb-6">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900 mb-2">Uploaded Images</h1>
+              <h1 className="text-2xl font-bold text-gray-900 mb-1">Uploaded Images</h1>
               <p className="text-gray-600">
                 {assets.length} image{assets.length !== 1 ? 's' : ''}{' '}
                 {selectedProjectId !== 'all' ? 'in selected project' : 'across all projects'}
@@ -204,8 +175,16 @@ export default function ImagesPage() {
         )}
 
         {loading ? (
-          <div className="text-center py-12">
-            <p className="text-gray-500">Loading images...</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {[...Array(6)].map((_, i) => (
+              <Card key={i} className="overflow-hidden">
+                <div className="aspect-video bg-gray-200 animate-pulse" />
+                <CardContent className="p-4 space-y-2">
+                  <div className="h-4 bg-gray-200 rounded animate-pulse w-3/4" />
+                  <div className="h-3 bg-gray-200 rounded animate-pulse w-1/2" />
+                </CardContent>
+              </Card>
+            ))}
           </div>
         ) : assetsError ? (
           <Card className="text-center py-12">
@@ -237,7 +216,7 @@ export default function ImagesPage() {
                     className="object-cover"
                     sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
                     onError={(e) => {
-                      e.currentTarget.src = "/placeholder-image.png";
+                      e.currentTarget.style.display = "none";
                     }}
                     unoptimized
                   />
@@ -420,7 +399,6 @@ export default function ImagesPage() {
             </Card>
           </div>
         )}
-      </main>
     </div>
   );
 }
