@@ -70,6 +70,8 @@ export function UppyUploader({
   detectionModels = [],
   dynamicModels = [],
   flightSession,
+  cameraFov,
+  cameraProfileId,
   disabled = false,
   onProcessingStart,
   onProcessingComplete,
