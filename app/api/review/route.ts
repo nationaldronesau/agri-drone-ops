@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { getAuthenticatedUser, checkProjectAccess } from '@/lib/auth/api-auth';
+import { Prisma } from '@prisma/client';
 
 function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -30,6 +31,26 @@ export async function POST(request: NextRequest) {
 
     if (!projectId || typeof projectId !== 'string') {
       return NextResponse.json({ error: 'projectId is required' }, { status: 400 });
+    }
+
+    if (typeof workflowType !== 'string' || !workflowType) {
+      return NextResponse.json({ error: 'workflowType must be a non-empty string' }, { status: 400 });
+    }
+
+    if (typeof targetType !== 'string' || !targetType) {
+      return NextResponse.json({ error: 'targetType must be a non-empty string' }, { status: 400 });
+    }
+
+    if (roboflowProjectId != null && typeof roboflowProjectId !== 'string') {
+      return NextResponse.json({ error: 'roboflowProjectId must be a string' }, { status: 400 });
+    }
+
+    if (yoloModelName != null && typeof yoloModelName !== 'string') {
+      return NextResponse.json({ error: 'yoloModelName must be a string' }, { status: 400 });
+    }
+
+    if (weedTypeFilter != null && typeof weedTypeFilter !== 'string') {
+      return NextResponse.json({ error: 'weedTypeFilter must be a string' }, { status: 400 });
     }
 
     const projectAccess = await checkProjectAccess(projectId);
@@ -180,9 +201,58 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ session });
   } catch (error) {
     console.error('Error creating review session:', error);
-    return NextResponse.json(
-      { error: 'Failed to create review session' },
-      { status: 500 }
-    );
+    const fallbackMessage = 'Failed to create review session';
+
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      // Common production footgun: DB migration not applied.
+      if (error.code === 'P2021') {
+        const table = (error.meta as { table?: string } | undefined)?.table;
+        return NextResponse.json(
+          {
+            error: 'Review sessions are not available. Database schema is out of date.',
+            details: table
+              ? `Missing table: ${table}. Run npx prisma migrate deploy.`
+              : 'Missing table. Run npx prisma migrate deploy.',
+            code: error.code,
+          },
+          { status: 503 }
+        );
+      }
+
+      if (error.code === 'P2022') {
+        const column = (error.meta as { column?: string } | undefined)?.column;
+        return NextResponse.json(
+          {
+            error: fallbackMessage,
+            details: column
+              ? `Database column missing: ${column}. Run npx prisma migrate deploy.`
+              : 'Database column missing. Run npx prisma migrate deploy.',
+            code: error.code,
+          },
+          { status: 500 }
+        );
+      }
+
+      return NextResponse.json(
+        { error: fallbackMessage, details: error.message, code: error.code },
+        { status: 500 }
+      );
+    }
+
+    if (error instanceof Prisma.PrismaClientInitializationError) {
+      return NextResponse.json(
+        { error: fallbackMessage, details: error.message, code: 'PRISMA_INIT' },
+        { status: 503 }
+      );
+    }
+
+    if (error instanceof Error) {
+      return NextResponse.json(
+        { error: fallbackMessage, details: error.message },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ error: fallbackMessage }, { status: 500 });
   }
 }

@@ -2,7 +2,7 @@
 
 import { useEffect, useCallback } from "react";
 
-export type AnnotationMode = "sam3" | "manual" | "box-exemplar";
+export type AnnotationMode = "sam3" | "manual" | "bbox" | "box-exemplar" | "edit";
 
 export interface HotkeyHandlers {
   onNextImage?: () => void;
@@ -13,6 +13,7 @@ export interface HotkeyHandlers {
   onCancel?: () => void;
   onDelete?: () => void;
   onUndo?: () => void;
+  onRedo?: () => void;
   onZoomIn?: () => void;
   onZoomOut?: () => void;
   onResetView?: () => void;
@@ -48,6 +49,7 @@ export function useAnnotationHotkeys({
   onCancel,
   onDelete,
   onUndo,
+  onRedo,
   onZoomIn,
   onZoomOut,
   onResetView,
@@ -104,6 +106,20 @@ export function useAnnotationHotkeys({
             onModeChange?.("box-exemplar");
           }
           break;
+        case "r":
+        case "R":
+          if (!isMod) {
+            e.preventDefault();
+            onModeChange?.("bbox");
+          }
+          break;
+        case "d":
+        case "D":
+          if (!isMod) {
+            e.preventDefault();
+            onModeChange?.("edit");
+          }
+          break;
 
         // Class selection (1-9 for classes, 0 for Unknown)
         case "1":
@@ -140,12 +156,16 @@ export function useAnnotationHotkeys({
           }
           break;
 
-        // Undo (Ctrl+Z or Cmd+Z)
+        // Undo/Redo (Ctrl+Z / Ctrl+Shift+Z)
         case "z":
         case "Z":
           if (isMod) {
             e.preventDefault();
-            onUndo?.();
+            if (e.shiftKey) {
+              onRedo?.();
+            } else {
+              onUndo?.();
+            }
           }
           break;
 
@@ -185,6 +205,7 @@ export function useAnnotationHotkeys({
       onCancel,
       onDelete,
       onUndo,
+      onRedo,
       onZoomIn,
       onZoomOut,
       onResetView,
@@ -209,7 +230,9 @@ export const HOTKEY_DEFINITIONS = [
   { category: "Tools", shortcuts: [
     { key: "S", action: "SAM3 AI Segment mode" },
     { key: "P", action: "Manual polygon mode" },
-    { key: "B", action: "Bounding box mode" },
+    { key: "R", action: "Bounding box mode" },
+    { key: "D", action: "Select/Edit mode" },
+    { key: "B", action: "Few-Shot box mode" },
   ]},
   { category: "Classes", shortcuts: [
     { key: "1-9", action: "Select class by number" },
@@ -220,6 +243,7 @@ export const HOTKEY_DEFINITIONS = [
     { key: "Escape", action: "Cancel current action" },
     { key: "Delete", action: "Delete selected annotation" },
     { key: "Ctrl+Z", action: "Undo last action" },
+    { key: "Ctrl+Shift+Z", action: "Redo" },
   ]},
   { category: "View", shortcuts: [
     { key: "+", action: "Zoom in" },

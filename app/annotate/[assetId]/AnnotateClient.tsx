@@ -14,6 +14,10 @@ import { ClassSelector, DEFAULT_WEED_CLASSES, getClassByHotkey, getClassColor } 
 import { AnnotationList } from "@/components/annotation/AnnotationList";
 import { HotkeyReference } from "@/components/annotation/HotkeyReference";
 import { useAnnotationHotkeys, type AnnotationMode } from "@/lib/hooks/useAnnotationHotkeys";
+import { useUndoRedo } from "@/lib/hooks/useUndoRedo";
+import { useAnnotationEditing } from "@/lib/hooks/useAnnotationEditing";
+import { useLabelAssist } from "@/lib/hooks/useLabelAssist";
+import { LabelAssist } from "@/components/annotation/LabelAssist";
 import { BatchProgress } from "@/components/review/BatchProgress";
 
 // SAM3 types
@@ -330,6 +334,106 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     rejected: number;
   } | null>(null);
 
+  // Undo/Redo stack
+  const {
+    pushAction: pushUndoAction,
+    popUndo,
+    popRedo,
+    clearStacks: clearUndoStacks,
+    canUndo: canUndoAction,
+    canRedo: canRedoAction,
+    isProcessing: isUndoProcessing,
+    setProcessing: setUndoProcessing,
+  } = useUndoRedo();
+
+  // Annotation editing (vertex drag)
+  const {
+    startEdit,
+    clearEdit,
+    findVertexAt,
+    startDrag,
+    updateDrag,
+    endDrag,
+    editingAnnotationId,
+    editedCoordinates,
+    draggingVertexIndex,
+  } = useAnnotationEditing();
+
+  // Label Assist
+  const {
+    isRunning: labelAssistRunning,
+    error: labelAssistError,
+    confidenceThreshold,
+    setConfidenceThreshold,
+    runLabelAssist,
+    bboxToPolygon,
+    mapConfidence,
+  } = useLabelAssist(assetId, session?.asset?.project?.id);
+
+  const handleRunLabelAssist = useCallback(async () => {
+    const newSuggestions = await runLabelAssist();
+    if (newSuggestions.length > 0) {
+      setAiSuggestions(newSuggestions);
+    }
+  }, [runLabelAssist]);
+
+  // Convert a single AI suggestion to a manual annotation
+  const convertSuggestionToAnnotation = useCallback(async (suggestion: AiSuggestion) => {
+    if (!session || !suggestion.boundingBox) return;
+
+    const coordinates = bboxToPolygon(suggestion.boundingBox);
+    const confidenceLevel = mapConfidence(suggestion.confidence);
+
+    try {
+      const response = await fetch('/api/annotations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: session.id,
+          weedType: suggestion.className,
+          confidence: confidenceLevel,
+          coordinates,
+        }),
+      });
+
+      if (response.ok) {
+        const newAnnotation = await response.json();
+        setAnnotations(prev => [...prev, newAnnotation]);
+        pushUndoAction({
+          type: 'CREATE_ANNOTATION',
+          annotationId: newAnnotation.id,
+          annotationData: {
+            sessionId: session.id,
+            weedType: suggestion.className,
+            confidence: confidenceLevel,
+            coordinates,
+          },
+        });
+        // Mark suggestion as verified
+        setAiSuggestions(prev => prev.map(s =>
+          s.id === suggestion.id ? { ...s, verified: true } : s
+        ));
+      }
+    } catch (err) {
+      console.error('Failed to convert suggestion:', err);
+    }
+  }, [session, bboxToPolygon, mapConfidence, pushUndoAction]);
+
+  // Accept all suggestions above threshold
+  const acceptAllSuggestions = useCallback(async () => {
+    const aboveThreshold = aiSuggestions.filter(s =>
+      s.boundingBox &&
+      !s.verified &&
+      !s.rejected &&
+      s.confidence !== null &&
+      s.confidence >= confidenceThreshold
+    );
+
+    for (const suggestion of aboveThreshold) {
+      await convertSuggestionToAnnotation(suggestion);
+    }
+  }, [aiSuggestions, confidenceThreshold, convertSuggestionToAnnotation]);
+
   // Load project assets for filmstrip
   useEffect(() => {
     const loadProjectAssets = async () => {
@@ -537,7 +641,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         const response = await fetch(`/api/detections?assetId=${assetId}&all=true`);
         if (response.ok) {
           const data = await response.json();
-          const mapped: AiSuggestion[] = (data || []).filter((det: { type?: string }) => det.type !== 'YOLO_LOCAL').map((det: {
+          const mapped: AiSuggestion[] = (data || []).map((det: {
             id: string;
             className?: string;
             confidence?: number;
@@ -690,6 +794,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const navigateToAsset = useCallback((index: number) => {
     if (index >= 0 && index < projectAssets.length) {
       const asset = projectAssets[index];
+      clearUndoStacks();
       const params = new URLSearchParams();
       if (reviewSessionId) {
         params.set("reviewSessionId", reviewSessionId);
@@ -700,7 +805,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       const suffix = params.toString() ? `?${params.toString()}` : "";
       router.push(`/annotate/${asset.id}${suffix}`);
     }
-  }, [projectAssets, reviewSessionId, returnTo, router]);
+  }, [projectAssets, reviewSessionId, returnTo, router, clearUndoStacks]);
 
   const goToPreviousImage = useCallback(() => {
     if (currentAssetIndex > 0) navigateToAsset(currentAssetIndex - 1);
@@ -714,9 +819,13 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const handleModeChange = useCallback((mode: AnnotationMode) => {
     setAnnotationMode(mode);
     if (mode !== 'sam3') clearSam3();
-    if (mode !== 'box-exemplar') clearBoxExemplars();
+    if (mode !== 'box-exemplar' && mode !== 'bbox') clearBoxExemplars();
     if (mode !== 'manual') cancelDrawing();
-  }, [clearSam3, clearBoxExemplars, cancelDrawing]);
+    if (mode !== 'edit') {
+      clearEdit();
+      setSelectedAnnotation(null);
+    }
+  }, [clearSam3, clearBoxExemplars, cancelDrawing, clearEdit]);
 
   // Class selection via hotkey
   const handleClassHotkey = useCallback((hotkeyNum: number) => {
@@ -782,6 +891,11 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
             return;
           }
           setAnnotations(prev => [...prev, newAnnotation]);
+          pushUndoAction({
+            type: 'CREATE_ANNOTATION',
+            annotationId: newAnnotation.id,
+            annotationData: { sessionId: session.id, weedType: selectedClass, confidence, coordinates: sam3PreviewPolygon },
+          });
           clearSam3();
         }
       } catch (err) {
@@ -810,6 +924,11 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
             return;
           }
           setAnnotations(prev => [...prev, newAnnotation]);
+          pushUndoAction({
+            type: 'CREATE_ANNOTATION',
+            annotationId: newAnnotation.id,
+            annotationData: { sessionId: session.id, weedType: selectedClass, confidence, coordinates: currentPolygon.points },
+          });
           cancelDrawing();
         }
       } catch (err) {
@@ -824,12 +943,8 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         const newAnnotations = [];
         for (const exemplar of boxExemplars) {
           const { x1, y1, x2, y2 } = exemplar.box;
-          // Convert bounding box to polygon coordinates (4 corners)
           const coordinates: [number, number][] = [
-            [x1, y1], // top-left
-            [x2, y1], // top-right
-            [x2, y2], // bottom-right
-            [x1, y2], // bottom-left
+            [x1, y1], [x2, y1], [x2, y2], [x1, y2],
           ];
 
           const response = await fetch('/api/annotations', {
@@ -849,6 +964,11 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
               return;
             }
             newAnnotations.push(newAnnotation);
+            pushUndoAction({
+              type: 'CREATE_ANNOTATION',
+              annotationId: newAnnotation.id,
+              annotationData: { sessionId: session.id, weedType: exemplar.weedType, confidence, coordinates },
+            });
           }
         }
         if (newAnnotations.length > 0) {
@@ -859,7 +979,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         console.error('Failed to save box exemplar annotations:', err);
       }
     }
-  }, [session, annotationMode, sam3PreviewPolygon, currentPolygon, boxExemplars, selectedClass, confidence, clearSam3, cancelDrawing, clearBoxExemplars, handleEditWriteBack]);
+  }, [session, annotationMode, sam3PreviewPolygon, currentPolygon, boxExemplars, selectedClass, confidence, clearSam3, cancelDrawing, clearBoxExemplars, handleEditWriteBack, pushUndoAction]);
 
   // Cancel current action
   const handleCancel = useCallback(() => {
@@ -870,20 +990,36 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   }, [annotationMode, clearSam3, cancelDrawing, clearBoxExemplars]);
 
   // Delete annotation
-  const deleteAnnotation = useCallback(async (id?: string) => {
+  const deleteAnnotation = useCallback(async (id?: string, skipUndo?: boolean) => {
     const targetId = id || selectedAnnotation;
-    if (!targetId) return;
+    if (!targetId || !session) return;
+
+    // Capture annotation data before deleting (for undo)
+    const deletedAnnotation = annotations.find(a => a.id === targetId);
 
     try {
       const response = await fetch(`/api/annotations/${targetId}`, { method: 'DELETE' });
       if (response.ok || response.status === 404) {
         setAnnotations(prev => prev.filter(a => a.id !== targetId));
         if (selectedAnnotation === targetId) setSelectedAnnotation(null);
+        // Push to undo stack so we can recreate it
+        if (!skipUndo && deletedAnnotation) {
+          pushUndoAction({
+            type: 'DELETE_ANNOTATION',
+            annotationId: targetId,
+            annotationData: {
+              sessionId: session.id,
+              weedType: deletedAnnotation.weedType,
+              confidence: deletedAnnotation.confidence,
+              coordinates: deletedAnnotation.coordinates,
+            },
+          });
+        }
       }
     } catch (err) {
       console.error('Failed to delete annotation:', err);
     }
-  }, [selectedAnnotation]);
+  }, [selectedAnnotation, session, annotations, pushUndoAction]);
 
   // Verify annotation (mark as accepted)
   const verifyAnnotation = useCallback(async (id: string) => {
@@ -982,15 +1118,110 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     }
   }, [session]);
 
-  // Undo last SAM3 point
-  const handleUndo = useCallback(() => {
+  // Undo: first check local drawing state, then fall back to action stack
+  const handleUndo = useCallback(async () => {
+    // Local undo: SAM3 points
     if (annotationMode === 'sam3' && sam3Points.length > 0) {
       const newPoints = sam3Points.slice(0, -1);
       setSam3Points(newPoints);
       if (newPoints.length > 0) runSam3Prediction(newPoints);
       else { setSam3PreviewPolygon(null); setSam3Score(null); }
+      return;
     }
-  }, [annotationMode, sam3Points, runSam3Prediction]);
+    // Local undo: manual polygon points
+    if (annotationMode === 'manual' && currentPolygon.points.length > 0 && !currentPolygon.isComplete) {
+      setCurrentPolygon(prev => ({
+        ...prev,
+        points: prev.points.slice(0, -1),
+      }));
+      return;
+    }
+
+    // Action stack undo
+    if (isUndoProcessing) return;
+    const action = popUndo();
+    if (!action || !session) return;
+
+    setUndoProcessing(true);
+    try {
+      if (action.type === 'CREATE_ANNOTATION') {
+        // Undo create = delete
+        await fetch(`/api/annotations/${action.annotationId}`, { method: 'DELETE' });
+        setAnnotations(prev => prev.filter(a => a.id !== action.annotationId));
+      } else if (action.type === 'DELETE_ANNOTATION' && action.annotationData) {
+        // Undo delete = recreate
+        const response = await fetch('/api/annotations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(action.annotationData),
+        });
+        if (response.ok) {
+          const recreated = await response.json();
+          // Update the action's annotationId in the redo stack to point to the new ID
+          action.annotationId = recreated.id;
+          setAnnotations(prev => [...prev, recreated]);
+        }
+      } else if (action.type === 'MODIFY_ANNOTATION' && action.previousCoordinates) {
+        // Undo modify = restore previous coordinates
+        const response = await fetch(`/api/annotations/${action.annotationId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ coordinates: action.previousCoordinates }),
+        });
+        if (response.ok) {
+          const updated = await response.json();
+          setAnnotations(prev => prev.map(a => a.id === action.annotationId ? { ...a, coordinates: updated.coordinates } : a));
+        }
+      }
+    } catch (err) {
+      console.error('Undo failed:', err);
+    } finally {
+      setUndoProcessing(false);
+    }
+  }, [annotationMode, sam3Points, runSam3Prediction, currentPolygon, isUndoProcessing, popUndo, session, setUndoProcessing]);
+
+  // Redo
+  const handleRedo = useCallback(async () => {
+    if (isUndoProcessing) return;
+    const action = popRedo();
+    if (!action || !session) return;
+
+    setUndoProcessing(true);
+    try {
+      if (action.type === 'CREATE_ANNOTATION' && action.annotationData) {
+        // Redo create = recreate
+        const response = await fetch('/api/annotations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(action.annotationData),
+        });
+        if (response.ok) {
+          const recreated = await response.json();
+          action.annotationId = recreated.id;
+          setAnnotations(prev => [...prev, recreated]);
+        }
+      } else if (action.type === 'DELETE_ANNOTATION') {
+        // Redo delete = delete again
+        await fetch(`/api/annotations/${action.annotationId}`, { method: 'DELETE' });
+        setAnnotations(prev => prev.filter(a => a.id !== action.annotationId));
+      } else if (action.type === 'MODIFY_ANNOTATION' && action.newCoordinates) {
+        // Redo modify = apply new coordinates
+        const response = await fetch(`/api/annotations/${action.annotationId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ coordinates: action.newCoordinates }),
+        });
+        if (response.ok) {
+          const updated = await response.json();
+          setAnnotations(prev => prev.map(a => a.id === action.annotationId ? { ...a, coordinates: updated.coordinates } : a));
+        }
+      }
+    } catch (err) {
+      console.error('Redo failed:', err);
+    } finally {
+      setUndoProcessing(false);
+    }
+  }, [isUndoProcessing, popRedo, session, setUndoProcessing]);
 
   // Apply exemplars to current image using SAM3 (direct, no Redis needed)
   const applyToCurrentImage = useCallback(async () => {
@@ -1227,7 +1458,8 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
 
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(data.error || "Failed to create review session");
+        const message = data?.details ? `${data.error}: ${data.details}` : data?.error;
+        throw new Error(message || "Failed to create review session");
       }
 
       if (data?.session?.id) {
@@ -1255,6 +1487,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     onCancel: handleCancel,
     onDelete: () => deleteAnnotation(),
     onUndo: handleUndo,
+    onRedo: handleRedo,
     onZoomIn: handleZoomIn,
     onZoomOut: handleZoomOut,
     onResetView: handleResetView,
@@ -1403,6 +1636,40 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       }
     });
 
+    // Edit mode: draw vertex handles for the selected annotation
+    if (annotationMode === 'edit' && editingAnnotationId && editedCoordinates) {
+      // Draw the edited polygon with dashed outline
+      ctx.save();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = '#3B82F6';
+      ctx.fillStyle = 'rgba(59, 130, 246, 0.15)';
+      ctx.lineWidth = 2 / zoomLevel;
+
+      if (editedCoordinates.length >= 3) {
+        ctx.beginPath();
+        const [sx, sy] = editedCoordinates[0];
+        ctx.moveTo(sx * scale, sy * scale);
+        editedCoordinates.forEach(([ex, ey]) => ctx.lineTo(ex * scale, ey * scale));
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Draw vertex handles
+      editedCoordinates.forEach(([vx, vy], idx) => {
+        const handleRadius = 5 / zoomLevel;
+        const isActive = draggingVertexIndex === idx;
+        ctx.beginPath();
+        ctx.arc(vx * scale, vy * scale, handleRadius, 0, 2 * Math.PI);
+        ctx.fillStyle = isActive ? '#3B82F6' : '#FFFFFF';
+        ctx.fill();
+        ctx.strokeStyle = '#3B82F6';
+        ctx.lineWidth = 2 / zoomLevel;
+        ctx.stroke();
+      });
+    }
+
     // Current polygon (manual mode)
     if (annotationMode === 'manual' && currentPolygon.points.length > 0) {
       ctx.strokeStyle = '#0080FF';
@@ -1475,15 +1742,16 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       ctx.restore();
     });
 
-    // Current box
-    if (annotationMode === 'box-exemplar' && currentBox) {
+    // Current box (bbox mode = green, box-exemplar mode = purple)
+    if ((annotationMode === 'box-exemplar' || annotationMode === 'bbox') && currentBox) {
       const { startX, startY, endX, endY } = currentBox;
       const x1 = Math.min(startX, endX);
       const y1 = Math.min(startY, endY);
+      const isBboxMode = annotationMode === 'bbox';
       ctx.save();
       ctx.setLineDash([6, 3]);
-      ctx.strokeStyle = '#A855F7';
-      ctx.fillStyle = 'rgba(168, 85, 247, 0.2)';
+      ctx.strokeStyle = isBboxMode ? '#10B981' : '#A855F7';
+      ctx.fillStyle = isBboxMode ? 'rgba(16, 185, 129, 0.2)' : 'rgba(168, 85, 247, 0.2)';
       ctx.lineWidth = 2 / zoomLevel;
       ctx.strokeRect(x1 * scale, y1 * scale, Math.abs(endX - startX) * scale, Math.abs(endY - startY) * scale);
       ctx.fillRect(x1 * scale, y1 * scale, Math.abs(endX - startX) * scale, Math.abs(endY - startY) * scale);
@@ -1491,7 +1759,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     }
 
     ctx.restore();
-  }, [annotations, currentPolygon, selectedAnnotation, hoveredAnnotation, scale, imageLoaded, zoomLevel, panOffset, aiSuggestions, showAiSuggestions, highlightOverlay, annotationMode, sam3Points, sam3PreviewPolygon, boxExemplars, currentBox]);
+  }, [annotations, currentPolygon, selectedAnnotation, hoveredAnnotation, scale, imageLoaded, zoomLevel, panOffset, aiSuggestions, showAiSuggestions, highlightOverlay, annotationMode, sam3Points, sam3PreviewPolygon, boxExemplars, currentBox, editingAnnotationId, editedCoordinates, draggingVertexIndex]);
 
   useEffect(() => { redrawCanvas(); }, [redrawCanvas]);
 
@@ -1526,12 +1794,23 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       return;
     }
 
-    if (annotationMode === 'box-exemplar' && e.button === 0) {
+    if ((annotationMode === 'box-exemplar' || annotationMode === 'bbox') && e.button === 0) {
       const { x, y } = getImageCoords(e);
       setCurrentBox({ startX: x, startY: y, endX: x, endY: y });
       setIsDrawingBox(true);
     }
-  }, [annotationMode, getCanvasCoords, getImageCoords]);
+
+    // Edit mode: check if clicking on a vertex handle
+    if (annotationMode === 'edit' && e.button === 0 && editingAnnotationId && editedCoordinates) {
+      const { x, y } = getImageCoords(e);
+      const hitRadius = 8 / (scale * zoomLevel);
+      const vertexIdx = findVertexAt(x, y, editedCoordinates, hitRadius);
+      if (vertexIdx >= 0) {
+        startDrag(vertexIdx);
+        return;
+      }
+    }
+  }, [annotationMode, getCanvasCoords, getImageCoords, editingAnnotationId, editedCoordinates, findVertexAt, startDrag, scale, zoomLevel]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (isPanning) {
@@ -1544,13 +1823,31 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       return;
     }
 
-    if (isDrawingBox && annotationMode === 'box-exemplar') {
+    if (isDrawingBox && (annotationMode === 'box-exemplar' || annotationMode === 'bbox')) {
       const { x, y } = getImageCoords(e);
       setCurrentBox(prev => prev ? { ...prev, endX: x, endY: y } : null);
     }
 
+    // Edit mode: drag vertex
+    if (annotationMode === 'edit' && draggingVertexIndex !== null) {
+      const { x, y } = getImageCoords(e);
+      updateDrag(x, y);
+      return;
+    }
+
     // Check if hovering over an annotation (for delete on hover)
     const { x, y } = getImageCoords(e);
+
+    // In edit mode, update cursor for vertex proximity
+    if (annotationMode === 'edit' && editingAnnotationId && editedCoordinates) {
+      const hitRadius = 8 / (scale * zoomLevel);
+      const vertexIdx = findVertexAt(x, y, editedCoordinates, hitRadius);
+      const canvas = canvasRef.current;
+      if (canvas) {
+        canvas.style.cursor = vertexIdx >= 0 ? 'grab' : (hoveredAnnotation ? 'pointer' : 'default');
+      }
+    }
+
     let foundHovered: string | null = null;
     // Check in reverse order so topmost annotation is found first
     for (let i = annotations.length - 1; i >= 0; i--) {
@@ -1561,12 +1858,72 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       }
     }
     setHoveredAnnotation(foundHovered);
-  }, [isPanning, lastPanPoint, isDrawingBox, annotationMode, getCanvasCoords, getImageCoords, annotations]);
+  }, [isPanning, lastPanPoint, isDrawingBox, annotationMode, getCanvasCoords, getImageCoords, annotations, draggingVertexIndex, updateDrag, editingAnnotationId, editedCoordinates, findVertexAt, scale, zoomLevel, hoveredAnnotation]);
 
-  const handleMouseUp = useCallback(() => {
+  // Save a bounding box directly as a 4-point polygon annotation
+  const saveBboxAnnotation = useCallback(async (x1: number, y1: number, x2: number, y2: number) => {
+    if (!session) return;
+    const coordinates: [number, number][] = [
+      [x1, y1], [x2, y1], [x2, y2], [x1, y2],
+    ];
+    try {
+      const response = await fetch('/api/annotations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: session.id,
+          weedType: selectedClass,
+          confidence,
+          coordinates,
+        }),
+      });
+      if (response.ok) {
+        const newAnnotation = await response.json();
+        setAnnotations(prev => [...prev, newAnnotation]);
+        pushUndoAction({
+          type: 'CREATE_ANNOTATION',
+          annotationId: newAnnotation.id,
+          annotationData: { sessionId: session.id, weedType: selectedClass, confidence, coordinates },
+        });
+      }
+    } catch (err) {
+      console.error('Failed to save bbox annotation:', err);
+    }
+  }, [session, selectedClass, confidence, pushUndoAction]);
+
+  const handleMouseUp = useCallback(async () => {
     if (isPanning) { setIsPanning(false); return; }
 
-    if (isDrawingBox && annotationMode === 'box-exemplar' && currentBox && session?.asset?.id) {
+    // Edit mode: finish vertex drag
+    if (annotationMode === 'edit' && draggingVertexIndex !== null) {
+      const result = endDrag();
+      if (result) {
+        try {
+          const response = await fetch(`/api/annotations/${result.annotationId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ coordinates: result.newCoordinates }),
+          });
+          if (response.ok) {
+            const updated = await response.json();
+            setAnnotations(prev => prev.map(a =>
+              a.id === result.annotationId ? { ...a, coordinates: updated.coordinates } : a
+            ));
+            pushUndoAction({
+              type: 'MODIFY_ANNOTATION',
+              annotationId: result.annotationId,
+              previousCoordinates: result.previousCoordinates,
+              newCoordinates: result.newCoordinates,
+            });
+          }
+        } catch (err) {
+          console.error('Failed to update annotation:', err);
+        }
+      }
+      return;
+    }
+
+    if (isDrawingBox && currentBox && session?.asset?.id) {
       const { startX, startY, endX, endY } = currentBox;
       const x1 = Math.min(startX, endX);
       const y1 = Math.min(startY, endY);
@@ -1574,25 +1931,46 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       const y2 = Math.max(startY, endY);
 
       if (Math.abs(x2 - x1) >= 10 && Math.abs(y2 - y1) >= 10) {
-        const sourceWidth = session?.asset?.imageWidth || imageRef.current?.naturalWidth;
-        const sourceHeight = session?.asset?.imageHeight || imageRef.current?.naturalHeight;
-        setBoxExemplars(prev => [...prev, {
-          id: `exemplar-${Date.now()}`,
-          weedType: selectedClass,
-          box: { x1, y1, x2, y2 },
-          assetId: session.asset.id,
-          sourceWidth: sourceWidth || undefined,
-          sourceHeight: sourceHeight || undefined,
-        }]);
+        if (annotationMode === 'bbox') {
+          // Save bbox directly as annotation
+          saveBboxAnnotation(x1, y1, x2, y2);
+        } else if (annotationMode === 'box-exemplar') {
+          // Add as exemplar for SAM3 few-shot
+          const sourceWidth = session?.asset?.imageWidth || imageRef.current?.naturalWidth;
+          const sourceHeight = session?.asset?.imageHeight || imageRef.current?.naturalHeight;
+          setBoxExemplars(prev => [...prev, {
+            id: `exemplar-${Date.now()}`,
+            weedType: selectedClass,
+            box: { x1, y1, x2, y2 },
+            assetId: session.asset.id,
+            sourceWidth: sourceWidth || undefined,
+            sourceHeight: sourceHeight || undefined,
+          }]);
+        }
       }
       setCurrentBox(null);
       setIsDrawingBox(false);
     }
-  }, [isPanning, isDrawingBox, annotationMode, currentBox, session?.asset?.id, session?.asset?.imageWidth, session?.asset?.imageHeight, selectedClass]);
+  }, [isPanning, isDrawingBox, annotationMode, currentBox, session?.asset?.id, session?.asset?.imageWidth, session?.asset?.imageHeight, selectedClass, saveBboxAnnotation, draggingVertexIndex, endDrag, pushUndoAction]);
 
   const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (isPanning || e.shiftKey) return;
     const { x, y } = getImageCoords(e);
+
+    // Edit mode: select annotation for editing or deselect
+    if (annotationMode === 'edit') {
+      if (hoveredAnnotation) {
+        const annotation = annotations.find(a => a.id === hoveredAnnotation);
+        if (annotation) {
+          startEdit(hoveredAnnotation, annotation.coordinates);
+          setSelectedAnnotation(hoveredAnnotation);
+        }
+      } else {
+        clearEdit();
+        setSelectedAnnotation(null);
+      }
+      return;
+    }
 
     // In SAM3 or manual mode, prioritize placing points over selecting annotations
     // Only handle delete icon clicks, not general annotation selection
@@ -1638,7 +2016,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       setCurrentPolygon(prev => ({ ...prev, points: [...prev.points, [x, y]] }));
       if (!isDrawing) setIsDrawing(true);
     }
-  }, [isPanning, getImageCoords, annotationMode, sam3Points, runSam3Prediction, currentPolygon, scale, zoomLevel, isDrawing, hoveredAnnotation, deleteAnnotation, deleteIconPosition]);
+  }, [isPanning, getImageCoords, annotationMode, sam3Points, runSam3Prediction, currentPolygon, scale, zoomLevel, isDrawing, hoveredAnnotation, deleteAnnotation, deleteIconPosition, annotations, startEdit, clearEdit]);
 
   const handleCanvasContextMenu = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     e.preventDefault();
@@ -1669,7 +2047,10 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const canAccept = (annotationMode === 'sam3' && sam3PreviewPolygon && sam3PreviewPolygon.length >= 3) ||
     (annotationMode === 'manual' && currentPolygon.isComplete && currentPolygon.points.length >= 3) ||
     (annotationMode === 'box-exemplar' && boxExemplars.length > 0);
-  const canUndo = annotationMode === 'sam3' && sam3Points.length > 0;
+  const canUndo = (annotationMode === 'sam3' && sam3Points.length > 0) ||
+    (annotationMode === 'manual' && currentPolygon.points.length > 0 && !currentPolygon.isComplete) ||
+    canUndoAction;
+  const canRedo = canRedoAction;
   const canDelete = !!selectedAnnotation;
   const batchInProgress =
     batchJobStatus &&
@@ -1804,7 +2185,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
               onMouseLeave={handleMouseUp}
-              className={`max-w-full max-h-full ${isPanning ? 'cursor-grabbing' : hoveredAnnotation ? 'cursor-pointer' : 'cursor-crosshair'}`}
+              className={`max-w-full max-h-full ${isPanning ? 'cursor-grabbing' : annotationMode === 'edit' ? (hoveredAnnotation ? 'cursor-pointer' : 'cursor-default') : hoveredAnnotation ? 'cursor-pointer' : 'cursor-crosshair'}`}
               style={{ display: imageLoaded ? 'block' : 'none' }}
             />
             {!imageLoaded && (
@@ -1877,16 +2258,37 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
             sam3Available={sam3Health?.available}
             sam3Loading={sam3Loading}
             onUndo={handleUndo}
+            onRedo={handleRedo}
             onDelete={() => deleteAnnotation()}
             onAccept={acceptAnnotation}
             onShowHelp={() => setShowHotkeyHelp(true)}
             canUndo={canUndo}
+            canRedo={canRedo}
             canDelete={canDelete}
             canAccept={canAccept}
           />
 
+          {/* Label Assist */}
+          <LabelAssist
+            onRun={handleRunLabelAssist}
+            onAcceptAll={acceptAllSuggestions}
+            isRunning={labelAssistRunning}
+            error={labelAssistError}
+            confidenceThreshold={confidenceThreshold}
+            onThresholdChange={setConfidenceThreshold}
+            suggestionsAboveThreshold={
+              aiSuggestions.filter(s =>
+                s.boundingBox && !s.verified && !s.rejected &&
+                s.confidence !== null && s.confidence >= confidenceThreshold
+              ).length
+            }
+            hasActiveModel={true}
+            className="mt-3"
+          />
+
           {/* Class Selector */}
           <ClassSelector
+            projectId={session.asset.project?.id}
             selectedClass={selectedClass}
             onClassSelect={setSelectedClass}
             className="mt-3"

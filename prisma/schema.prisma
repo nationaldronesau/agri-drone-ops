@@ -123,12 +123,29 @@ model Project {
   trainingDatasets  TrainingDataset[]
   reviewSessions    ReviewSession[]
   yoloInferenceJobs YOLOInferenceJob[]
+  annotationClasses AnnotationClass[]
 
   @@index([teamId])
   @@index([location])
   @@index([purpose, season])
   @@index([activeModelId])
   @@index([cameraProfileId])
+}
+
+model AnnotationClass {
+  id        String  @id @default(cuid())
+  projectId String
+  name      String
+  color     String  @default("#9ca3af")
+  sortOrder Int     @default(0)
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, name])
+  @@index([projectId])
 }
 
 enum ProjectPurpose {
