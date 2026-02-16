@@ -386,7 +386,15 @@ export function UppyUploader({
     uppyRef.current = uppy;
 
     return () => {
-      uppy.close();
+      const cleanupTarget = uppyRef.current ?? uppy;
+      const destroy = (cleanupTarget as unknown as { destroy?: () => void }).destroy;
+      const close = (cleanupTarget as unknown as { close?: () => void }).close;
+
+      if (typeof destroy === "function") {
+        destroy.call(cleanupTarget);
+      } else if (typeof close === "function") {
+        close.call(cleanupTarget);
+      }
       uppyRef.current = null;
     };
   }, []);

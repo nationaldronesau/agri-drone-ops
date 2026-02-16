@@ -1,6 +1,6 @@
 "use client";
 
-import { Wand2, Pencil, Square, Undo2, Trash2, Check, HelpCircle } from "lucide-react";
+import { Wand2, Pencil, Square, Undo2, Redo2, Trash2, Check, HelpCircle, RectangleHorizontal, MousePointer2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { AnnotationMode } from "@/lib/hooks/useAnnotationHotkeys";
@@ -95,10 +95,12 @@ interface ToolbarProps {
   sam3Available?: boolean;
   sam3Loading?: boolean;
   onUndo?: () => void;
+  onRedo?: () => void;
   onDelete?: () => void;
   onAccept?: () => void;
   onShowHelp?: () => void;
   canUndo?: boolean;
+  canRedo?: boolean;
   canDelete?: boolean;
   canAccept?: boolean;
   className?: string;
@@ -110,10 +112,12 @@ export function Toolbar({
   sam3Available = true,
   sam3Loading = false,
   onUndo,
+  onRedo,
   onDelete,
   onAccept,
   onShowHelp,
   canUndo = false,
+  canRedo = false,
   canDelete = false,
   canAccept = false,
   className,
@@ -137,6 +141,20 @@ export function Toolbar({
           hotkey="P"
           active={mode === "manual"}
           onClick={() => onModeChange("manual")}
+        />
+        <ToolButton
+          icon={RectangleHorizontal}
+          label="Bbox"
+          hotkey="R"
+          active={mode === "bbox"}
+          onClick={() => onModeChange("bbox")}
+        />
+        <ToolButton
+          icon={MousePointer2}
+          label="Select/Edit"
+          hotkey="D"
+          active={mode === "edit"}
+          onClick={() => onModeChange("edit")}
         />
         <ToolButton
           icon={Square}
@@ -165,6 +183,13 @@ export function Toolbar({
           hotkey="Ctrl+Z"
           disabled={!canUndo}
           onClick={() => onUndo?.()}
+        />
+        <ActionButton
+          icon={Redo2}
+          label="Redo"
+          hotkey="Ctrl+Shift+Z"
+          disabled={!canRedo}
+          onClick={() => onRedo?.()}
         />
         <ActionButton
           icon={Trash2}

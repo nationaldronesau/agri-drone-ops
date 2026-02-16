@@ -19,6 +19,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Crosshair,
+  Route,
 } from "lucide-react";
 
 interface NavItem {
@@ -37,6 +38,7 @@ const navItems: NavItem[] = [
   { label: "Training Hub", href: "/training-hub", icon: Sparkles, section: "ai" },
   { label: "YOLO Training", href: "/training", icon: Brain, section: "ai" },
   { label: "Review Queue", href: "/review-queue", icon: ClipboardList, section: "review" },
+  { label: "Mission Planner", href: "/mission-planner", icon: Route, section: "export" },
   { label: "Export", href: "/export", icon: Download, section: "export" },
   { label: "Orthomosaics", href: "/orthomosaics", icon: Mountain, section: "data" },
   { label: "Camera Profiles", href: "/camera-profiles", icon: Camera, section: "settings" },

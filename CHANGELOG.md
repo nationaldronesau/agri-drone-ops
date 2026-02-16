@@ -5,6 +5,36 @@ All notable changes to the AgriDrone Ops platform are documented here.
 ## [Unreleased]
 
 ### Added
+- **Compliance-Aware Mission Planning** - Boundary-constrained zone generation for safer spray operations
+  - New compliance data model: `ComplianceLayer` with project/team ownership and geometry storage
+  - Supports layer types for `ALLOWED_AREA`, `EXCLUSION_AREA`, and reference boundaries
+  - New compliance APIs:
+    - `GET/POST /api/compliance-layers`
+    - `GET/PATCH/DELETE /api/compliance-layers/[id]`
+  - Mission planner now imports compliance boundaries from:
+    - GeoJSON (`.geojson`/`.json`)
+    - KML (`.kml`)
+    - Zipped Shapefile (`.zip`)
+  - Planning engine applies compliance logic before mission splitting:
+    - Clips zones to allowed areas
+    - Applies exclusion buffers in meters
+    - Splits partially intersecting zones and drops fully excluded zones
+  - Compliance report included in plan summary + mission pack manifest
+  - Map preview overlays active compliance layers with mission zones/routes
+
+- **Auto-Spray Mission Planner** - Converts detections/annotations into executable spray sorties
+  - New mission planning data models: `SprayPlan`, `SprayMission`, `SprayZone`
+  - Clusters detections by species into geospatial treatment zones with polygon geometry
+  - Computes zone area, recommended dose, and chemical liters per zone
+  - Splits zones into battery/tank-aware missions with route and duration estimates
+  - New APIs:
+    - `POST /api/spray-plans` (queue generation)
+    - `GET /api/spray-plans` (list plans)
+    - `GET /api/spray-plans/[id]` (plan detail)
+    - `GET /api/spray-plans/[id]/export` (mission pack ZIP: CSV + KML + manifest)
+  - New UI page: `/mission-planner` with plan controls, status polling, map preview, and export
+  - Navigation links added in sidebar + dashboard quick actions
+
 - **Shapefile Export** - ESRI-compatible shapefile generation for DJI Terra and GIS software
   - Generates `.shp`, `.dbf`, `.prj` files in a ZIP archive
   - WGS84 projection (EPSG:4326) for universal compatibility
