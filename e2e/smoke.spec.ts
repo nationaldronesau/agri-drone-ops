@@ -1,47 +1,63 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from "@playwright/test";
+import { setupMockApi } from "./helpers/mock-api";
 
-/**
- * Smoke tests - Basic functionality verification
- *
- * These tests verify that core pages load and basic navigation works.
- * They should be fast and run on every commit.
- */
+test.describe("Smoke Coverage", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupMockApi(page);
+  });
 
-test.describe('Smoke Tests', () => {
-  test('landing page loads', async ({ page }) => {
-    await page.goto('/');
+  test("landing and auth pages render", async ({ page }) => {
+    await page.goto("/");
     await expect(page).toHaveTitle(/AgriDrone/i);
+    await expect(page.getByRole("link", { name: "Get Started" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Start Free Trial" })).toBeVisible();
+
+    await page.goto("/auth/signin");
+    await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+    await expect(page.getByLabel("Email")).toBeVisible();
+    await expect(page.getByLabel("Password")).toBeVisible();
+
+    await page.goto("/auth/signup");
+    await expect(page.getByRole("heading", { name: "Create an account" })).toBeVisible();
+    await expect(page.getByLabel("Name")).toBeVisible();
+    await expect(page.getByLabel("Confirm Password")).toBeVisible();
   });
 
-  test('dashboard loads', async ({ page }) => {
-    await page.goto('/test-dashboard');
-    await expect(page.locator('text=Dashboard')).toBeVisible();
+  test("main application routes render", async ({ page }) => {
+    const routes: Array<{ path: string; expectedText: string }> = [
+      { path: "/dashboard", expectedText: "Welcome back" },
+      { path: "/projects", expectedText: "Projects" },
+      { path: "/upload", expectedText: "Upload Drone Images" },
+      { path: "/images", expectedText: "Uploaded Images" },
+      { path: "/map", expectedText: "Interactive Map" },
+      { path: "/training-hub", expectedText: "Training Hub" },
+      { path: "/training", expectedText: "YOLO Training Dashboard" },
+      { path: "/review-queue", expectedText: "Review Queue" },
+      { path: "/mission-planner", expectedText: "Mission Planner" },
+      { path: "/export", expectedText: "Export Detection Data" },
+      { path: "/orthomosaics", expectedText: "Orthomosaics" },
+      { path: "/camera-profiles", expectedText: "Camera Profiles" },
+    ];
+
+    for (const route of routes) {
+      await page.goto(route.path, { waitUntil: "domcontentloaded" });
+      await expect(page.getByText(route.expectedText).first()).toBeVisible();
+    }
   });
 
-  test('export page loads', async ({ page }) => {
-    await page.goto('/export');
-    await expect(page.locator('text=Export Detection Data')).toBeVisible();
+  test("training workflow setup routes render", async ({ page }) => {
+    await page.goto("/training-hub/new-species");
+    await expect(page.getByRole("heading", { name: "Label New Species" })).toBeVisible();
+    await expect(page.getByText("Step 1: Select source and target")).toBeVisible();
+
+    await page.goto("/training-hub/improve");
+    await expect(page.getByRole("heading", { name: "Improve Existing Model" })).toBeVisible();
+    await expect(page.getByText("Step 1: Select project and model")).toBeVisible();
   });
 
-  test('upload page loads', async ({ page }) => {
-    await page.goto('/upload');
-    await expect(page.locator('text=Upload')).toBeVisible();
-  });
-
-  test('map page loads', async ({ page }) => {
-    await page.goto('/map');
-    // Map page should have some map-related content
-    await expect(page.locator('text=Map')).toBeVisible();
-  });
-
-  test('navigation from dashboard to export', async ({ page }) => {
-    await page.goto('/test-dashboard');
-
-    // Find and click export link
-    await page.click('a[href="/export"]');
-
-    // Should be on export page
-    await expect(page).toHaveURL(/\/export/);
-    await expect(page.locator('text=Export Detection Data')).toBeVisible();
+  test("review page handles missing session id", async ({ page }) => {
+    await page.goto("/review");
+    await expect(page.getByText("Missing sessionId in URL")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Back to Training Hub" })).toBeVisible();
   });
 });

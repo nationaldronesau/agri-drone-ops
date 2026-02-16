@@ -23,6 +23,8 @@ model User {
   createdReviewSessions  ReviewSession[]    @relation("ReviewSessionCreator")
   assignedReviewSessions ReviewSession[]    @relation("ReviewSessionAssignee")
   yoloInferenceJobs      YOLOInferenceJob[]
+  sprayPlans             SprayPlan[]
+  complianceLayers       ComplianceLayer[]
 }
 
 model Account {
@@ -67,6 +69,8 @@ model Team {
   trainedModels     TrainedModel[]
   reviewSessions    ReviewSession[]
   yoloInferenceJobs YOLOInferenceJob[]
+  sprayPlans        SprayPlan[]
+  complianceLayers  ComplianceLayer[]
 }
 
 model TeamMember {
@@ -124,6 +128,8 @@ model Project {
   reviewSessions    ReviewSession[]
   yoloInferenceJobs YOLOInferenceJob[]
   annotationClasses AnnotationClass[]
+  sprayPlans        SprayPlan[]
+  complianceLayers  ComplianceLayer[]
 
   @@index([teamId])
   @@index([location])
@@ -654,6 +660,161 @@ model YOLOInferenceJob {
   @@index([projectId])
   @@index([reviewSessionId])
   @@index([status])
+}
+
+// ============================================
+// Spray Mission Planning Models
+// ============================================
+
+model SprayPlan {
+  id String @id @default(cuid())
+
+  // Ownership
+  teamId      String
+  team        Team    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  projectId   String
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdById String
+  createdBy   User    @relation(fields: [createdById], references: [id])
+
+  // Status + config
+  name         String
+  status       SprayPlanStatus @default(QUEUED)
+  progress     Int             @default(0)
+  errorMessage String?
+  config       Json?
+  summary      Json?
+
+  // Timing
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  missions SprayMission[]
+  zones    SprayZone[]
+
+  @@index([teamId])
+  @@index([projectId])
+  @@index([createdById])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model SprayMission {
+  id String @id @default(cuid())
+
+  sprayPlanId String
+  sprayPlan   SprayPlan @relation(fields: [sprayPlanId], references: [id], onDelete: Cascade)
+
+  sequence Int
+  name     String
+  status   String @default("ready")
+
+  // Mission aggregates
+  zoneCount             Int   @default(0)
+  totalAreaHa           Float @default(0)
+  chemicalLiters        Float @default(0)
+  estimatedDistanceM    Float @default(0)
+  estimatedDurationMin  Float @default(0)
+  routeGeoJson          Json?
+  metadata              Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  zones SprayZone[]
+
+  @@index([sprayPlanId])
+  @@index([sequence])
+}
+
+model SprayZone {
+  id String @id @default(cuid())
+
+  sprayPlanId String
+  sprayPlan   SprayPlan @relation(fields: [sprayPlanId], references: [id], onDelete: Cascade)
+
+  missionId String?
+  mission   SprayMission? @relation(fields: [missionId], references: [id], onDelete: SetNull)
+
+  species           String
+  detectionCount    Int    @default(0)
+  averageConfidence Float?
+  priorityScore     Float?
+
+  centroidLat Float
+  centroidLon Float
+  polygon     Json
+  areaHa      Float @default(0)
+
+  recommendedDosePerHa Float?
+  recommendedLiters    Float?
+  recommendationSource String?
+  metadata             Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sprayPlanId])
+  @@index([missionId])
+  @@index([species])
+  @@index([priorityScore])
+}
+
+enum SprayPlanStatus {
+  QUEUED
+  PROCESSING
+  READY
+  FAILED
+  CANCELLED
+}
+
+// ============================================
+// Compliance Layer Models
+// ============================================
+
+model ComplianceLayer {
+  id String @id @default(cuid())
+
+  // Ownership
+  teamId      String
+  team        Team    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  projectId   String
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdById String
+  createdBy   User    @relation(fields: [createdById], references: [id])
+
+  // Layer definition
+  name               String
+  layerType          ComplianceLayerType
+  sourceFormat       ComplianceSourceFormat @default(GEOJSON)
+  geometry           Json // GeoJSON Polygon or MultiPolygon
+  bufferMeters       Float                @default(0)
+  isActive           Boolean              @default(true)
+  metadata           Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([teamId])
+  @@index([projectId])
+  @@index([createdById])
+  @@index([layerType, isActive])
+  @@index([createdAt])
+}
+
+enum ComplianceLayerType {
+  ALLOWED_AREA
+  EXCLUSION_AREA
+  REFERENCE
+}
+
+enum ComplianceSourceFormat {
+  GEOJSON
+  KML
+  SHAPEFILE
+  MANUAL
 }
 
 // ============================================
