@@ -46,12 +46,15 @@ interface RoboflowProject {
   }>;
 }
 
+type WorkflowTarget = 'roboflow' | 'yolo' | 'both';
+
 export default function NewSpeciesWorkflowPage() {
   const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+  const [targetType, setTargetType] = useState<WorkflowTarget>('both');
   const [selectedRoboflowProjectId, setSelectedRoboflowProjectId] = useState<string>('');
   const [selectedRoboflowProject, setSelectedRoboflowProject] = useState<RoboflowProject | null>(
     null
@@ -105,22 +108,37 @@ export default function NewSpeciesWorkflowPage() {
     setSelectedRoboflowProject(project);
   };
 
-  const canProceed = selectedProjectId && selectedRoboflowProjectId && projectImages > 0;
+  const requiresRoboflowProject = targetType === 'roboflow' || targetType === 'both';
+  const canProceed =
+    selectedProjectId &&
+    projectImages > 0 &&
+    (!requiresRoboflowProject || Boolean(selectedRoboflowProjectId));
 
   const handleStartLabeling = async () => {
     if (!selectedProjectId) return;
     setStarting(true);
     setStartError(null);
     try {
+      const payload: {
+        projectId: string;
+        workflowType: string;
+        targetType: WorkflowTarget;
+        roboflowProjectId?: string;
+      } = {
+        projectId: selectedProjectId,
+        workflowType: 'new_species',
+        targetType,
+      };
+
+      if (requiresRoboflowProject) {
+        payload.roboflowProjectId =
+          selectedRoboflowProject?.project?.roboflowId || selectedRoboflowProjectId;
+      }
+
       const response = await fetch('/api/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectId: selectedProjectId,
-          workflowType: 'new_species',
-          targetType: 'roboflow',
-          roboflowProjectId: selectedRoboflowProject?.project?.roboflowId || selectedRoboflowProjectId,
-        }),
+        body: JSON.stringify(payload),
       });
 
       const data = await response.json().catch(() => ({}));
@@ -281,24 +299,43 @@ export default function NewSpeciesWorkflowPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Sparkles className="w-5 h-5" />
-                Target Training Project
+                Target Training Destination
               </CardTitle>
               <CardDescription>
-                Select or create a training project where your annotations will be uploaded. This
-                project will be used to train the detection model.
+                Choose where this review workflow should feed: Roboflow, EC2 YOLO, or both.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label>Training Project</Label>
-                <RoboflowProjectSelector
-                  value={selectedRoboflowProjectId}
-                  onChange={handleRoboflowProjectChange}
-                  showCreateButton={true}
-                />
+                <Label>Target</Label>
+                <Select value={targetType} onValueChange={(value) => setTargetType(value as WorkflowTarget)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="both">YOLO + Roboflow</SelectItem>
+                    <SelectItem value="yolo">YOLO (EC2) only</SelectItem>
+                    <SelectItem value="roboflow">Roboflow only</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
-              {selectedRoboflowProject && (
+              {requiresRoboflowProject ? (
+                <div className="space-y-2">
+                  <Label>Roboflow Training Project</Label>
+                  <RoboflowProjectSelector
+                    value={selectedRoboflowProjectId}
+                    onChange={handleRoboflowProjectChange}
+                    showCreateButton={true}
+                  />
+                </div>
+              ) : (
+                <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                  This session will target your EC2 YOLO workflow only. You can train from the reviewed dataset in the training dashboard.
+                </div>
+              )}
+
+              {requiresRoboflowProject && selectedRoboflowProject && (
                 <div className="p-4 rounded-lg bg-green-50 border border-green-200">
                   <div className="flex items-start justify-between">
                     <div>
@@ -371,8 +408,11 @@ export default function NewSpeciesWorkflowPage() {
           )}
 
           {!canProceed && selectedProjectId && projectImages === 0 && (
+            <p className="text-center text-sm text-amber-600">Please upload images to the selected project before continuing.</p>
+          )}
+          {!canProceed && selectedProjectId && projectImages > 0 && requiresRoboflowProject && !selectedRoboflowProjectId && (
             <p className="text-center text-sm text-amber-600">
-              Please upload images to the selected project before continuing.
+              Select a Roboflow project or switch the target to YOLO-only.
             </p>
           )}
         </div>

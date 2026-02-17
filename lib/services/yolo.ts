@@ -82,8 +82,9 @@ export interface DetectionResponse {
 
 export interface ModelInfo {
   name: string;
-  versions: string[];
-  latest_version: string;
+  versions?: string[];
+  latest_version?: string;
+  latest?: string;
   latest_mAP50?: number;
 }
 
@@ -363,7 +364,7 @@ export class YOLOService {
     const yoloPayload = { ...basePayload, model_id: model, model };
     const legacyPayload = { ...basePayload, model };
 
-    const endpoints = this.detectEndpoint
+    const endpoints: Array<'/api/v1/yolo/detect' | '/api/v1/detect'> = this.detectEndpoint
       ? [this.detectEndpoint]
       : ['/api/v1/yolo/detect', '/api/v1/detect'];
 
@@ -434,59 +435,109 @@ export class YOLOService {
     return this.request<ModelListResponse>('/api/v1/models');
   }
 
-  async listCachedModels(): Promise<{ models: string[] }> {
+  async listCachedModels(): Promise<{ models?: string[]; cached_models?: string[] }> {
     return this.request('/api/v1/models/cached');
   }
 
+  private getModelAliases(model: ModelInfo): string[] {
+    const aliases = new Set<string>();
+    const name = typeof model.name === 'string' ? model.name.trim() : '';
+    if (!name) return [];
+
+    aliases.add(name);
+
+    const versions = Array.isArray(model.versions) ? model.versions : [];
+    const latestVersion = model.latest_version ?? model.latest;
+    const allVersions = latestVersion ? [...versions, latestVersion] : versions;
+
+    for (const rawVersion of allVersions) {
+      if (typeof rawVersion !== 'string') continue;
+      const version = rawVersion.trim();
+      if (!version) continue;
+
+      aliases.add(`${name}-${version}`);
+
+      if (version.startsWith('v')) {
+        aliases.add(`${name}-${version}`);
+      } else {
+        aliases.add(`${name}-v${version}`);
+      }
+    }
+
+    return Array.from(aliases);
+  }
+
   async activateModel(modelName: string): Promise<{ success: boolean; message: string }> {
+    const normalizedModelName = modelName.trim();
+    let loadEndpointError: Error | null = null;
+
     // Prefer the SAM3 YOLO load endpoint when available.
     try {
       const response = await this.request<{ status?: string; model_id?: string }>(
         '/api/v1/yolo/load',
         {
           method: 'POST',
-          body: JSON.stringify({ model_id: modelName, model: modelName }),
+          body: JSON.stringify({ model_id: normalizedModelName, model: normalizedModelName }),
         },
         60000
       );
       if (response?.status === 'loaded') {
-        return { success: true, message: `Model ${modelName} loaded on YOLO service` };
+        return { success: true, message: `Model ${normalizedModelName} loaded on YOLO service` };
       }
     } catch (error) {
+      if (error instanceof Error) {
+        loadEndpointError = error;
+      }
       if (
         error instanceof YOLOServiceError &&
-        (error.statusCode === 404 || error.statusCode === 405)
+        (error.statusCode === 401 || error.statusCode === 403)
       ) {
-        // fall through to legacy model discovery
-      } else {
+        // Auth/authz failures should surface immediately.
         throw error;
       }
+      // Any other load-endpoint error should fall through to discovery checks.
     }
 
     // Legacy path: models are loaded on-demand; check cached/available lists.
     try {
       const cached = await this.listCachedModels();
-      const cachedModels = cached.cached_models || cached.models || [];
-      if (cachedModels.includes(modelName)) {
-        return { success: true, message: `Model ${modelName} is already cached and ready` };
+      const cachedModels = [
+        ...(Array.isArray(cached.cached_models) ? cached.cached_models : []),
+        ...(Array.isArray(cached.models) ? cached.models : []),
+      ];
+      if (cachedModels.includes(normalizedModelName)) {
+        return { success: true, message: `Model ${normalizedModelName} is already cached and ready` };
       }
 
       // Check if model exists in available models
       const available = await this.listModels();
-      const modelExists = available.models?.some(
-        (m) => m.name === modelName || `${m.name}-${m.latest}` === modelName
+      const modelExists = available.models?.some((model) =>
+        this.getModelAliases(model).includes(normalizedModelName)
       );
 
       if (modelExists) {
-        return { success: true, message: `Model ${modelName} is available and will load on first use` };
+        return {
+          success: true,
+          message: `Model ${normalizedModelName} is available and will load on first use`,
+        };
       }
 
-      throw new Error(`Model ${modelName} not found on YOLO service`);
+      if (loadEndpointError) {
+        throw new Error(
+          `YOLO load endpoint failed (${loadEndpointError.message}). Model ${normalizedModelName} was not found in available models.`
+        );
+      }
+
+      throw new Error(`Model ${normalizedModelName} not found on YOLO service`);
     } catch (error) {
       if (error instanceof Error && error.message.includes('not found')) {
         throw error;
       }
-      throw new Error(`Failed to verify model ${modelName}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to verify model ${normalizedModelName}: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
     }
   }
 }
