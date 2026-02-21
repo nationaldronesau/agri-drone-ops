@@ -229,7 +229,37 @@ export class YOLOService {
         );
       }
 
-      return response.json();
+      const responseText = await response.text();
+      if (!responseText) {
+        return {} as T;
+      }
+
+      const contentType = response.headers.get('content-type') || '';
+      const shouldParseAsJson =
+        contentType.includes('application/json') ||
+        contentType.includes('application/problem+json');
+
+      if (shouldParseAsJson) {
+        try {
+          return JSON.parse(responseText) as T;
+        } catch {
+          throw new YOLOServiceError(
+            `YOLO service returned invalid JSON from ${endpoint}`,
+            response.status,
+            responseText.substring(0, 400)
+          );
+        }
+      }
+
+      try {
+        return JSON.parse(responseText) as T;
+      } catch {
+        throw new YOLOServiceError(
+          `YOLO service returned non-JSON response from ${endpoint}`,
+          response.status,
+          responseText.substring(0, 400)
+        );
+      }
     } catch (error) {
       clearTimeout(timeoutId);
 

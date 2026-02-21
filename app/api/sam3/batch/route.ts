@@ -143,7 +143,6 @@ async function processSynchronously(
   let processedCount = 0;
   let totalDetections = 0;
   const errors: string[] = [];
-  let fatalError = false;
   const startTime = Date.now();
 
   // Update job status to PROCESSING
@@ -446,14 +445,19 @@ async function processSynchronously(
           });
           if (!result.success) {
             console.warn(`[Sync] Job ${batchJobId}, Asset ${asset.id}: Exemplar prediction failed (${result.error}), falling back`);
-            if (useVisualCrops) {
+            const shouldTryBoxFallback =
+              boxes.length > 0 &&
+              (
+                !useVisualCrops ||
+                result.errorCode === 'UNSUPPORTED_EXEMPLAR_CROPS' ||
+                /extractor cues|source mask|exemplar/i.test(result.error || '')
+              );
+
+            if (!shouldTryBoxFallback && useVisualCrops) {
               errors.push(`Asset ${asset.id}: ${result.error || 'Visual exemplar prediction failed'}`);
-              if (result.errorCode === 'UNSUPPORTED_EXEMPLAR_CROPS') {
-                fatalError = true;
-                break;
-              }
               continue;
             }
+
             result = await sam3Orchestrator.predict({
               imageBuffer: imageData.buffer,
               boxes: boxes.length > 0 ? boxes : undefined,
@@ -516,21 +520,15 @@ async function processSynchronously(
 
       console.log(`[Sync] Job ${batchJobId}: Processed ${processedCount}/${assets.length} images, ${totalDetections} detections`);
 
-      if (fatalError) {
-        break;
-      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
       errors.push(`Asset ${asset.id}: ${errorMessage}`);
       console.error(`[Sync] Error processing asset ${asset.id}:`, errorMessage);
-      if (fatalError) {
-        break;
-      }
     }
   }
 
   // Mark job complete
-  const finalStatus = fatalError || (errors.length > 0 && processedCount === 0) ? 'FAILED' : 'COMPLETED';
+  const finalStatus = errors.length > 0 && processedCount === 0 ? 'FAILED' : 'COMPLETED';
   await prisma.batchJob.update({
     where: { id: batchJobId },
     data: {

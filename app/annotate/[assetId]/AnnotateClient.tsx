@@ -1400,7 +1400,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
 
     const fetchStatus = async () => {
       try {
-        const response = await fetch(`/api/sam3/batch/${batchJobId}`);
+        const response = await fetch(`/api/sam3/batch/${batchJobId}?includeAnnotations=false`);
         if (!response.ok) {
           failureCount += 1;
           if (failureCount >= MAX_STATUS_ERRORS) {

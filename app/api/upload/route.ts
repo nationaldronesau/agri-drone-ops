@@ -17,6 +17,7 @@ import { enqueueInferenceJob } from "@/lib/queue/inference-queue";
 import { resolveGeoCoordinates } from "@/lib/utils/georeferencing";
 import { getCameraFovFromMetadata } from "@/lib/utils/precision-georeferencing";
 import { S3Service } from "@/lib/services/s3";
+import { resolveSurveyForAsset } from "@/lib/services/survey";
 
 const fileSchema = z.object({
   url: z.string().url("A valid S3 URL is required"),
@@ -558,6 +559,15 @@ export async function POST(request: NextRequest) {
         // Use transaction for all database operations to ensure data consistency
         // If any step fails, all changes are rolled back
         const { asset, detections } = await prisma.$transaction(async (tx) => {
+          const assetCreatedAt = new Date();
+          const surveyId = await resolveSurveyForAsset(tx, {
+            projectId,
+            teamId: projectSettings.teamId,
+            flightSession: flightSession || null,
+            flightDate: null,
+            createdAt: assetCreatedAt,
+          });
+
           // Create asset
           const asset = await tx.asset.create({
             data: {
@@ -584,7 +594,9 @@ export async function POST(request: NextRequest) {
               metadata: fullMetadata,
               projectId,
               createdById: userId,
+              surveyId,
               flightSession: flightSession || null,
+              createdAt: assetCreatedAt,
             },
           });
 

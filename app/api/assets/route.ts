@@ -16,6 +16,10 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const projectId = searchParams.get('projectId');
+    const requestedLimit = Number.parseInt(searchParams.get('limit') || '', 10);
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.min(Math.max(requestedLimit, 1), 2000)
+      : undefined;
 
     // If projectId specified, verify user has access
     if (projectId) {
@@ -68,7 +72,8 @@ export async function GET(request: NextRequest) {
       },
       orderBy: {
         createdAt: 'desc'
-      }
+      },
+      ...(limit ? { take: limit } : {}),
     });
 
     const assetIds = assets.map((asset) => asset.id);

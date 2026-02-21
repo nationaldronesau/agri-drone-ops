@@ -20,6 +20,10 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const assigned = searchParams.get("assigned") || "all";
+    const requestedLimit = Number.parseInt(searchParams.get("limit") || "100", 10);
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.min(Math.max(requestedLimit, 1), 200)
+      : 100;
 
     const where: Record<string, unknown> = {
       teamId: { in: membership.teamIds },
@@ -39,6 +43,7 @@ export async function GET(request: NextRequest) {
         assignedTo: { select: { id: true, name: true, email: true, image: true } },
       },
       orderBy: { createdAt: "desc" },
+      take: limit,
     });
 
     return NextResponse.json({ sessions });

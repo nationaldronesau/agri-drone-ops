@@ -18,6 +18,20 @@ import { buildTrainingAugmentationFromDataset } from '@/lib/services/training-au
 const ALLOWED_BASE_MODELS = ['yolo11n', 'yolo11s', 'yolo11m', 'yolo11l', 'yolo11x'] as const;
 const TRAINING_LOCK_TTL_MS = 15 * 60 * 1000;
 
+function parseMaybeJson<T>(value: unknown, fallback: T, context: string): T {
+  if (value == null) return fallback;
+  if (typeof value !== 'string') {
+    return value as T;
+  }
+
+  try {
+    return JSON.parse(value) as T;
+  } catch (error) {
+    console.warn(`[TrainingJobs] Failed to parse ${context}:`, error);
+    return fallback;
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const auth = await getAuthenticatedUser();
@@ -352,7 +366,7 @@ export async function GET(request: NextRequest) {
       prisma.trainingJob.count({ where }),
     ]);
 
-    const activeStatuses = new Set([
+    const activeStatuses: ReadonlySet<TrainingStatus> = new Set<TrainingStatus>([
       TrainingStatus.QUEUED,
       TrainingStatus.PREPARING,
       TrainingStatus.RUNNING,
@@ -400,11 +414,23 @@ export async function GET(request: NextRequest) {
       dataset: job.dataset
         ? {
             ...job.dataset,
-            classes: JSON.parse(job.dataset.classes),
+            classes: parseMaybeJson<string[]>(
+              job.dataset.classes,
+              [],
+              `dataset.classes for job ${job.id}`
+            ),
           }
         : job.dataset,
-      currentMetrics: job.currentMetrics ? JSON.parse(job.currentMetrics) : null,
-      trainingConfig: job.trainingConfig ? JSON.parse(job.trainingConfig) : null,
+      currentMetrics: parseMaybeJson<Record<string, unknown> | null>(
+        job.currentMetrics,
+        null,
+        `currentMetrics for job ${job.id}`
+      ),
+      trainingConfig: parseMaybeJson<Record<string, unknown> | null>(
+        job.trainingConfig,
+        null,
+        `trainingConfig for job ${job.id}`
+      ),
     }));
 
     return NextResponse.json({

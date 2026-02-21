@@ -65,10 +65,10 @@ export default function ExportPage() {
     try {
       setProjectsError(null);
       const response = await fetch('/api/projects');
+      const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error('Failed to load projects');
+        throw new Error(data?.error || 'Failed to load projects');
       }
-      const data = await response.json();
       setProjects(data.projects || []);
     } catch (error) {
       console.error('Failed to fetch projects:', error);
@@ -89,11 +89,17 @@ export default function ExportPage() {
           ? `/api/detections?projectId=${selectedProject}&all=true`
           : '/api/detections?all=true';
         const aiResponse = await fetch(aiUrl);
+        const aiData = await aiResponse.json().catch(() => ({}));
         if (!aiResponse.ok) {
-          throw new Error(`AI detections request failed (${aiResponse.status})`);
+          throw new Error(aiData?.error || `AI detections request failed (${aiResponse.status})`);
         }
-        const aiData = (await aiResponse.json()) as Detection[];
-        const aiDetections = aiData.map((d) => ({ ...d, type: 'ai' as const }));
+        const aiDetectionsRaw = Array.isArray(aiData)
+          ? aiData
+          : Array.isArray(aiData?.data)
+            ? aiData.data
+            : [];
+        const aiDataList = aiDetectionsRaw as Detection[];
+        const aiDetections = aiDataList.map((d) => ({ ...d, type: 'ai' as const }));
         allDetections.push(...aiDetections);
       } catch (error) {
         console.error('Failed to fetch AI detections:', error);
@@ -116,11 +122,16 @@ export default function ExportPage() {
         }
 
         const manualResponse = await fetch(`/api/annotations/export?${params.toString()}`);
+        const manualData = await manualResponse.json().catch(() => ({}));
         if (!manualResponse.ok) {
-          throw new Error(`Manual annotations request failed (${manualResponse.status})`);
+          throw new Error(manualData?.error || `Manual annotations request failed (${manualResponse.status})`);
         }
-        const manualData = await manualResponse.json();
-        allDetections.push(...manualData);
+        const manualDetections = Array.isArray(manualData)
+          ? manualData
+          : Array.isArray(manualData?.data)
+            ? manualData.data
+            : [];
+        allDetections.push(...manualDetections);
       } catch (error) {
         console.error('Failed to fetch manual annotations:', error);
         failures.push('manual annotations');
@@ -140,8 +151,7 @@ export default function ExportPage() {
 
   useEffect(() => {
     fetchProjects();
-    fetchAllDetections();
-  }, [fetchProjects, fetchAllDetections]);
+  }, [fetchProjects]);
 
   useEffect(() => {
     fetchAllDetections();

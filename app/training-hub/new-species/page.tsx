@@ -52,6 +52,7 @@ export default function NewSpeciesWorkflowPage() {
   const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
   const [targetType, setTargetType] = useState<WorkflowTarget>('both');
@@ -68,11 +69,20 @@ export default function NewSpeciesWorkflowPage() {
   useEffect(() => {
     const fetchProjects = async () => {
       try {
+        setProjectsError(null);
         const response = await fetch('/api/projects');
-        const data = await response.json();
-        setProjects(data.projects || []);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data?.error || 'Failed to fetch projects');
+        }
+        const nextProjects = Array.isArray(data.projects) ? data.projects : [];
+        setProjects(nextProjects);
+        if (nextProjects.length > 0) {
+          setSelectedProjectId((current) => current || nextProjects[0].id);
+        }
       } catch (err) {
         console.error('Failed to fetch projects:', err);
+        setProjectsError(err instanceof Error ? err.message : 'Failed to fetch projects');
       } finally {
         setLoadingProjects(false);
       }
@@ -91,7 +101,10 @@ export default function NewSpeciesWorkflowPage() {
       setLoadingImages(true);
       try {
         const response = await fetch(`/api/projects/${selectedProjectId}`);
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data?.error || 'Failed to fetch project details');
+        }
         setProjectImages(data._count?.assets || 0);
       } catch (err) {
         console.error('Failed to fetch project images:', err);
@@ -152,7 +165,7 @@ export default function NewSpeciesWorkflowPage() {
         throw new Error('Review session missing from response');
       }
 
-      const assetsResponse = await fetch(`/api/assets?projectId=${selectedProjectId}`);
+      const assetsResponse = await fetch(`/api/assets?projectId=${selectedProjectId}&limit=200`);
       const assetsData = await assetsResponse.json().catch(() => ({}));
       const assets = assetsData.assets || [];
       const firstAsset =
@@ -180,6 +193,7 @@ export default function NewSpeciesWorkflowPage() {
               <div className="w-10 h-10 rounded-lg bg-gradient-to-r from-green-500 to-green-600 flex items-center justify-center">
                 <Sparkles className="w-6 h-6 text-white" />
               </div>
+
               <div>
                 <h1 className="text-xl font-bold text-gray-900">Label New Species</h1>
                 <p className="text-sm text-gray-500">Step 1: Select source and target</p>
@@ -258,6 +272,18 @@ export default function NewSpeciesWorkflowPage() {
                   </Select>
                 )}
               </div>
+
+              {projectsError && (
+                <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                  {projectsError}
+                </div>
+              )}
+
+              {!loadingProjects && !projectsError && projects.length === 0 && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                  No projects found. Create one first, then upload images.
+                </div>
+              )}
 
               {selectedProjectId && (
                 <div className="flex items-center gap-4 p-4 rounded-lg bg-gray-50">

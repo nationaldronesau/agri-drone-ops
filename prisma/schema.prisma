@@ -20,11 +20,12 @@ model User {
   sessions               Session[]
   teamMembers            TeamMember[]
   createdAssets          Asset[]
-  createdReviewSessions  ReviewSession[]    @relation("ReviewSessionCreator")
-  assignedReviewSessions ReviewSession[]    @relation("ReviewSessionAssignee")
+  createdReviewSessions  ReviewSession[]         @relation("ReviewSessionCreator")
+  assignedReviewSessions ReviewSession[]         @relation("ReviewSessionAssignee")
   yoloInferenceJobs      YOLOInferenceJob[]
   sprayPlans             SprayPlan[]
   complianceLayers       ComplianceLayer[]
+  temporalRuns           TemporalComparisonRun[]
 }
 
 model Account {
@@ -71,6 +72,8 @@ model Team {
   yoloInferenceJobs YOLOInferenceJob[]
   sprayPlans        SprayPlan[]
   complianceLayers  ComplianceLayer[]
+  surveys           Survey[]
+  temporalRuns      TemporalComparisonRun[]
 }
 
 model TeamMember {
@@ -110,16 +113,16 @@ model Project {
 
   // YOLO inference settings
   activeModelId        String?
-  activeModel          TrainedModel? @relation("ProjectActiveModel", fields: [activeModelId], references: [id])
-  autoInferenceEnabled Boolean       @default(false)
+  activeModel          TrainedModel?    @relation("ProjectActiveModel", fields: [activeModelId], references: [id])
+  autoInferenceEnabled Boolean          @default(false)
   features             Json?
   inferenceBackend     InferenceBackend @default(AUTO)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  team              Team               @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  cameraProfile     CameraProfile?     @relation(fields: [cameraProfileId], references: [id])
+  team              Team                    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  cameraProfile     CameraProfile?          @relation(fields: [cameraProfileId], references: [id])
   assets            Asset[]
   jobs              ProcessingJob[]
   orthomosaics      Orthomosaic[]
@@ -130,6 +133,8 @@ model Project {
   annotationClasses AnnotationClass[]
   sprayPlans        SprayPlan[]
   complianceLayers  ComplianceLayer[]
+  surveys           Survey[]
+  temporalRuns      TemporalComparisonRun[]
 
   @@index([teamId])
   @@index([location])
@@ -139,13 +144,13 @@ model Project {
 }
 
 model AnnotationClass {
-  id        String  @id @default(cuid())
+  id        String @id @default(cuid())
   projectId String
   name      String
-  color     String  @default("#9ca3af")
-  sortOrder Int     @default(0)
+  color     String @default("#9ca3af")
+  sortOrder Int    @default(0)
 
-  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -172,6 +177,7 @@ enum InferenceBackend {
 model Asset {
   id              String  @id @default(cuid())
   projectId       String
+  surveyId        String?
   fileName        String
   fileSize        Int
   mimeType        String
@@ -207,9 +213,10 @@ model Asset {
   createdAt   DateTime @default(now())
   createdById String
 
-  project            Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  cameraProfile      CameraProfile?      @relation(fields: [cameraProfileId], references: [id])
-  createdBy          User                @relation(fields: [createdById], references: [id])
+  project            Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  survey             Survey?                @relation(fields: [surveyId], references: [id], onDelete: SetNull)
+  cameraProfile      CameraProfile?         @relation(fields: [cameraProfileId], references: [id])
+  createdBy          User                   @relation(fields: [createdById], references: [id])
   detections         Detection[]
   processingJobs     ProcessingJob[]
   annotationSessions AnnotationSession[]
@@ -218,6 +225,7 @@ model Asset {
 
   @@unique([s3Key])
   @@index([projectId])
+  @@index([surveyId])
   @@index([cameraProfileId])
   @@index([flightSession])
   @@index([gpsLatitude, gpsLongitude])
@@ -670,12 +678,14 @@ model SprayPlan {
   id String @id @default(cuid())
 
   // Ownership
-  teamId      String
-  team        Team    @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  projectId   String
-  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  createdById String
-  createdBy   User    @relation(fields: [createdById], references: [id])
+  teamId        String
+  team          Team                   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  projectId     String
+  project       Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdById   String
+  createdBy     User                   @relation(fields: [createdById], references: [id])
+  temporalRunId String?
+  temporalRun   TemporalComparisonRun? @relation(fields: [temporalRunId], references: [id], onDelete: SetNull)
 
   // Status + config
   name         String
@@ -688,8 +698,8 @@ model SprayPlan {
   // Timing
   startedAt   DateTime?
   completedAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   missions SprayMission[]
   zones    SprayZone[]
@@ -697,6 +707,7 @@ model SprayPlan {
   @@index([teamId])
   @@index([projectId])
   @@index([createdById])
+  @@index([temporalRunId])
   @@index([status])
   @@index([createdAt])
 }
@@ -712,13 +723,13 @@ model SprayMission {
   status   String @default("ready")
 
   // Mission aggregates
-  zoneCount             Int   @default(0)
-  totalAreaHa           Float @default(0)
-  chemicalLiters        Float @default(0)
-  estimatedDistanceM    Float @default(0)
-  estimatedDurationMin  Float @default(0)
-  routeGeoJson          Json?
-  metadata              Json?
+  zoneCount            Int   @default(0)
+  totalAreaHa          Float @default(0)
+  chemicalLiters       Float @default(0)
+  estimatedDistanceM   Float @default(0)
+  estimatedDurationMin Float @default(0)
+  routeGeoJson         Json?
+  metadata             Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -771,6 +782,165 @@ enum SprayPlanStatus {
 }
 
 // ============================================
+// Temporal Change Intelligence Models
+// ============================================
+
+model Survey {
+  id        String       @id @default(cuid())
+  teamId    String
+  projectId String
+  name      String
+  surveyKey String
+  status    SurveyStatus @default(ACTIVE)
+
+  startedAt        DateTime
+  endedAt          DateTime
+  assetCount       Int      @default(0)
+  coverageGeometry Json?
+  coverageMethod   String?
+  metadata         Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  team           Team                    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  project        Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assets         Asset[]
+  baselineRuns   TemporalComparisonRun[] @relation("TemporalBaselineSurvey")
+  comparisonRuns TemporalComparisonRun[] @relation("TemporalComparisonSurvey")
+
+  @@unique([projectId, surveyKey])
+  @@index([teamId])
+  @@index([projectId, startedAt])
+  @@index([status])
+}
+
+enum SurveyStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+model TemporalComparisonRun {
+  id String @id @default(cuid())
+
+  teamId    String
+  team      Team    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  baselineSurveyId   String
+  baselineSurvey     Survey @relation("TemporalBaselineSurvey", fields: [baselineSurveyId], references: [id], onDelete: Cascade)
+  comparisonSurveyId String
+  comparisonSurvey   Survey @relation("TemporalComparisonSurvey", fields: [comparisonSurveyId], references: [id], onDelete: Cascade)
+
+  createdById String
+  createdBy   User   @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  status       TemporalRunStatus @default(QUEUED)
+  progress     Int               @default(0)
+  errorMessage String?
+  config       Json?
+  summary      Json?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  changes    TemporalChangeItem[]
+  hotspots   TemporalHotspot[]
+  sprayPlans SprayPlan[]
+
+  @@index([teamId])
+  @@index([projectId])
+  @@index([baselineSurveyId])
+  @@index([comparisonSurveyId])
+  @@index([createdById])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum TemporalRunStatus {
+  QUEUED
+  PROCESSING
+  READY
+  FAILED
+  CANCELLED
+}
+
+model TemporalChangeItem {
+  id    String                @id @default(cuid())
+  runId String
+  run   TemporalComparisonRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  changeType TemporalChangeType
+  species    String
+
+  signalTypeBaseline   TemporalSignalType?
+  signalIdBaseline     String?
+  signalTypeComparison TemporalSignalType?
+  signalIdComparison   String?
+
+  baselineLat   Float?
+  baselineLon   Float?
+  comparisonLat Float?
+  comparisonLon Float?
+
+  distanceM    Float?
+  overlapScore Float?
+  confidence   Float?
+  riskScore    Float  @default(0)
+  geometry     Json?
+  metadata     Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([runId])
+  @@index([changeType])
+  @@index([species])
+  @@index([riskScore])
+  @@index([createdAt])
+}
+
+enum TemporalChangeType {
+  NEW
+  PERSISTENT
+  RESOLVED
+  UNOBSERVED
+}
+
+enum TemporalSignalType {
+  DETECTION
+  MANUAL
+  SAM3
+}
+
+model TemporalHotspot {
+  id    String                @id @default(cuid())
+  runId String
+  run   TemporalComparisonRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  species       String
+  changeMix     Json
+  itemCount     Int
+  avgConfidence Float?
+  avgRiskScore  Float?
+  centroidLat   Float
+  centroidLon   Float
+  polygon       Json
+  areaHa        Float  @default(0)
+  priorityScore Float?
+  metadata      Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([runId])
+  @@index([species])
+  @@index([priorityScore])
+  @@index([createdAt])
+}
+
+// ============================================
 // Compliance Layer Models
 // ============================================
 
@@ -786,13 +956,13 @@ model ComplianceLayer {
   createdBy   User    @relation(fields: [createdById], references: [id])
 
   // Layer definition
-  name               String
-  layerType          ComplianceLayerType
-  sourceFormat       ComplianceSourceFormat @default(GEOJSON)
-  geometry           Json // GeoJSON Polygon or MultiPolygon
-  bufferMeters       Float                @default(0)
-  isActive           Boolean              @default(true)
-  metadata           Json?
+  name         String
+  layerType    ComplianceLayerType
+  sourceFormat ComplianceSourceFormat @default(GEOJSON)
+  geometry     Json // GeoJSON Polygon or MultiPolygon
+  bufferMeters Float                  @default(0)
+  isActive     Boolean                @default(true)
+  metadata     Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -972,9 +1142,9 @@ model TrainingDataset {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([projectId, version])
   @@index([teamId])
   @@index([projectId])
-  @@unique([projectId, version])
 }
 
 model TrainingDatasetAsset {
