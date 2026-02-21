@@ -20,6 +20,15 @@ export async function GET(
   { params }: RouteParams
 ): Promise<NextResponse> {
   const { id } = await params;
+  const { searchParams } = new URL(request.url);
+  const includeAnnotations = searchParams.get('includeAnnotations') === 'true';
+  const requestedAnnotationLimit = Number.parseInt(
+    searchParams.get('annotationLimit') || '250',
+    10
+  );
+  const annotationLimit = Number.isFinite(requestedAnnotationLimit)
+    ? Math.min(Math.max(requestedAnnotationLimit, 1), 1000)
+    : 250;
 
   // Validate ID format
   if (!/^c[a-z0-9]{24,}$/i.test(id)) {
@@ -58,31 +67,41 @@ export async function GET(
       );
     }
 
-    // Now get the full batch job with annotations
-    const batchJob = await prisma.batchJob.findUnique({
-      where: { id },
-      include: {
-        pendingAnnotations: {
-          include: {
-            asset: {
-              select: {
-                id: true,
-                fileName: true,
-                storageUrl: true,
-                thumbnailUrl: true,
-              }
+    const [batchJob, groupedStatusCounts, annotations] = await Promise.all([
+      prisma.batchJob.findUnique({
+        where: { id },
+        include: {
+          project: {
+            select: {
+              id: true,
+              name: true,
             }
-          },
-          orderBy: { confidence: 'desc' }
-        },
-        project: {
-          select: {
-            id: true,
-            name: true,
           }
         }
-      }
-    });
+      }),
+      prisma.pendingAnnotation.groupBy({
+        by: ['status'],
+        where: { batchJobId: id },
+        _count: { _all: true },
+      }),
+      includeAnnotations
+        ? prisma.pendingAnnotation.findMany({
+            where: { batchJobId: id },
+            include: {
+              asset: {
+                select: {
+                  id: true,
+                  fileName: true,
+                  storageUrl: true,
+                  thumbnailUrl: true,
+                }
+              }
+            },
+            orderBy: { confidence: 'desc' },
+            take: annotationLimit,
+          })
+        : Promise.resolve([]),
+    ]);
 
     if (!batchJob) {
       return NextResponse.json(
@@ -91,10 +110,17 @@ export async function GET(
       );
     }
 
-    // Group annotations by status
-    const pending = batchJob.pendingAnnotations.filter(a => a.status === 'PENDING');
-    const accepted = batchJob.pendingAnnotations.filter(a => a.status === 'ACCEPTED');
-    const rejected = batchJob.pendingAnnotations.filter(a => a.status === 'REJECTED');
+    const statusCounts = groupedStatusCounts.reduce(
+      (acc, row) => {
+        acc[row.status] = row._count._all;
+        return acc;
+      },
+      { PENDING: 0, ACCEPTED: 0, REJECTED: 0 } as Record<string, number>
+    );
+    const totalAnnotations = groupedStatusCounts.reduce(
+      (sum, row) => sum + row._count._all,
+      0
+    );
 
     return NextResponse.json({
       success: true,
@@ -113,12 +139,12 @@ export async function GET(
         completedAt: batchJob.completedAt,
       },
       summary: {
-        total: batchJob.pendingAnnotations.length,
-        pending: pending.length,
-        accepted: accepted.length,
-        rejected: rejected.length,
+        total: totalAnnotations,
+        pending: statusCounts.PENDING || 0,
+        accepted: statusCounts.ACCEPTED || 0,
+        rejected: statusCounts.REJECTED || 0,
       },
-      annotations: batchJob.pendingAnnotations,
+      annotations,
     });
   } catch (error) {
     console.error('Failed to get batch job:', error);

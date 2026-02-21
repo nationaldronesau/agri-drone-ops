@@ -2,6 +2,7 @@ import {
   ComplianceLayerType,
   Prisma,
   SprayPlanStatus,
+  TemporalChangeType,
 } from '@prisma/client';
 import area from '@turf/area';
 import buffer from '@turf/buffer';
@@ -55,6 +56,16 @@ export interface SprayPlanGenerationInput {
   maxTemperatureC?: number;
   missionTurnaroundMinutes?: number;
   preferredLaunchTimeUtc?: string;
+}
+
+export interface TemporalDeltaSprayPlanInput {
+  runId: string;
+  projectId: string;
+  teamId: string;
+  userId: string;
+  name?: string;
+  includedChangeTypes?: TemporalChangeType[];
+  riskThreshold?: number;
 }
 
 export interface SprayPlanConfig {
@@ -1457,6 +1468,67 @@ function defaultPlanName(projectName: string): string {
   return `${projectName} Spray Plan ${date}`;
 }
 
+function defaultDeltaPlanName(projectName: string): string {
+  const date = new Date().toISOString().slice(0, 10);
+  return `${projectName} Delta Spray Plan ${date}`;
+}
+
+function parseHotspotPolygonRing(value: Prisma.JsonValue | null | undefined): Array<[number, number]> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const geometry = value as Record<string, Prisma.JsonValue>;
+
+  if (geometry.type === 'Polygon' && Array.isArray(geometry.coordinates)) {
+    const ring = geometry.coordinates[0];
+    if (!Array.isArray(ring)) return [];
+    const coordinates: Array<[number, number]> = [];
+    for (const pointValue of ring) {
+      if (!Array.isArray(pointValue) || pointValue.length < 2) continue;
+      const lon = typeof pointValue[0] === 'number' ? pointValue[0] : NaN;
+      const lat = typeof pointValue[1] === 'number' ? pointValue[1] : NaN;
+      if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        coordinates.push([lon, lat]);
+      }
+    }
+    return coordinates;
+  }
+
+  if (geometry.type === 'MultiPolygon' && Array.isArray(geometry.coordinates)) {
+    const firstPolygon = geometry.coordinates[0];
+    if (!Array.isArray(firstPolygon) || firstPolygon.length === 0) return [];
+    const firstRing = firstPolygon[0];
+    if (!Array.isArray(firstRing)) return [];
+    const coordinates: Array<[number, number]> = [];
+    for (const pointValue of firstRing) {
+      if (!Array.isArray(pointValue) || pointValue.length < 2) continue;
+      const lon = typeof pointValue[0] === 'number' ? pointValue[0] : NaN;
+      const lat = typeof pointValue[1] === 'number' ? pointValue[1] : NaN;
+      if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        coordinates.push([lon, lat]);
+      }
+    }
+    return coordinates;
+  }
+
+  return [];
+}
+
+function parseChangeMix(value: Prisma.JsonValue | null | undefined): Record<string, number> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const record = value as Record<string, Prisma.JsonValue>;
+  const out: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(record)) {
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      out[key.toLowerCase()] = raw;
+    } else if (typeof raw === 'string') {
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed)) {
+        out[key.toLowerCase()] = parsed;
+      }
+    }
+  }
+  return out;
+}
+
 export async function createSprayPlan(input: SprayPlanGenerationInput): Promise<{ planId: string }> {
   const config = normalizeConfig(input);
   const project = await prisma.project.findFirst({
@@ -1497,6 +1569,454 @@ export async function createSprayPlan(input: SprayPlanGenerationInput): Promise<
   }, 0);
 
   return { planId: plan.id };
+}
+
+export async function createSprayPlanFromTemporalHotspots(
+  input: TemporalDeltaSprayPlanInput
+): Promise<{ planId: string }> {
+  const run = await prisma.temporalComparisonRun.findFirst({
+    where: {
+      id: input.runId,
+      projectId: input.projectId,
+      teamId: input.teamId,
+    },
+    select: {
+      id: true,
+      status: true,
+      project: {
+        select: {
+          name: true,
+        },
+      },
+    },
+  });
+
+  if (!run) {
+    throw new Error('Temporal run not found for this project/team');
+  }
+  if (run.status !== 'READY') {
+    throw new Error('Temporal run must be READY before creating a delta plan');
+  }
+
+  const riskThreshold = clamp(input.riskThreshold ?? 0.55, 0, 1);
+  const includedChangeTypes =
+    input.includedChangeTypes && input.includedChangeTypes.length > 0
+      ? input.includedChangeTypes
+      : [TemporalChangeType.NEW, TemporalChangeType.PERSISTENT];
+
+  const config = normalizeConfig({
+    projectId: input.projectId,
+    teamId: input.teamId,
+    userId: input.userId,
+    includeAIDetections: false,
+    includeManualAnnotations: false,
+    includeUnverified: false,
+    minConfidence: riskThreshold,
+    includeCompliance: true,
+    enableWeatherOptimization: true,
+  });
+
+  const plan = await prisma.sprayPlan.create({
+    data: {
+      name: input.name?.trim() || defaultDeltaPlanName(run.project.name),
+      teamId: input.teamId,
+      projectId: input.projectId,
+      createdById: input.userId,
+      temporalRunId: input.runId,
+      status: SprayPlanStatus.QUEUED,
+      progress: 0,
+      config: {
+        ...config,
+        temporalDelta: {
+          runId: input.runId,
+          includedChangeTypes,
+          riskThreshold,
+        },
+      } as Prisma.InputJsonValue,
+    },
+    select: { id: true },
+  });
+
+  // Fire-and-forget generation so the API can return immediately.
+  setTimeout(() => {
+    void runTemporalDeltaSprayPlan(plan.id).catch((error) => {
+      console.error('[spray-planner] temporal delta execution error', {
+        planId: plan.id,
+        error,
+      });
+    });
+  }, 0);
+
+  return { planId: plan.id };
+}
+
+async function runTemporalDeltaSprayPlan(planId: string): Promise<void> {
+  const plan = await prisma.sprayPlan.findUnique({
+    where: { id: planId },
+    include: {
+      project: {
+        select: {
+          id: true,
+          name: true,
+          centerLat: true,
+          centerLon: true,
+        },
+      },
+    },
+  });
+  if (!plan) throw new Error('Spray plan not found');
+
+  const rawConfig = plan.config as Prisma.JsonValue;
+  const configRecord =
+    rawConfig && typeof rawConfig === 'object' && !Array.isArray(rawConfig)
+      ? (rawConfig as Record<string, unknown>)
+      : {};
+  const temporalDelta =
+    configRecord.temporalDelta &&
+    typeof configRecord.temporalDelta === 'object' &&
+    !Array.isArray(configRecord.temporalDelta)
+      ? (configRecord.temporalDelta as Record<string, unknown>)
+      : {};
+
+  const runId =
+    typeof temporalDelta.runId === 'string' && temporalDelta.runId.length > 0
+      ? temporalDelta.runId
+      : null;
+  if (!runId) {
+    throw new Error('Temporal delta configuration missing runId');
+  }
+
+  const includedChangeTypesRaw = Array.isArray(temporalDelta.includedChangeTypes)
+    ? temporalDelta.includedChangeTypes
+    : [];
+  const includedChangeTypes = includedChangeTypesRaw
+    .filter((value): value is TemporalChangeType => typeof value === 'string')
+    .filter((value): value is TemporalChangeType => value in TemporalChangeType);
+  const includedKeys =
+    includedChangeTypes.length > 0
+      ? new Set(includedChangeTypes.map((value) => value.toLowerCase()))
+      : new Set(['new', 'persistent']);
+
+  const riskThreshold = clamp(
+    typeof temporalDelta.riskThreshold === 'number' && Number.isFinite(temporalDelta.riskThreshold)
+      ? temporalDelta.riskThreshold
+      : 0.55,
+    0,
+    1
+  );
+
+  const parsedInput = configRecord as Partial<SprayPlanConfig>;
+  const config: SprayPlanConfig = {
+    ...DEFAULTS,
+    ...parsedInput,
+    classes: [],
+    includeAIDetections: false,
+    includeManualAnnotations: false,
+    includeUnverified: false,
+  };
+
+  await prisma.sprayPlan.update({
+    where: { id: planId },
+    data: {
+      status: SprayPlanStatus.PROCESSING,
+      progress: 5,
+      errorMessage: null,
+      startedAt: new Date(),
+      completedAt: null,
+    },
+  });
+
+  try {
+    const [run, hotspots, recommendations] = await Promise.all([
+      prisma.temporalComparisonRun.findFirst({
+        where: {
+          id: runId,
+          teamId: plan.teamId,
+          projectId: plan.projectId,
+          status: 'READY',
+        },
+        select: {
+          id: true,
+          summary: true,
+        },
+      }),
+      prisma.temporalHotspot.findMany({
+        where: { runId },
+        orderBy: [{ priorityScore: 'desc' }, { createdAt: 'desc' }],
+      }),
+      prisma.chemicalRecommendation.findMany(),
+    ]);
+
+    if (!run) {
+      throw new Error('Temporal run not found for this plan');
+    }
+
+    await prisma.sprayPlan.update({
+      where: { id: planId },
+      data: { progress: 30 },
+    });
+
+    const recommendationMap = new Map(
+      recommendations.map((item) => [item.species.toLowerCase(), item])
+    );
+
+    const zoneDrafts: ZoneDraft[] = [];
+    for (const hotspot of hotspots) {
+      const mix = parseChangeMix(hotspot.changeMix);
+      const includedCount = Array.from(includedKeys).reduce(
+        (sum, key) => sum + (mix[key] ?? 0),
+        0
+      );
+      if (includedCount <= 0) continue;
+
+      const risk =
+        typeof hotspot.avgRiskScore === 'number' && Number.isFinite(hotspot.avgRiskScore)
+          ? hotspot.avgRiskScore
+          : typeof hotspot.priorityScore === 'number' && Number.isFinite(hotspot.priorityScore)
+            ? hotspot.priorityScore
+            : 0;
+      if (risk < riskThreshold) continue;
+
+      const ring = parseHotspotPolygonRing(hotspot.polygon);
+      if (ring.length === 0) continue;
+      const first = ring[0];
+      const last = ring[ring.length - 1];
+      if (first[0] !== last[0] || first[1] !== last[1]) {
+        ring.push([first[0], first[1]]);
+      }
+
+      const recommendation = recommendationMap.get(hotspot.species.toLowerCase());
+      const dosePerHa = recommendation?.dosagePerHa ?? config.defaultDosePerHa;
+      const areaHa = hotspot.areaHa > 0 ? hotspot.areaHa : 0.0001;
+
+      zoneDrafts.push({
+        sequence: 0,
+        species: hotspot.species,
+        detectionCount: Math.max(1, includedCount),
+        averageConfidence: hotspot.avgConfidence ?? 0.5,
+        priorityScore:
+          hotspot.priorityScore ??
+          hotspot.avgRiskScore ??
+          hotspot.avgConfidence ??
+          0.5,
+        centroidLat: hotspot.centroidLat,
+        centroidLon: hotspot.centroidLon,
+        polygonRing: ring,
+        areaHa,
+        recommendedDosePerHa: dosePerHa,
+        recommendedLiters: areaHa * dosePerHa,
+        recommendationSource: recommendation ? 'chemical-recommendation' : 'default-dose',
+        recommendationChemical: recommendation?.chemical ?? null,
+        sourcePointIds: [hotspot.id],
+      });
+    }
+
+    if (zoneDrafts.length === 0) {
+      throw new Error('No eligible hotspots above risk threshold');
+    }
+
+    const orderedZones = zoneDrafts
+      .sort((a, b) => b.priorityScore - a.priorityScore)
+      .map((zone, index) => ({ ...zone, sequence: index + 1 }));
+
+    const complianceResult = await applyComplianceLayersToZones(
+      orderedZones,
+      config,
+      plan.projectId,
+      plan.teamId
+    );
+
+    await prisma.sprayPlan.update({
+      where: { id: planId },
+      data: { progress: 55 },
+    });
+
+    if (complianceResult.zones.length === 0) {
+      throw new Error('All generated zones were excluded by compliance layers.');
+    }
+
+    const start: GeoPoint = {
+      lat: config.startLat ?? plan.project.centerLat ?? complianceResult.zones[0].centroidLat,
+      lon: config.startLon ?? plan.project.centerLon ?? complianceResult.zones[0].centroidLon,
+    };
+
+    const missions = splitIntoMissions(complianceResult.zones, config, start);
+    const weatherReport = await optimizeWeatherWindowForMissions(missions, config, start);
+    const weatherByMissionSequence = new Map(
+      weatherReport.missionSchedules.map((missionSchedule) => [missionSchedule.sequence, missionSchedule])
+    );
+    const routeDistanceBeforeTotal = missions.reduce((sum, mission) => sum + mission.routeDistanceBeforeM, 0);
+    const routeDistanceAfterTotal = missions.reduce((sum, mission) => sum + mission.routeDistanceAfterM, 0);
+    const routeDistanceSaved = Math.max(0, routeDistanceBeforeTotal - routeDistanceAfterTotal);
+
+    await prisma.sprayPlan.update({
+      where: { id: planId },
+      data: { progress: 82 },
+    });
+
+    await prisma.$transaction(async (tx) => {
+      await tx.sprayZone.deleteMany({ where: { sprayPlanId: planId } });
+      await tx.sprayMission.deleteMany({ where: { sprayPlanId: planId } });
+
+      const missionIdByZoneIndex = new Map<number, string>();
+
+      for (const mission of missions) {
+        const scheduledWeather = weatherByMissionSequence.get(mission.sequence);
+        const routeImprovementM = Math.max(0, mission.routeDistanceBeforeM - mission.routeDistanceAfterM);
+
+        const createdMission = await tx.sprayMission.create({
+          data: {
+            sprayPlanId: planId,
+            sequence: mission.sequence,
+            name: mission.name,
+            status: 'ready',
+            zoneCount: mission.zoneCount,
+            totalAreaHa: mission.totalAreaHa,
+            chemicalLiters: mission.chemicalLiters,
+            estimatedDistanceM: mission.estimatedDistanceM,
+            estimatedDurationMin: mission.estimatedDurationMin,
+            routeGeoJson: {
+              type: 'LineString',
+              coordinates: mission.routeCoordinates,
+            } as Prisma.InputJsonValue,
+            metadata: {
+              routeOptimization: {
+                algorithm: 'nearest-neighbor+2-opt',
+                baselineDistanceM: Number(mission.routeDistanceBeforeM.toFixed(1)),
+                optimizedDistanceM: Number(mission.routeDistanceAfterM.toFixed(1)),
+                improvementM: Number(routeImprovementM.toFixed(1)),
+                improvementPct:
+                  mission.routeDistanceBeforeM > 0
+                    ? Number(((routeImprovementM / mission.routeDistanceBeforeM) * 100).toFixed(2))
+                    : 0,
+              },
+              weather: scheduledWeather
+                ? {
+                    decision: scheduledWeather.weather.decision,
+                    riskScore: Number(scheduledWeather.weather.score.toFixed(3)),
+                    startTimeUtc: scheduledWeather.startTimeUtc,
+                    endTimeUtc: scheduledWeather.endTimeUtc,
+                    sampleCount: scheduledWeather.weather.sampleCount,
+                    avgWindSpeedMps: Number(scheduledWeather.weather.avgWindSpeedMps.toFixed(2)),
+                    maxWindSpeedMps: Number(scheduledWeather.weather.maxWindSpeedMps.toFixed(2)),
+                    avgWindGustMps: Number(scheduledWeather.weather.avgWindGustMps.toFixed(2)),
+                    maxWindGustMps: Number(scheduledWeather.weather.maxWindGustMps.toFixed(2)),
+                    avgPrecipProbability: Number(scheduledWeather.weather.avgPrecipProbability.toFixed(1)),
+                    maxPrecipProbability: Number(scheduledWeather.weather.maxPrecipProbability.toFixed(1)),
+                    avgTemperatureC: Number(scheduledWeather.weather.avgTemperatureC.toFixed(2)),
+                    minTemperatureC: Number(scheduledWeather.weather.minTemperatureC.toFixed(2)),
+                    maxTemperatureC: Number(scheduledWeather.weather.maxTemperatureC.toFixed(2)),
+                    reasons: scheduledWeather.weather.reasons,
+                  }
+                : null,
+            } as Prisma.InputJsonValue,
+          },
+          select: { id: true },
+        });
+
+        for (const zoneIndex of mission.zoneIndexes) {
+          missionIdByZoneIndex.set(zoneIndex, createdMission.id);
+        }
+      }
+
+      for (let i = 0; i < complianceResult.zones.length; i += 1) {
+        const zone = complianceResult.zones[i];
+        const missionId = missionIdByZoneIndex.get(i) ?? null;
+
+        await tx.sprayZone.create({
+          data: {
+            sprayPlanId: planId,
+            missionId,
+            species: zone.species,
+            detectionCount: zone.detectionCount,
+            averageConfidence: zone.averageConfidence,
+            priorityScore: zone.priorityScore,
+            centroidLat: zone.centroidLat,
+            centroidLon: zone.centroidLon,
+            polygon: {
+              type: 'Polygon',
+              coordinates: [zone.polygonRing],
+            } as Prisma.InputJsonValue,
+            areaHa: zone.areaHa,
+            recommendedDosePerHa: zone.recommendedDosePerHa,
+            recommendedLiters: zone.recommendedLiters,
+            recommendationSource: zone.recommendationSource,
+            metadata: {
+              sourcePointIds: zone.sourcePointIds,
+              recommendationChemical: zone.recommendationChemical,
+              sequence: zone.sequence,
+              source: 'temporal-hotspot',
+            } as Prisma.InputJsonValue,
+          },
+        });
+      }
+
+      const speciesCounts = new Map<string, number>();
+      for (const zone of complianceResult.zones) {
+        speciesCounts.set(zone.species, (speciesCounts.get(zone.species) ?? 0) + zone.detectionCount);
+      }
+
+      const summary = {
+        totals: {
+          sourcePointCount: zoneDrafts.length,
+          zoneCount: complianceResult.zones.length,
+          missionCount: missions.length,
+          totalAreaHa: Number(complianceResult.zones.reduce((sum, zone) => sum + zone.areaHa, 0).toFixed(4)),
+          totalChemicalLiters: Number(
+            complianceResult.zones.reduce((sum, zone) => sum + zone.recommendedLiters, 0).toFixed(3)
+          ),
+          skippedClusters: 0,
+        },
+        optimization: {
+          routeAlgorithm: 'nearest-neighbor+2-opt',
+          baselineDistanceM: Number(routeDistanceBeforeTotal.toFixed(1)),
+          optimizedDistanceM: Number(routeDistanceAfterTotal.toFixed(1)),
+          savedDistanceM: Number(routeDistanceSaved.toFixed(1)),
+          savedDistancePct:
+            routeDistanceBeforeTotal > 0
+              ? Number(((routeDistanceSaved / routeDistanceBeforeTotal) * 100).toFixed(2))
+              : 0,
+        },
+        weather: weatherReport,
+        compliance: complianceResult.report,
+        speciesBreakdown: Array.from(speciesCounts.entries()).map(([species, count]) => ({
+          species,
+          count,
+        })),
+        temporalDelta: {
+          runId,
+          includedChangeTypes: Array.from(includedKeys),
+          riskThreshold,
+          sourceHotspotCount: hotspots.length,
+          eligibleHotspotCount: zoneDrafts.length,
+          runSummary: run.summary,
+        },
+        generatedAt: new Date().toISOString(),
+      };
+
+      await tx.sprayPlan.update({
+        where: { id: planId },
+        data: {
+          status: SprayPlanStatus.READY,
+          progress: 100,
+          summary: summary as unknown as Prisma.InputJsonValue,
+          completedAt: new Date(),
+        },
+      });
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to generate spray plan';
+    await prisma.sprayPlan.update({
+      where: { id: planId },
+      data: {
+        status: SprayPlanStatus.FAILED,
+        progress: 100,
+        errorMessage: message,
+        completedAt: new Date(),
+      },
+    });
+    throw error;
+  }
 }
 
 export async function runSprayPlan(planId: string): Promise<void> {

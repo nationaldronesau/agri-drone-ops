@@ -21,8 +21,8 @@ const WORKFLOW_STEPS: Array<{
     id: "sam3",
     title: "SAM3 Rapid Training",
     description: "Generate candidate detections with concept propagation.",
-    href: "/training-hub",
-    cta: "Open SAM3 Hub",
+    href: "/training-hub/new-species",
+    cta: "Start Labeling",
   },
   {
     id: "export",

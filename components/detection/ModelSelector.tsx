@@ -20,6 +20,8 @@ export interface RoboflowModel {
 interface ModelSelectorProps {
   selectedModels: string[];
   onSelectionChange: (modelIds: string[]) => void;
+  onModelsLoaded?: (models: RoboflowModel[]) => void;
+  onLoadError?: (error: string | null) => void;
   disabled?: boolean;
 }
 
@@ -38,6 +40,8 @@ const MODEL_COLORS = [
 export function ModelSelector({
   selectedModels,
   onSelectionChange,
+  onModelsLoaded,
+  onLoadError,
   disabled = false,
 }: ModelSelectorProps) {
   const [models, setModels] = useState<RoboflowModel[]>([]);
@@ -49,22 +53,27 @@ export function ModelSelector({
     try {
       setSyncing(true);
       setError(null);
+      onLoadError?.(null);
 
       const response = await fetch('/api/roboflow/models');
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to fetch models');
       }
 
-      setModels(data.models || []);
+      const nextModels = Array.isArray(data.models) ? data.models : [];
+      setModels(nextModels);
+      onModelsLoaded?.(nextModels);
 
       // Auto-select first model if none selected and models available
-      if (data.models?.length > 0 && selectedModels.length === 0) {
-        onSelectionChange([data.models[0].id]);
+      if (nextModels.length > 0 && selectedModels.length === 0) {
+        onSelectionChange([nextModels[0].id]);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load models');
+      const message = err instanceof Error ? err.message : 'Failed to load models';
+      setError(message);
+      onLoadError?.(message);
     } finally {
       setLoading(false);
       setSyncing(false);

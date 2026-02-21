@@ -70,27 +70,6 @@ function UploadPageContent() {
       ? parsedCameraFov
       : undefined;
 
-  // Fetch available models
-  useEffect(() => {
-    setModelsError(null);
-    fetch("/api/roboflow/models")
-      .then((res) => {
-        if (!res.ok) {
-          throw new Error("Failed to load models");
-        }
-        return res.json();
-      })
-      .then((data) => {
-        if (data.models) {
-          setAvailableModels(data.models);
-        }
-      })
-      .catch((error) => {
-        console.error("Failed to load models:", error);
-        setModelsError(error instanceof Error ? error.message : "Unable to load models.");
-      });
-  }, []);
-
   useEffect(() => {
     setProjectsError(null);
     fetch("/api/projects")
@@ -165,6 +144,14 @@ function UploadPageContent() {
     setProcessing(false);
     setProcessingError(error.message);
     setUploadResponse(null);
+  }, []);
+
+  const handleModelsLoaded = useCallback((models: RoboflowModel[]) => {
+    setAvailableModels(models);
+  }, []);
+
+  const handleModelsError = useCallback((message: string | null) => {
+    setModelsError(message);
   }, []);
 
   return (
@@ -319,6 +306,8 @@ function UploadPageContent() {
                     <ModelSelector
                       selectedModels={selectedModelIds}
                       onSelectionChange={setSelectedModelIds}
+                      onModelsLoaded={handleModelsLoaded}
+                      onLoadError={handleModelsError}
                       disabled={!selectedProject}
                     />
                   )}

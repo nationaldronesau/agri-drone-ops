@@ -32,16 +32,27 @@ export default function ReviewQueuePage() {
   const loadSessions = async (nextFilter: QueueFilter) => {
     setLoading(true);
     setError(null);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
     try {
-      const res = await fetch(`/api/review/queue?assigned=${nextFilter}`);
+      const res = await fetch(`/api/review/queue?assigned=${nextFilter}`, {
+        signal: controller.signal,
+      });
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error("Failed to load review queue");
+        throw new Error(data?.error || "Failed to load review queue");
       }
-      const data = await res.json();
       setSessions(data.sessions || []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load review queue");
+      const message =
+        err instanceof Error && err.name === "AbortError"
+          ? "Review queue request timed out. Try again."
+          : err instanceof Error
+            ? err.message
+            : "Failed to load review queue";
+      setError(message);
     } finally {
+      clearTimeout(timeoutId);
       setLoading(false);
     }
   };

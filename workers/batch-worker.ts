@@ -82,7 +82,6 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
   let processedCount = 0;
   let totalDetections = 0;
   const errors: string[] = [];
-  let fatalError = false;
 
   // Get assets
   const assets = await prisma.asset.findMany({
@@ -267,22 +266,9 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
   }
 
   if (useConceptService && !useConcept) {
-    const message = 'Concept exemplar could not be created.';
-    await prisma.batchJob.update({
-      where: { id: batchJobId },
-      data: {
-        status: 'FAILED',
-        processedImages: 0,
-        detectionsFound: 0,
-        completedAt: new Date(),
-        errorMessage: message,
-      },
-    });
-    return {
-      processedImages: 0,
-      detectionsFound: 0,
-      errors: [message],
-    };
+    console.warn(
+      `[Worker] Job ${batchJobId}: Concept exemplar unavailable, continuing with fallback SAM3 predictions`
+    );
   }
 
   if (useSegmentCrops && !resolvedExemplarCrops.length && sourceImageBuffer) {
@@ -407,14 +393,19 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
           });
           if (!result.success) {
             console.warn(`[Worker] Job ${batchJobId}, Asset ${asset.id}: Exemplar prediction failed (${result.error}), falling back`);
-            if (useVisualCrops) {
+            const shouldTryBoxFallback =
+              boxes.length > 0 &&
+              (
+                !useVisualCrops ||
+                result.errorCode === 'UNSUPPORTED_EXEMPLAR_CROPS' ||
+                /extractor cues|source mask|exemplar/i.test(result.error || '')
+              );
+
+            if (!shouldTryBoxFallback && useVisualCrops) {
               errors.push(`Asset ${asset.id}: ${result.error || 'Visual exemplar prediction failed'}`);
-              if (result.errorCode === 'UNSUPPORTED_EXEMPLAR_CROPS') {
-                fatalError = true;
-                break;
-              }
               continue;
             }
+
             result = await sam3Orchestrator.predict({
               imageBuffer: imageData.buffer,
               boxes: boxes.length > 0 ? boxes : undefined,
@@ -489,21 +480,15 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
 
       console.log(`[Worker] Job ${batchJobId}: Processed ${processedCount}/${totalImages} images, ${totalDetections} detections`);
 
-      if (fatalError) {
-        break;
-      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
       errors.push(`Asset ${asset.id}: ${errorMessage}`);
       console.error(`[Worker] Error processing asset ${asset.id}:`, errorMessage);
-      if (fatalError) {
-        break;
-      }
     }
   }
 
   // Mark job complete
-  const finalStatus = fatalError || (errors.length > 0 && processedCount === 0) ? 'FAILED' : 'COMPLETED';
+  const finalStatus = errors.length > 0 && processedCount === 0 ? 'FAILED' : 'COMPLETED';
   await prisma.batchJob.update({
     where: { id: batchJobId },
     data: {

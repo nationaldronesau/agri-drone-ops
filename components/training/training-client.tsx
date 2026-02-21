@@ -668,32 +668,42 @@ export default function TrainingPage() {
     [bestModel]
   );
 
+  const readJsonResponse = useCallback(async (response: Response, fallbackMessage: string) => {
+    const raw = await response.text();
+    if (!raw) return {};
+    try {
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      throw new Error(`${fallbackMessage}: server returned invalid JSON (${response.status})`);
+    }
+  }, []);
+
   const loadProjects = useCallback(async () => {
     const response = await fetch("/api/projects?pageSize=200");
-    const data = await response.json();
+    const data = await readJsonResponse(response, "Failed to load projects");
     if (!response.ok) {
-      throw new Error(data?.error || "Failed to load projects");
+      throw new Error((data?.error as string) || "Failed to load projects");
     }
-    setProjects(data.projects || []);
-  }, []);
+    setProjects((data.projects as Project[]) || []);
+  }, [readJsonResponse]);
 
   const loadDatasets = useCallback(async () => {
     const response = await fetch("/api/training/datasets?limit=50");
-    const data = await response.json();
+    const data = await readJsonResponse(response, "Failed to load datasets");
     if (!response.ok) {
-      throw new Error(data?.error || "Failed to load datasets");
+      throw new Error((data?.error as string) || "Failed to load datasets");
     }
-    setDatasets(data.datasets || []);
-  }, []);
+    setDatasets((data.datasets as TrainingDataset[]) || []);
+  }, [readJsonResponse]);
 
   const loadJobs = useCallback(async () => {
     const response = await fetch("/api/training/jobs?limit=50");
-    const data = await response.json();
+    const data = await readJsonResponse(response, "Failed to load training jobs");
     if (!response.ok) {
-      throw new Error(data?.error || "Failed to load training jobs");
+      throw new Error((data?.error as string) || "Failed to load training jobs");
     }
-    setJobs(data.jobs || []);
-  }, []);
+    setJobs((data.jobs as TrainingJob[]) || []);
+  }, [readJsonResponse]);
 
   const loadModels = useCallback(async () => {
     const params = new URLSearchParams({ limit: "50" });
@@ -701,35 +711,35 @@ export default function TrainingPage() {
       params.set("projectId", settingsProjectId);
     }
     const response = await fetch(`/api/training/models?${params.toString()}`);
-    const data = await response.json();
+    const data = await readJsonResponse(response, "Failed to load models");
     if (!response.ok) {
-      throw new Error(data?.error || "Failed to load models");
+      throw new Error((data?.error as string) || "Failed to load models");
     }
-    setModels(data.models || []);
-  }, [settingsProjectId]);
+    setModels((data.models as TrainedModel[]) || []);
+  }, [settingsProjectId, readJsonResponse]);
 
   const loadInferenceJobs = useCallback(async () => {
     const response = await fetch("/api/inference/jobs?limit=30");
-    const data = await response.json();
+    const data = await readJsonResponse(response, "Failed to load inference jobs");
     if (!response.ok) {
-      throw new Error(data?.error || "Failed to load inference jobs");
+      throw new Error((data?.error as string) || "Failed to load inference jobs");
     }
-    setInferenceJobs(data.jobs || []);
-  }, []);
+    setInferenceJobs((data.jobs as InferenceJob[]) || []);
+  }, [readJsonResponse]);
 
   const loadHealth = useCallback(async () => {
     setHealth((prev) => ({ ...prev, loading: true }));
     try {
       const response = await fetch("/api/training/health");
-      const data = await response.json();
+      const data = await readJsonResponse(response, "Failed to check service health");
       if (!response.ok) {
-        throw new Error(data?.error || "Failed to check service health");
+        throw new Error((data?.error as string) || "Failed to check service health");
       }
       setHealth({
         loading: false,
         available: Boolean(data.available),
-        error: data.error,
-        details: data.health,
+        error: data.error as string | undefined,
+        details: data.health as HealthResponse | undefined,
       });
     } catch (err) {
       setHealth({
@@ -738,7 +748,7 @@ export default function TrainingPage() {
         error: err instanceof Error ? err.message : "Service unavailable",
       });
     }
-  }, []);
+  }, [readJsonResponse]);
 
   const loadJobMetricsHistory = useCallback(async (jobId: string) => {
     setJobHistory((prev) => ({
@@ -757,12 +767,13 @@ export default function TrainingPage() {
         throw new Error(data?.error || "Failed to load metrics history");
       }
 
-      const points = Array.isArray(data.history)
-        ? data.history
-            .map((entry: Record<string, unknown>) => normalizeHistoryPoint(entry))
-            .filter((entry): entry is TrainingHistoryPoint => Boolean(entry))
-            .sort((a, b) => a.epoch - b.epoch)
+      const history = Array.isArray(data.history)
+        ? (data.history as Record<string, unknown>[])
         : [];
+      const points: TrainingHistoryPoint[] = history
+        .map((entry) => normalizeHistoryPoint(entry))
+        .filter((entry): entry is TrainingHistoryPoint => entry !== null)
+        .sort((a, b) => a.epoch - b.epoch);
 
       setJobHistory((prev) => ({
         ...prev,
