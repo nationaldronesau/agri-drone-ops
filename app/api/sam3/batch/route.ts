@@ -26,6 +26,7 @@ import { sam3ConceptService, type ConceptDetection } from '@/lib/services/sam3-c
 import { normalizeDetectionType } from '@/lib/utils/detection-types';
 import { scaleExemplarBoxes } from '@/lib/utils/exemplar-scaling';
 import { buildExemplarCrops, normalizeExemplarCrops } from '@/lib/utils/exemplar-crops';
+import { S3Service } from '@/lib/services/s3';
 
 // Rate limiting (per-instance; use Redis for production multi-instance)
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
@@ -164,16 +165,21 @@ async function processSynchronously(
   ): Promise<{ buffer: Buffer } | null> => {
     let imageUrl: string;
 
-    if (asset.storageType?.toLowerCase() === 's3' && asset.s3Key && asset.s3Bucket) {
-      const signedUrlResponse = await fetch(`${BASE_URL}/api/assets/${asset.id}/signed-url`, {
-        headers: { 'X-Internal-Request': 'true' },
-      });
-      if (!signedUrlResponse.ok) {
-        errors.push(`Asset ${asset.id}: Failed to get signed URL`);
-        return null;
+    if (asset.storageType?.toLowerCase() === 's3' && asset.s3Key) {
+      try {
+        const signedUrl = asset.s3Bucket
+          ? await S3Service.getSignedUrl(asset.s3Key, 3600, asset.s3Bucket)
+          : await S3Service.getSignedUrl(asset.s3Key);
+        imageUrl = signedUrl;
+      } catch (signError) {
+        console.error(`[Sync] Asset ${asset.id}: Failed to generate signed URL directly`, signError);
+        if (asset.storageUrl && isUrlAllowed(asset.storageUrl)) {
+          imageUrl = asset.storageUrl;
+        } else {
+          errors.push(`Asset ${asset.id}: Failed to get signed URL`);
+          return null;
+        }
       }
-      const signedUrlData = await signedUrlResponse.json();
-      imageUrl = signedUrlData.url;
 
       if (!isUrlAllowed(imageUrl)) {
         errors.push(`Asset ${asset.id}: Invalid signed URL domain`);
