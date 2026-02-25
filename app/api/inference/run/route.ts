@@ -67,7 +67,7 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
     const {
-      modelId,
+      modelId: requestedModelId,
       projectId,
       assetIds,
       confidence = 0.25,
@@ -75,9 +75,9 @@ export async function POST(request: NextRequest) {
       preview = false,
     } = body;
 
-    if (!modelId || !projectId) {
+    if (!projectId) {
       return NextResponse.json(
-        { error: 'modelId and projectId are required' },
+        { error: 'projectId is required' },
         { status: 400 }
       );
     }
@@ -99,13 +99,21 @@ export async function POST(request: NextRequest) {
 
     const project = await prisma.project.findUnique({
       where: { id: projectId },
-      select: { inferenceBackend: true },
+      select: { inferenceBackend: true, activeModelId: true },
     });
     const backendPreference = (project?.inferenceBackend || 'AUTO').toLowerCase();
 
+    const effectiveModelId = requestedModelId || project?.activeModelId;
+    if (!effectiveModelId) {
+      return NextResponse.json(
+        { error: 'No model selected. Provide modelId or set an active model for this project.' },
+        { status: 400 }
+      );
+    }
+
     const model = await prisma.trainedModel.findFirst({
       where: {
-        id: modelId,
+        id: effectiveModelId,
         teamId: projectAccess.teamId,
       },
       select: {
@@ -157,7 +165,7 @@ export async function POST(request: NextRequest) {
       where: {
         ...baseWhere,
         detections: {
-          some: { customModelId: modelId },
+          some: { customModelId: effectiveModelId },
         },
       },
     });
@@ -165,7 +173,7 @@ export async function POST(request: NextRequest) {
     const candidateWhere: Record<string, unknown> = {
       ...baseWhere,
       detections: {
-        none: { customModelId: modelId },
+        none: { customModelId: effectiveModelId },
       },
     };
 
@@ -237,7 +245,7 @@ export async function POST(request: NextRequest) {
         status: 'PENDING',
         progress: 0,
         config: {
-          modelId,
+          modelId: effectiveModelId,
           modelName,
           confidence,
           saveDetections,
@@ -256,7 +264,7 @@ export async function POST(request: NextRequest) {
       const result = await processInferenceJob({
         jobId: processingJob.id,
         projectId,
-        modelId,
+        modelId: effectiveModelId,
         modelName,
         assetIds: assetIdList,
         confidence,
@@ -299,7 +307,7 @@ export async function POST(request: NextRequest) {
 
     await enqueueInferenceJob({
       processingJobId: processingJob.id,
-      modelId,
+      modelId: effectiveModelId,
       modelName,
       projectId,
       assetIds: assetIdList,
