@@ -17,6 +17,7 @@
  * Clients can poll GET /api/sam3/batch/[id] for status updates.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import sharp from 'sharp';
 import prisma from '@/lib/db';
 import { checkProjectAccess } from '@/lib/auth/api-auth';
 import { enqueueBatchJob, getQueueStats } from '@/lib/queue/batch-queue';
@@ -324,10 +325,48 @@ async function processSynchronously(
   }
 
   if (useSegmentCrops && !resolvedExemplarCrops.length && sourceImageBuffer) {
-    resolvedExemplarCrops = await buildExemplarCrops({
-      imageBuffer: sourceImageBuffer,
-      boxes: exemplars,
-    });
+    let cropBoxes = exemplars;
+
+    try {
+      const meta = await sharp(sourceImageBuffer).metadata();
+      const sourceW = meta.width || 0;
+      const sourceH = meta.height || 0;
+
+      if (
+        sourceW > 0 &&
+        sourceH > 0 &&
+        exemplarSourceWidth &&
+        exemplarSourceHeight &&
+        (sourceW !== exemplarSourceWidth || sourceH !== exemplarSourceHeight)
+      ) {
+        const scaled = scaleExemplarBoxes({
+          exemplars,
+          sourceWidth: exemplarSourceWidth,
+          sourceHeight: exemplarSourceHeight,
+          targetWidth: sourceW,
+          targetHeight: sourceH,
+          jobId: batchJobId,
+          assetId: resolvedSourceAssetId || 'source',
+        });
+        if (scaled.boxes.length > 0) {
+          cropBoxes = scaled.boxes;
+        }
+      }
+
+      resolvedExemplarCrops = await buildExemplarCrops({
+        imageBuffer: sourceImageBuffer,
+        boxes: cropBoxes,
+      });
+
+      if (resolvedExemplarCrops.length === 0) {
+        console.warn(
+          `[Sync] Job ${batchJobId}: Exemplar crop build returned 0 crops (boxes=${cropBoxes.length}, source=${sourceW}x${sourceH}, exemplar=${exemplarSourceWidth || 'na'}x${exemplarSourceHeight || 'na'})`
+        );
+      }
+    } catch (cropError) {
+      console.error(`[Sync] Job ${batchJobId}: Exemplar crop build error`, cropError);
+      resolvedExemplarCrops = [];
+    }
   }
 
   if (useSegmentCrops && resolvedExemplarCrops.length === 0) {
