@@ -232,7 +232,7 @@ async function processSynchronously(
   const conceptConfigured = sam3ConceptService.isConfigured();
   const useVisualCropsOnly = Boolean(useVisualCrops);
   const useConceptService = conceptConfigured && !useVisualCropsOnly;
-  const useSegmentCrops = useVisualCropsOnly;
+  let useSegmentCrops = useVisualCropsOnly;
   let useConcept = false;
   let sourceImageBuffer: Buffer | null = null;
 
@@ -331,23 +331,10 @@ async function processSynchronously(
   }
 
   if (useSegmentCrops && resolvedExemplarCrops.length === 0) {
-    const message = 'Visual crops requested but no exemplar crops could be built from the source image.';
-    await prisma.batchJob.update({
-      where: { id: batchJobId },
-      data: {
-        status: 'FAILED',
-        processedImages: 0,
-        detectionsFound: 0,
-        completedAt: new Date(),
-        errorMessage: message,
-      },
-    });
-    return {
-      processedImages: 0,
-      detectionsFound: 0,
-      errors: [message],
-      status: 'FAILED',
-    };
+    const message = 'Visual crops requested but no exemplar crops could be built from the source image. Falling back to box-based SAM3 propagation.';
+    console.warn(`[Sync] Job ${batchJobId}: ${message}`);
+    errors.push(message);
+    useSegmentCrops = false;
   }
 
   for (let i = 0; i < assets.length; i++) {
