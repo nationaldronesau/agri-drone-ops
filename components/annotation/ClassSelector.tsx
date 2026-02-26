@@ -88,6 +88,8 @@ export function ClassSelector({
   const [newClassName, setNewClassName] = useState("");
   const [newClassColor, setNewClassColor] = useState(PREDEFINED_COLORS[0]);
   const [isAdding, setIsAdding] = useState(false);
+  const [classesError, setClassesError] = useState<string | null>(null);
+  const [classesReloadKey, setClassesReloadKey] = useState(0);
 
   // Load classes from API when projectId is provided
   useEffect(() => {
@@ -97,27 +99,45 @@ export function ClassSelector({
     const loadClasses = async () => {
       try {
         const response = await fetch(`/api/annotation-classes?projectId=${projectId}`);
-        if (response.ok) {
-          const data = await response.json();
-          if (!cancelled && Array.isArray(data) && data.length > 0) {
-            const mapped: WeedClass[] = data.map((c: { id: string; name: string; color: string; sortOrder: number }, idx: number) => ({
-              id: c.id,
-              name: c.name,
-              color: c.color,
-              hotkey: idx < 9 ? idx + 1 : (idx === data.length - 1 && data.length <= 10 ? 0 : undefined),
-            }));
-            setLoadedClasses(mapped);
-            onClassesLoaded?.(mapped);
+        if (!response.ok) {
+          const errorBody = await response.json().catch(() => null) as { error?: string; code?: string } | null;
+          if (!cancelled) {
+            setLoadedClasses(null);
+            if (errorBody?.code?.includes('UNAVAILABLE')) {
+              setClassesError('Project classes are temporarily unavailable. Using defaults for now.');
+            } else {
+              setClassesError(errorBody?.error || 'Failed to load project classes. Using defaults for now.');
+            }
           }
+          return;
+        }
+
+        const data = await response.json();
+        if (!cancelled && Array.isArray(data) && data.length > 0) {
+          const mapped: WeedClass[] = data.map((c: { id: string; name: string; color: string; sortOrder: number }, idx: number) => ({
+            id: c.id,
+            name: c.name,
+            color: c.color,
+            hotkey: idx < 9 ? idx + 1 : (idx === data.length - 1 && data.length <= 10 ? 0 : undefined),
+          }));
+          setLoadedClasses(mapped);
+          setClassesError(null);
+          onClassesLoaded?.(mapped);
+        } else if (!cancelled) {
+          setLoadedClasses(null);
+          setClassesError(null);
         }
       } catch {
-        // Ignore - will use defaults
+        if (!cancelled) {
+          setLoadedClasses(null);
+          setClassesError('Could not reach annotation classes service. Using defaults for now.');
+        }
       }
     };
 
     loadClasses();
     return () => { cancelled = true; };
-  }, [projectId, onClassesLoaded]);
+  }, [projectId, onClassesLoaded, classesReloadKey]);
 
   const classes = externalClasses || loadedClasses || DEFAULT_WEED_CLASSES;
 
@@ -150,10 +170,15 @@ export function ClassSelector({
         });
         setNewClassName("");
         setShowAddForm(false);
+        setClassesError(null);
         onClassSelect(created.name);
+      } else {
+        const errorBody = await response.json().catch(() => null) as { error?: string } | null;
+        setClassesError(errorBody?.error || 'Failed to add class. Please retry.');
       }
     } catch (err) {
       console.error('Failed to add class:', err);
+      setClassesError('Failed to add class. Please retry.');
     } finally {
       setIsAdding(false);
     }
@@ -211,6 +236,19 @@ export function ClassSelector({
             className="w-full text-xs py-1 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
           >
             {isAdding ? "Adding..." : "Add Class"}
+          </button>
+        </div>
+      )}
+
+      {classesError && projectId && (
+        <div className="mx-1 mb-2 rounded border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-800">
+          <div>{classesError}</div>
+          <button
+            type="button"
+            onClick={() => setClassesReloadKey((prev) => prev + 1)}
+            className="mt-1 text-amber-900 underline underline-offset-2"
+          >
+            Retry loading classes
           </button>
         </div>
       )}

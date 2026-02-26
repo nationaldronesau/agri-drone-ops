@@ -13,6 +13,7 @@
  */
 import { Worker, Job } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
+import sharp from 'sharp';
 import { createRedisConnection, QUEUE_PREFIX } from '../lib/queue/redis';
 import { BATCH_QUEUE_NAME, BatchJobData, BatchJobResult } from '../lib/queue/batch-queue';
 import { sam3Orchestrator } from '../lib/services/sam3-orchestrator';
@@ -20,6 +21,8 @@ import { sam3ConceptService, type ConceptDetection } from '../lib/services/sam3-
 import { normalizeDetectionType } from '../lib/utils/detection-types';
 import { scaleExemplarBoxes } from '../lib/utils/exemplar-scaling';
 import { buildExemplarCrops, normalizeExemplarCrops } from '../lib/utils/exemplar-crops';
+import { logStructured } from '../lib/utils/structured-log';
+import { S3Service } from '../lib/services/s3';
 import {
   startShutdownScheduler,
   stopShutdownScheduler,
@@ -68,6 +71,15 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
     assetIds
   } = job.data;
 
+  logStructured('info', 'sam3_batch.job_started', {
+    batchJobId,
+    projectId,
+    assetCount: assetIds.length,
+    exemplarCount: exemplars.length,
+    providedCropCount: exemplarCrops?.length ?? 0,
+    useVisualCrops: Boolean(useVisualCrops),
+    sourceAssetId: sourceAssetId ?? null,
+  });
   console.log(`[Worker] Starting batch job ${batchJobId} with ${assetIds.length} images`);
 
   // Update job status to PROCESSING
@@ -113,16 +125,28 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
   ): Promise<{ buffer: Buffer } | null> => {
     let imageUrl: string;
 
-    if (asset.storageType?.toLowerCase() === 's3' && asset.s3Key && asset.s3Bucket) {
-      const signedUrlResponse = await fetch(`${BASE_URL}/api/assets/${asset.id}/signed-url`, {
-        headers: { 'X-Internal-Request': 'true' },
-      });
-      if (!signedUrlResponse.ok) {
-        errors.push(`Asset ${asset.id}: Failed to get signed URL`);
-        return null;
+    if (asset.storageType?.toLowerCase() === 's3' && asset.s3Key) {
+      try {
+        const signedUrl = asset.s3Bucket
+          ? await S3Service.getSignedUrl(asset.s3Key, 3600, asset.s3Bucket)
+          : await S3Service.getSignedUrl(asset.s3Key);
+        imageUrl = signedUrl;
+      } catch (signError) {
+        logStructured('warn', 'sam3_batch.asset_signed_url_fallback', {
+          batchJobId,
+          assetId: asset.id,
+          storageType: asset.storageType,
+          hasStorageUrl: Boolean(asset.storageUrl),
+          error: signError,
+        });
+
+        if (asset.storageUrl && isUrlAllowed(asset.storageUrl)) {
+          imageUrl = asset.storageUrl;
+        } else {
+          errors.push(`Asset ${asset.id}: Failed to get signed URL`);
+          return null;
+        }
       }
-      const signedUrlData = await signedUrlResponse.json();
-      imageUrl = signedUrlData.url;
 
       if (!isUrlAllowed(imageUrl)) {
         errors.push(`Asset ${asset.id}: Invalid signed URL domain`);
@@ -175,7 +199,7 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
   const conceptConfigured = sam3ConceptService.isConfigured();
   const useVisualCropsOnly = Boolean(useVisualCrops);
   const useConceptService = conceptConfigured && !useVisualCropsOnly;
-  const useSegmentCrops = useVisualCropsOnly;
+  let useSegmentCrops = useVisualCropsOnly;
   let useConcept = false;
   let sourceImageBuffer: Buffer | null = null;
 
@@ -272,29 +296,78 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
   }
 
   if (useSegmentCrops && !resolvedExemplarCrops.length && sourceImageBuffer) {
-    resolvedExemplarCrops = await buildExemplarCrops({
-      imageBuffer: sourceImageBuffer,
-      boxes: exemplars,
+    let cropBoxes = exemplars;
+
+    try {
+      const meta = await sharp(sourceImageBuffer).metadata();
+      const sourceW = meta.width || 0;
+      const sourceH = meta.height || 0;
+
+      if (
+        sourceW > 0 &&
+        sourceH > 0 &&
+        exemplarSourceWidth &&
+        exemplarSourceHeight &&
+        (sourceW !== exemplarSourceWidth || sourceH !== exemplarSourceHeight)
+      ) {
+        const scaled = scaleExemplarBoxes({
+          exemplars,
+          sourceWidth: exemplarSourceWidth,
+          sourceHeight: exemplarSourceHeight,
+          targetWidth: sourceW,
+          targetHeight: sourceH,
+          jobId: batchJobId,
+          assetId: resolvedSourceAssetId || 'source',
+        });
+        if (scaled.boxes.length > 0) {
+          cropBoxes = scaled.boxes;
+        }
+      }
+
+      resolvedExemplarCrops = await buildExemplarCrops({
+        imageBuffer: sourceImageBuffer,
+        boxes: cropBoxes,
+      });
+
+      logStructured('info', 'sam3_batch.exemplar_crop_build', {
+        batchJobId,
+        sourceAssetId: resolvedSourceAssetId ?? null,
+        sourceWidth: sourceW,
+        sourceHeight: sourceH,
+        exemplarSourceWidth: exemplarSourceWidth ?? null,
+        exemplarSourceHeight: exemplarSourceHeight ?? null,
+        inputBoxCount: exemplars.length,
+        scaledBoxCount: cropBoxes.length,
+        builtCropCount: resolvedExemplarCrops.length,
+      });
+    } catch (cropError) {
+      logStructured('error', 'sam3_batch.exemplar_crop_build_failed', {
+        batchJobId,
+        sourceAssetId: resolvedSourceAssetId ?? null,
+        error: cropError,
+      });
+      resolvedExemplarCrops = [];
+    }
+  } else if (useSegmentCrops && !resolvedExemplarCrops.length && !sourceImageBuffer) {
+    logStructured('warn', 'sam3_batch.source_image_unavailable_for_crops', {
+      batchJobId,
+      sourceAssetId: resolvedSourceAssetId ?? null,
+      useVisualCropsOnly,
     });
   }
 
   if (useSegmentCrops && resolvedExemplarCrops.length === 0) {
-    const message = 'Visual crops requested but no exemplar crops could be built from the source image.';
-    await prisma.batchJob.update({
-      where: { id: batchJobId },
-      data: {
-        status: 'FAILED',
-        processedImages: 0,
-        detectionsFound: 0,
-        completedAt: new Date(),
-        errorMessage: message,
-      },
+    const message = 'Visual crops requested but exemplar crops were unavailable from the source image. Continuing with box prompts for this run. Reopen the source image and redraw exemplars to restore visual crop matching.';
+    logStructured('warn', 'sam3_batch.visual_crops_fallback', {
+      batchJobId,
+      sourceAssetId: resolvedSourceAssetId ?? null,
+      exemplarCount: exemplars.length,
+      providedCropCount: exemplarCrops?.length ?? 0,
+      sourceImageAvailable: Boolean(sourceImageBuffer),
+      action: 'retry_from_source_image_with_visual_crops',
     });
-    return {
-      processedImages: 0,
-      detectionsFound: 0,
-      errors: [message],
-    };
+    errors.push(message);
+    useSegmentCrops = false;
   }
 
   for (let i = 0; i < assets.length; i++) {
@@ -501,6 +574,13 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
   });
 
   console.log(`[Worker] Job ${batchJobId} completed: ${processedCount} images, ${totalDetections} detections, ${errors.length} errors`);
+  logStructured('info', 'sam3_batch.job_completed', {
+    batchJobId,
+    status: finalStatus,
+    processedImages: processedCount,
+    detectionsFound: totalDetections,
+    errorCount: errors.length,
+  });
 
   return {
     processedImages: processedCount,

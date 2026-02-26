@@ -27,6 +27,7 @@ import { sam3ConceptService, type ConceptDetection } from '@/lib/services/sam3-c
 import { normalizeDetectionType } from '@/lib/utils/detection-types';
 import { scaleExemplarBoxes } from '@/lib/utils/exemplar-scaling';
 import { buildExemplarCrops, normalizeExemplarCrops } from '@/lib/utils/exemplar-crops';
+import { logStructured } from '@/lib/utils/structured-log';
 import { S3Service } from '@/lib/services/s3';
 
 // Rate limiting (per-instance; use Redis for production multi-instance)
@@ -358,6 +359,18 @@ async function processSynchronously(
         boxes: cropBoxes,
       });
 
+      logStructured('info', 'sam3_batch.sync_exemplar_crop_build', {
+        batchJobId,
+        sourceAssetId: resolvedSourceAssetId ?? null,
+        sourceWidth: sourceW,
+        sourceHeight: sourceH,
+        exemplarSourceWidth: exemplarSourceWidth ?? null,
+        exemplarSourceHeight: exemplarSourceHeight ?? null,
+        inputBoxCount: exemplars.length,
+        scaledBoxCount: cropBoxes.length,
+        builtCropCount: resolvedExemplarCrops.length,
+      });
+
       if (resolvedExemplarCrops.length === 0) {
         console.warn(
           `[Sync] Job ${batchJobId}: Exemplar crop build returned 0 crops (boxes=${cropBoxes.length}, source=${sourceW}x${sourceH}, exemplar=${exemplarSourceWidth || 'na'}x${exemplarSourceHeight || 'na'})`
@@ -365,13 +378,26 @@ async function processSynchronously(
       }
     } catch (cropError) {
       console.error(`[Sync] Job ${batchJobId}: Exemplar crop build error`, cropError);
+      logStructured('error', 'sam3_batch.sync_exemplar_crop_build_failed', {
+        batchJobId,
+        sourceAssetId: resolvedSourceAssetId ?? null,
+        error: cropError,
+      });
       resolvedExemplarCrops = [];
     }
   }
 
   if (useSegmentCrops && resolvedExemplarCrops.length === 0) {
-    const message = 'Visual crops requested but no exemplar crops could be built from the source image. Falling back to box-based SAM3 propagation.';
+    const message = 'Visual crops requested but exemplar crops were unavailable from the source image. Continuing with box prompts for this run. Reopen the source image and redraw exemplars to restore visual crop matching.';
     console.warn(`[Sync] Job ${batchJobId}: ${message}`);
+    logStructured('warn', 'sam3_batch.sync_visual_crops_fallback', {
+      batchJobId,
+      sourceAssetId: resolvedSourceAssetId ?? null,
+      exemplarCount: exemplars.length,
+      providedCropCount: exemplarCrops?.length ?? 0,
+      sourceImageAvailable: Boolean(sourceImageBuffer),
+      action: 'retry_from_source_image_with_visual_crops',
+    });
     errors.push(message);
     useSegmentCrops = false;
   }
@@ -618,6 +644,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       sourceAssetId: body.sourceAssetId,
       useVisualCrops: body.useVisualCrops,
       assetIdCount: body.assetIds?.length,
+    });
+    logStructured('info', 'sam3_batch.request_received', {
+      projectId: body.projectId ?? null,
+      weedType: body.weedType ?? null,
+      exemplarCount: body.exemplars?.length ?? 0,
+      exemplarCropCount: body.exemplarCrops?.length ?? 0,
+      sourceAssetId: body.sourceAssetId ?? null,
+      useVisualCrops: body.useVisualCrops ?? null,
+      requestedAssetCount: body.assetIds?.length ?? null,
     });
 
     // Validate required fields
