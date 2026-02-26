@@ -60,6 +60,10 @@ interface SAM3Point {
   label: 0 | 1;
 }
 
+const MAX_VISUAL_EXEMPLAR_CROPS = 10;
+const MAX_VISUAL_EXEMPLAR_DIMENSION = 512;
+const VISUAL_EXEMPLAR_JPEG_QUALITY = 0.85;
+
 function hexToRgba(hex: string, alpha: number): string {
   const normalized = hex.replace("#", "");
   if (normalized.length !== 6) return `rgba(14,165,233,${alpha})`;
@@ -1306,6 +1310,66 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     }
   }, [session, boxExemplars, selectedClass, clearBoxExemplars]);
 
+  const buildVisualExemplarCrops = useCallback((): string[] => {
+    const image = imageRef.current;
+    if (!image || !image.complete || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+      return [];
+    }
+
+    const crops: string[] = [];
+    for (const exemplar of boxExemplars.slice(0, MAX_VISUAL_EXEMPLAR_CROPS)) {
+      const minX = Math.min(exemplar.box.x1, exemplar.box.x2);
+      const minY = Math.min(exemplar.box.y1, exemplar.box.y2);
+      const maxX = Math.max(exemplar.box.x1, exemplar.box.x2);
+      const maxY = Math.max(exemplar.box.y1, exemplar.box.y2);
+
+      const left = Math.max(0, Math.min(image.naturalWidth - 1, Math.round(minX)));
+      const top = Math.max(0, Math.min(image.naturalHeight - 1, Math.round(minY)));
+      const right = Math.max(left + 1, Math.min(image.naturalWidth, Math.round(maxX)));
+      const bottom = Math.max(top + 1, Math.min(image.naturalHeight, Math.round(maxY)));
+
+      const width = right - left;
+      const height = bottom - top;
+      if (width <= 1 || height <= 1) {
+        continue;
+      }
+
+      const scale = Math.min(1, MAX_VISUAL_EXEMPLAR_DIMENSION / Math.max(width, height));
+      const outputWidth = Math.max(1, Math.round(width * scale));
+      const outputHeight = Math.max(1, Math.round(height * scale));
+
+      const canvas = document.createElement('canvas');
+      canvas.width = outputWidth;
+      canvas.height = outputHeight;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        continue;
+      }
+
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = 'high';
+      context.drawImage(
+        image,
+        left,
+        top,
+        width,
+        height,
+        0,
+        0,
+        outputWidth,
+        outputHeight
+      );
+
+      const dataUrl = canvas.toDataURL('image/jpeg', VISUAL_EXEMPLAR_JPEG_QUALITY);
+      const base64 = dataUrl.split(',')[1];
+      if (base64) {
+        crops.push(base64);
+      }
+    }
+
+    return crops;
+  }, [boxExemplars]);
+
   // Apply exemplars to all project images (requires Redis for batch queue)
   const applyToAllImages = useCallback(async () => {
     if (!session?.asset?.project?.id || boxExemplars.length === 0) return;
@@ -1318,6 +1382,28 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     }
 
     const sourceAssetId = exemplarAssetIds[0];
+    let visualExemplarCrops: string[] | undefined;
+
+    if (useVisualCrops) {
+      if (sourceAssetId !== session.asset.id) {
+        setSam3Error('Visual crop mode requires running from the source image where exemplars were drawn.');
+        setTimeout(() => setSam3Error(null), 5000);
+        return;
+      }
+
+      visualExemplarCrops = buildVisualExemplarCrops();
+      if (visualExemplarCrops.length === 0) {
+        setSam3Error('Could not extract visual exemplar crops. Reload the source image, redraw exemplars, then retry.');
+        setTimeout(() => setSam3Error(null), 5000);
+        return;
+      }
+
+      console.log('[Batch] Built visual exemplar crops on client', {
+        sourceAssetId,
+        exemplarCount: boxExemplars.length,
+        cropCount: visualExemplarCrops.length,
+      });
+    }
 
     setBatchProcessing(true);
     setSam3Error(null);
@@ -1355,6 +1441,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
           // No assetIds = process all images in project
           textPrompt: selectedClass,
           useVisualCrops,
+          exemplarCrops: visualExemplarCrops,
         }),
       });
 
@@ -1381,7 +1468,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     } finally {
       setBatchProcessing(false);
     }
-  }, [session, boxExemplars, selectedClass, useVisualCrops]);
+  }, [session, boxExemplars, selectedClass, useVisualCrops, buildVisualExemplarCrops]);
 
   useEffect(() => {
     if (!batchJobId) return;

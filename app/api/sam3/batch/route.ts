@@ -17,6 +17,7 @@
  * Clients can poll GET /api/sam3/batch/[id] for status updates.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import sharp from 'sharp';
 import prisma from '@/lib/db';
 import { checkProjectAccess } from '@/lib/auth/api-auth';
 import { enqueueBatchJob, getQueueStats } from '@/lib/queue/batch-queue';
@@ -26,6 +27,8 @@ import { sam3ConceptService, type ConceptDetection } from '@/lib/services/sam3-c
 import { normalizeDetectionType } from '@/lib/utils/detection-types';
 import { scaleExemplarBoxes } from '@/lib/utils/exemplar-scaling';
 import { buildExemplarCrops, normalizeExemplarCrops } from '@/lib/utils/exemplar-crops';
+import { logStructured } from '@/lib/utils/structured-log';
+import { S3Service } from '@/lib/services/s3';
 
 // Rate limiting (per-instance; use Redis for production multi-instance)
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
@@ -164,16 +167,21 @@ async function processSynchronously(
   ): Promise<{ buffer: Buffer } | null> => {
     let imageUrl: string;
 
-    if (asset.storageType?.toLowerCase() === 's3' && asset.s3Key && asset.s3Bucket) {
-      const signedUrlResponse = await fetch(`${BASE_URL}/api/assets/${asset.id}/signed-url`, {
-        headers: { 'X-Internal-Request': 'true' },
-      });
-      if (!signedUrlResponse.ok) {
-        errors.push(`Asset ${asset.id}: Failed to get signed URL`);
-        return null;
+    if (asset.storageType?.toLowerCase() === 's3' && asset.s3Key) {
+      try {
+        const signedUrl = asset.s3Bucket
+          ? await S3Service.getSignedUrl(asset.s3Key, 3600, asset.s3Bucket)
+          : await S3Service.getSignedUrl(asset.s3Key);
+        imageUrl = signedUrl;
+      } catch (signError) {
+        console.error(`[Sync] Asset ${asset.id}: Failed to generate signed URL directly`, signError);
+        if (asset.storageUrl && isUrlAllowed(asset.storageUrl)) {
+          imageUrl = asset.storageUrl;
+        } else {
+          errors.push(`Asset ${asset.id}: Failed to get signed URL`);
+          return null;
+        }
       }
-      const signedUrlData = await signedUrlResponse.json();
-      imageUrl = signedUrlData.url;
 
       if (!isUrlAllowed(imageUrl)) {
         errors.push(`Asset ${asset.id}: Invalid signed URL domain`);
@@ -226,7 +234,7 @@ async function processSynchronously(
   const conceptConfigured = sam3ConceptService.isConfigured();
   const useVisualCropsOnly = Boolean(useVisualCrops);
   const useConceptService = conceptConfigured && !useVisualCropsOnly;
-  const useSegmentCrops = useVisualCropsOnly;
+  let useSegmentCrops = useVisualCropsOnly;
   let useConcept = false;
   let sourceImageBuffer: Buffer | null = null;
 
@@ -318,30 +326,80 @@ async function processSynchronously(
   }
 
   if (useSegmentCrops && !resolvedExemplarCrops.length && sourceImageBuffer) {
-    resolvedExemplarCrops = await buildExemplarCrops({
-      imageBuffer: sourceImageBuffer,
-      boxes: exemplars,
-    });
+    let cropBoxes = exemplars;
+
+    try {
+      const meta = await sharp(sourceImageBuffer).metadata();
+      const sourceW = meta.width || 0;
+      const sourceH = meta.height || 0;
+
+      if (
+        sourceW > 0 &&
+        sourceH > 0 &&
+        exemplarSourceWidth &&
+        exemplarSourceHeight &&
+        (sourceW !== exemplarSourceWidth || sourceH !== exemplarSourceHeight)
+      ) {
+        const scaled = scaleExemplarBoxes({
+          exemplars,
+          sourceWidth: exemplarSourceWidth,
+          sourceHeight: exemplarSourceHeight,
+          targetWidth: sourceW,
+          targetHeight: sourceH,
+          jobId: batchJobId,
+          assetId: resolvedSourceAssetId || 'source',
+        });
+        if (scaled.boxes.length > 0) {
+          cropBoxes = scaled.boxes;
+        }
+      }
+
+      resolvedExemplarCrops = await buildExemplarCrops({
+        imageBuffer: sourceImageBuffer,
+        boxes: cropBoxes,
+      });
+
+      logStructured('info', 'sam3_batch.sync_exemplar_crop_build', {
+        batchJobId,
+        sourceAssetId: resolvedSourceAssetId ?? null,
+        sourceWidth: sourceW,
+        sourceHeight: sourceH,
+        exemplarSourceWidth: exemplarSourceWidth ?? null,
+        exemplarSourceHeight: exemplarSourceHeight ?? null,
+        inputBoxCount: exemplars.length,
+        scaledBoxCount: cropBoxes.length,
+        builtCropCount: resolvedExemplarCrops.length,
+      });
+
+      if (resolvedExemplarCrops.length === 0) {
+        console.warn(
+          `[Sync] Job ${batchJobId}: Exemplar crop build returned 0 crops (boxes=${cropBoxes.length}, source=${sourceW}x${sourceH}, exemplar=${exemplarSourceWidth || 'na'}x${exemplarSourceHeight || 'na'})`
+        );
+      }
+    } catch (cropError) {
+      console.error(`[Sync] Job ${batchJobId}: Exemplar crop build error`, cropError);
+      logStructured('error', 'sam3_batch.sync_exemplar_crop_build_failed', {
+        batchJobId,
+        sourceAssetId: resolvedSourceAssetId ?? null,
+        error: cropError,
+      });
+      resolvedExemplarCrops = [];
+    }
   }
 
   if (useSegmentCrops && resolvedExemplarCrops.length === 0) {
-    const message = 'Visual crops requested but no exemplar crops could be built from the source image.';
-    await prisma.batchJob.update({
-      where: { id: batchJobId },
-      data: {
-        status: 'FAILED',
-        processedImages: 0,
-        detectionsFound: 0,
-        completedAt: new Date(),
-        errorMessage: message,
-      },
+    const message = 'Visual crops requested but exemplar crops were unavailable from the source image. Continuing with box prompts for this run. Reopen the source image and redraw exemplars to restore visual crop matching.';
+    console.warn(`[Sync] Job ${batchJobId}: ${message}`);
+    logStructured('warn', 'sam3_batch.sync_visual_crops_fallback', {
+      batchJobId,
+      sourceAssetId: resolvedSourceAssetId ?? null,
+      exemplarCount: exemplars.length,
+      providedCropCount: exemplarCrops?.length ?? 0,
+      sourceImageAvailable: Boolean(sourceImageBuffer),
+      action: 'retry_from_source_image_with_visual_crops',
     });
-    return {
-      processedImages: 0,
-      detectionsFound: 0,
-      errors: [message],
-      status: 'FAILED',
-    };
+    errors.push(message);
+    useSegmentCrops = false;
   }
 
   for (let i = 0; i < assets.length; i++) {
@@ -586,6 +644,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       sourceAssetId: body.sourceAssetId,
       useVisualCrops: body.useVisualCrops,
       assetIdCount: body.assetIds?.length,
+    });
+    logStructured('info', 'sam3_batch.request_received', {
+      projectId: body.projectId ?? null,
+      weedType: body.weedType ?? null,
+      exemplarCount: body.exemplars?.length ?? 0,
+      exemplarCropCount: body.exemplarCrops?.length ?? 0,
+      sourceAssetId: body.sourceAssetId ?? null,
+      useVisualCrops: body.useVisualCrops ?? null,
+      requestedAssetCount: body.assetIds?.length ?? null,
     });
 
     // Validate required fields
