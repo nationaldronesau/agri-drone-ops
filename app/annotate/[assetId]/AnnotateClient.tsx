@@ -1384,30 +1384,37 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     const sourceAssetId = exemplarAssetIds[0];
     let visualExemplarCrops: string[] | undefined;
 
-    if (useVisualCrops) {
-      if (sourceAssetId !== session.asset.id) {
-        setSam3Error('Visual crop mode requires running from the source image where exemplars were drawn.');
-        setTimeout(() => setSam3Error(null), 5000);
-        return;
-      }
-
-      visualExemplarCrops = buildVisualExemplarCrops();
-      if (visualExemplarCrops.length === 0) {
-        setSam3Error('Could not extract visual exemplar crops. Reload the source image, redraw exemplars, then retry.');
-        setTimeout(() => setSam3Error(null), 5000);
-        return;
-      }
-
-      console.log('[Batch] Built visual exemplar crops on client', {
-        sourceAssetId,
-        exemplarCount: boxExemplars.length,
-        cropCount: visualExemplarCrops.length,
-      });
-    }
-
     setBatchProcessing(true);
     setSam3Error(null);
     try {
+      if (useVisualCrops) {
+        if (sourceAssetId !== session.asset.id) {
+          setSam3Error('Visual crop mode requires running from the source image where exemplars were drawn.');
+          setTimeout(() => setSam3Error(null), 5000);
+          return;
+        }
+
+        try {
+          visualExemplarCrops = buildVisualExemplarCrops();
+        } catch (cropBuildError) {
+          console.error('[Batch] Failed to build visual exemplar crops', cropBuildError);
+          setSam3Error('Could not extract visual exemplar crops from the source image. Please reload, redraw exemplars, and retry.');
+          setTimeout(() => setSam3Error(null), 5000);
+          return;
+        }
+
+        if (!visualExemplarCrops || visualExemplarCrops.length === 0) {
+          setSam3Error('Could not extract visual exemplar crops. Reload the source image, redraw exemplars, then retry.');
+          setTimeout(() => setSam3Error(null), 5000);
+          return;
+        }
+
+        console.log('[Batch] Built visual exemplar crops on client', {
+          sourceAssetId,
+          exemplarCount: boxExemplars.length,
+          cropCount: visualExemplarCrops.length,
+        });
+      }
       // Check if source image has dimensions for proper scaling
       if (sourceAssetId === session.asset.id && (!session.asset.imageWidth || !session.asset.imageHeight)) {
         console.warn('[Batch] Source image missing dimensions - scaling may be inaccurate');
@@ -2262,6 +2269,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
               className="hidden"
               width={session.asset.imageWidth ?? 1}
               height={session.asset.imageHeight ?? 1}
+              crossOrigin="anonymous"
               unoptimized
             />
             <canvas
