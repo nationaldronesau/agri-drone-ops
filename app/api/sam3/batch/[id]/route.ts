@@ -134,6 +134,7 @@ export async function GET(
         processedImages: batchJob.processedImages,
         detectionsFound: batchJob.detectionsFound,
         errorMessage: batchJob.errorMessage,
+        completedWithWarnings: batchJob.status === 'COMPLETED' && Boolean(batchJob.errorMessage),
         createdAt: batchJob.createdAt,
         startedAt: batchJob.startedAt,
         completedAt: batchJob.completedAt,

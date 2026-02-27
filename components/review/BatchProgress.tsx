@@ -15,6 +15,7 @@ export function BatchProgress({ processed, total, status, onReview, errorMessage
   const progress = total > 0 ? Math.round((processed / total) * 100) : 0;
   const isComplete = status === 'COMPLETED';
   const showError = status === 'FAILED' && errorMessage;
+  const showWarning = status === 'COMPLETED' && errorMessage;
 
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
@@ -25,6 +26,11 @@ export function BatchProgress({ processed, total, status, onReview, errorMessage
       <Progress value={progress} className="mt-2" />
       {showError && (
         <div className="mt-2 text-xs text-red-600">
+          {errorMessage}
+        </div>
+      )}
+      {showWarning && (
+        <div className="mt-2 text-xs text-amber-700">
           {errorMessage}
         </div>
       )}
