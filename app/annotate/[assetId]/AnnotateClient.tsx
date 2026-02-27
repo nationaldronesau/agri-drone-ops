@@ -250,6 +250,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const [sam3Health, setSam3Health] = useState<SAM3HealthResponse | null>(null);
   const [sam3ConceptStatus, setSam3ConceptStatus] = useState<SAM3ConceptStatusResponse | null>(null);
   const conceptWarmupTriggeredRef = useRef(false);
+  const sam3RequestSeqRef = useRef(0);
   const [sam3Points, setSam3Points] = useState<SAM3Point[]>([]);
   const [sam3PreviewPolygon, setSam3PreviewPolygon] = useState<[number, number][] | null>(null);
   const [sam3Loading, setSam3Loading] = useState(false);
@@ -721,6 +722,8 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const runSam3Prediction = useCallback(async (points: SAM3Point[]) => {
     if (!session?.asset?.id || points.length === 0) return;
 
+    const requestSeq = ++sam3RequestSeqRef.current;
+
     try {
       setSam3Loading(true);
       setSam3Error(null);
@@ -735,6 +738,10 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         }),
       });
 
+      if (requestSeq !== sam3RequestSeqRef.current) {
+        return;
+      }
+
       if (response.status === 429) {
         const retryAfter = response.headers.get('Retry-After');
         setSam3Error(`Rate limit reached. Please wait ${retryAfter || 'a moment'} and try again.`);
@@ -748,6 +755,9 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       }
 
       const result = await response.json();
+      if (requestSeq !== sam3RequestSeqRef.current) {
+        return;
+      }
       console.log('[SAM3] Prediction result:', result);
       if (result.backend) setSam3Backend(result.backend);
 
@@ -771,7 +781,9 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       console.error('[SAM3] Connection error:', err);
       setSam3Error('Connection error. Please check your network.');
     } finally {
-      setSam3Loading(false);
+      if (requestSeq === sam3RequestSeqRef.current) {
+        setSam3Loading(false);
+      }
     }
   }, [session?.asset?.id, selectedClass]);
 
@@ -1436,13 +1448,17 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
             }
           : {};
 
+      const exemplarBoxesForBatch = useVisualCrops
+        ? boxExemplars.slice(0, MAX_VISUAL_EXEMPLARS).map(e => e.box)
+        : boxExemplars.map(e => e.box);
+
       const response = await fetch('/api/sam3/batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           projectId: session.asset.project.id,
           weedType: selectedClass,
-          exemplars: boxExemplars.map(e => e.box),
+          exemplars: exemplarBoxesForBatch,
           ...sourceDimensions,
           sourceAssetId,
           // No assetIds = process all images in project
