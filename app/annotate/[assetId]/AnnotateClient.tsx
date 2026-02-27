@@ -2285,7 +2285,6 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
               className="hidden"
               width={session.asset.imageWidth ?? 1}
               height={session.asset.imageHeight ?? 1}
-              crossOrigin="anonymous"
               unoptimized
             />
             <canvas
