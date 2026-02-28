@@ -1401,16 +1401,18 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     try {
       if (useVisualCrops) {
         if (sourceAssetId !== session.asset.id) {
-          setSam3Error('Visual crop mode requires running from the source image where exemplars were drawn.');
-          setTimeout(() => setSam3Error(null), 5000);
-          return;
-        }
-
-        try {
-          visualExemplarCrops = buildVisualExemplarCrops();
-        } catch (cropBuildError) {
-          console.warn('[Batch] Client-side visual crop extraction failed; falling back to server-side crop build', cropBuildError);
+          console.warn('[Batch] Current asset differs from source exemplar asset; skipping client crop extraction and using server-side source asset crop build', {
+            currentAssetId: session.asset.id,
+            sourceAssetId,
+          });
           visualExemplarCrops = undefined;
+        } else {
+          try {
+            visualExemplarCrops = buildVisualExemplarCrops();
+          } catch (cropBuildError) {
+            console.warn('[Batch] Client-side visual crop extraction failed; falling back to server-side crop build', cropBuildError);
+            visualExemplarCrops = undefined;
+          }
         }
 
         if (!visualExemplarCrops || visualExemplarCrops.length === 0) {
