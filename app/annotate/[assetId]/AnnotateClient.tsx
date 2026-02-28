@@ -1409,23 +1409,20 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         try {
           visualExemplarCrops = buildVisualExemplarCrops();
         } catch (cropBuildError) {
-          console.error('[Batch] Failed to build visual exemplar crops', cropBuildError);
-          setSam3Error('Could not extract visual exemplar crops from the source image. Please reload, redraw exemplars, and retry.');
-          setTimeout(() => setSam3Error(null), 5000);
-          return;
+          console.warn('[Batch] Client-side visual crop extraction failed; falling back to server-side crop build', cropBuildError);
+          visualExemplarCrops = undefined;
         }
 
         if (!visualExemplarCrops || visualExemplarCrops.length === 0) {
-          setSam3Error('Could not extract visual exemplar crops. Reload the source image, redraw exemplars, then retry.');
-          setTimeout(() => setSam3Error(null), 5000);
-          return;
+          // Allow request to continue so backend can build crops from source asset + exemplar boxes.
+          console.warn('[Batch] No client-side exemplar crops available; using server-side crop build fallback');
+        } else {
+          console.log('[Batch] Built visual exemplar crops on client', {
+            sourceAssetId,
+            exemplarCount: boxExemplars.length,
+            cropCount: visualExemplarCrops.length,
+          });
         }
-
-        console.log('[Batch] Built visual exemplar crops on client', {
-          sourceAssetId,
-          exemplarCount: boxExemplars.length,
-          cropCount: visualExemplarCrops.length,
-        });
       }
       // Check if source image has dimensions for proper scaling
       if (sourceAssetId === session.asset.id && (!session.asset.imageWidth || !session.asset.imageHeight)) {
