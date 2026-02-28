@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
+import { S3Service } from '@/lib/services/s3';
 
 // Rate limiting (simple in-memory, resets on server restart)
 // NOTE: This is per-instance only. For horizontal scaling, use Redis-based
@@ -188,20 +189,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     let imageUrl: string;
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
-    if (asset.storageType?.toLowerCase() === 's3' && asset.s3Key && asset.s3Bucket) {
-      // Use internal API to get signed URL (trusted path)
-      const signedUrlResponse = await fetch(`${baseUrl}/api/assets/${asset.id}/signed-url`, {
-        headers: { 'X-Internal-Request': 'true' },
-      });
-
-      if (!signedUrlResponse.ok) {
+    if (asset.storageType?.toLowerCase() === 's3' && asset.s3Key) {
+      try {
+        imageUrl = asset.s3Bucket
+          ? await S3Service.getSignedUrl(asset.s3Key, 3600, asset.s3Bucket)
+          : await S3Service.getSignedUrl(asset.s3Key);
+      } catch (err) {
+        console.error('Failed to generate S3 signed URL for predict:', err);
         return NextResponse.json({ error: 'Failed to access image', success: false }, { status: 500 });
       }
 
-      const signedUrlData = await signedUrlResponse.json();
-      imageUrl = signedUrlData.url;
-
-      // Validate signed URL is from allowed S3 domain
       if (!isUrlAllowed(imageUrl)) {
         console.error('Signed URL not from allowed domain:', imageUrl.substring(0, 50));
         return NextResponse.json({ error: 'Invalid image source', success: false }, { status: 400 });
