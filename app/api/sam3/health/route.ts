@@ -1,89 +1,111 @@
 /**
  * SAM3 Health Check API Route
  *
- * Checks if Roboflow SAM3 serverless API is configured and accessible.
+ * Reports orchestrator-aware backend availability.
  */
 import { NextResponse } from 'next/server';
-
-const ROBOFLOW_API_KEY = process.env.ROBOFLOW_API_KEY;
+import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
 
 export interface SAM3HealthResponse {
   available: boolean;
   mode: 'realtime' | 'degraded' | 'loading' | 'unavailable';
-  device: 'roboflow-serverless' | null;
+  device: 'aws-sam3' | 'roboflow-serverless' | null;
   latencyMs: number | null;
+  preferredBackend?: 'aws' | 'roboflow' | 'none';
+  details?: {
+    awsConfigured: boolean;
+    awsState: string;
+    awsGpuAvailable: boolean;
+    awsModelLoaded: boolean;
+    roboflowConfigured: boolean;
+  };
   error?: string;
 }
 
 export async function GET(): Promise<NextResponse<SAM3HealthResponse>> {
-  // Check if Roboflow API key is configured
-  if (!ROBOFLOW_API_KEY) {
-    return NextResponse.json({
-      available: false,
-      mode: 'unavailable',
-      device: null,
-      latencyMs: null,
-      error: 'Roboflow API key not configured',
-    });
-  }
+  const startTime = Date.now();
 
   try {
-    // Test Roboflow API connectivity using Authorization header (not query param)
-    const startTime = Date.now();
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-    // Use POST to concept_segment with minimal payload to verify API access
-    // This avoids exposing API key in query strings
-    const response = await fetch('https://api.roboflow.com/', {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${ROBOFLOW_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-
+    const status = await sam3Orchestrator.getStatus();
     const latencyMs = Date.now() - startTime;
 
-    // Roboflow API returns 401 for invalid key, 200 for valid
-    if (response.ok || response.status === 200) {
+    if (status.awsAvailable) {
       return NextResponse.json({
         available: true,
         mode: 'realtime',
-        device: 'roboflow-serverless',
+        device: 'aws-sam3',
         latencyMs,
-      });
-    } else if (response.status === 401) {
-      return NextResponse.json({
-        available: false,
-        mode: 'unavailable',
-        device: null,
-        latencyMs,
-        error: 'Invalid API key',
-      });
-    } else {
-      return NextResponse.json({
-        available: false,
-        mode: 'unavailable',
-        device: null,
-        latencyMs,
-        error: `API returned status ${response.status}`,
+        preferredBackend: status.preferredBackend,
+        details: {
+          awsConfigured: status.awsConfigured,
+          awsState: status.awsState,
+          awsGpuAvailable: status.awsGpuAvailable,
+          awsModelLoaded: status.awsModelLoaded,
+          roboflowConfigured: status.roboflowConfigured,
+        },
       });
     }
+
+    if (status.awsConfigured && !status.awsModelLoaded) {
+      return NextResponse.json({
+        available: false,
+        mode: 'loading',
+        device: null,
+        latencyMs,
+        preferredBackend: status.preferredBackend,
+        details: {
+          awsConfigured: status.awsConfigured,
+          awsState: status.awsState,
+          awsGpuAvailable: status.awsGpuAvailable,
+          awsModelLoaded: status.awsModelLoaded,
+          roboflowConfigured: status.roboflowConfigured,
+        },
+        error: 'AWS SAM3 configured but model is not loaded yet',
+      });
+    }
+
+    if (status.roboflowConfigured) {
+      return NextResponse.json({
+        available: true,
+        mode: 'degraded',
+        device: 'roboflow-serverless',
+        latencyMs,
+        preferredBackend: status.preferredBackend,
+        details: {
+          awsConfigured: status.awsConfigured,
+          awsState: status.awsState,
+          awsGpuAvailable: status.awsGpuAvailable,
+          awsModelLoaded: status.awsModelLoaded,
+          roboflowConfigured: status.roboflowConfigured,
+        },
+        error: 'AWS unavailable, using Roboflow fallback',
+      });
+    }
+
+    return NextResponse.json({
+      available: false,
+      mode: 'unavailable',
+      device: null,
+      latencyMs,
+      preferredBackend: status.preferredBackend,
+      details: {
+        awsConfigured: status.awsConfigured,
+        awsState: status.awsState,
+        awsGpuAvailable: status.awsGpuAvailable,
+        awsModelLoaded: status.awsModelLoaded,
+        roboflowConfigured: status.roboflowConfigured,
+      },
+      error: 'No SAM3 backend available (AWS not ready, Roboflow not configured)',
+    });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.log('Roboflow health check failed:', errorMessage);
 
     return NextResponse.json({
       available: false,
       mode: 'unavailable',
       device: null,
       latencyMs: null,
-      error: errorMessage.includes('abort') ? 'Request timeout' : 'Connection failed',
+      error: `Health check failed: ${errorMessage}`,
     });
   }
 }

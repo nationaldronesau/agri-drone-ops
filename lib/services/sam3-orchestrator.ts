@@ -68,6 +68,24 @@ export interface SAM3OrchestratorStatus {
  * Orchestrates SAM3 predictions between AWS and Roboflow backends
  */
 class SAM3Orchestrator {
+  private buildAwsOnlyFailure(
+    startTime: number,
+    error: string,
+    startupMessage?: string,
+    errorCode?: string
+  ): PredictionResult {
+    return {
+      success: false,
+      backend: 'aws',
+      detections: [],
+      count: 0,
+      processingTimeMs: Date.now() - startTime,
+      startupMessage,
+      error,
+      errorCode,
+    };
+  }
+
   /**
    * Get the current status of all SAM3 backends
    * Refreshes AWS status by actually querying EC2 and health endpoint
@@ -136,7 +154,16 @@ class SAM3Orchestrator {
     const startTime = Date.now();
 
     if (await isGpuLocked()) {
-      console.log('[Orchestrator] GPU lock active, falling back to Roboflow for SAM3');
+      console.log('[Orchestrator] GPU lock active');
+      if (!ROBOFLOW_API_KEY) {
+        return this.buildAwsOnlyFailure(
+          startTime,
+          'AWS SAM3 is temporarily busy (GPU lock active). Please retry in a moment.',
+          'GPU busy',
+          'GPU_LOCKED'
+        );
+      }
+      console.log('[Orchestrator] Falling back to Roboflow for SAM3 (GPU busy)');
       return this.fallbackToRoboflow(request, startTime, 'GPU busy');
     }
 
@@ -152,13 +179,29 @@ class SAM3Orchestrator {
             console.log('[Orchestrator] AWS starting, waiting for it to be ready...');
             const awsReady = await this.waitForAWSReady(180000); // Wait up to 3 minutes
             if (!awsReady) {
+              if (!ROBOFLOW_API_KEY) {
+                return this.buildAwsOnlyFailure(
+                  startTime,
+                  'AWS SAM3 failed to become ready. Please retry shortly.',
+                  message,
+                  'AWS_NOT_READY'
+                );
+              }
               console.log('[Orchestrator] AWS failed to start, falling back to Roboflow');
               return this.fallbackToRoboflow(request, startTime, message);
             }
             console.log('[Orchestrator] AWS is now ready, proceeding with prediction');
             // Continue to prediction below
           } else {
-            // Not starting, not ready - fall back
+            // Not starting, not ready
+            if (!ROBOFLOW_API_KEY) {
+              return this.buildAwsOnlyFailure(
+                startTime,
+                'AWS SAM3 is not ready yet. Please retry shortly.',
+                message,
+                'AWS_NOT_READY'
+              );
+            }
             return this.fallbackToRoboflow(request, startTime);
           }
         }
@@ -169,8 +212,24 @@ class SAM3Orchestrator {
       const awsResult = await this.predictWithAWS(request);
 
       if (awsResult === null) {
+        if (!ROBOFLOW_API_KEY) {
+          return this.buildAwsOnlyFailure(
+            startTime,
+            'AWS SAM3 request was missing required image context (imageUrl/assetId for point prediction).',
+            undefined,
+            'MISSING_IMAGE_CONTEXT'
+          );
+        }
         console.log('[Orchestrator] AWS returned null (likely missing imageUrl/assetId for point prediction), falling back to Roboflow');
       } else if (!awsResult.success) {
+        if (!ROBOFLOW_API_KEY) {
+          return this.buildAwsOnlyFailure(
+            startTime,
+            awsResult.error || 'AWS SAM3 prediction failed',
+            undefined,
+            awsResult.errorCode
+          );
+        }
         console.log(`[Orchestrator] AWS prediction failed: ${awsResult.error}, falling back to Roboflow`);
       } else {
         console.log(`[Orchestrator] AWS prediction succeeded with ${awsResult.detections.length} detections`);
@@ -180,6 +239,17 @@ class SAM3Orchestrator {
           processingTimeMs: Date.now() - startTime,
         };
       }
+    }
+
+    if (!ROBOFLOW_API_KEY) {
+      return this.buildAwsOnlyFailure(
+        startTime,
+        awsSam3Service.isConfigured()
+          ? 'AWS SAM3 prediction failed and no fallback backend is configured.'
+          : 'No SAM3 backend configured (AWS not configured, Roboflow disabled).',
+        undefined,
+        awsSam3Service.isConfigured() ? 'AWS_PREDICTION_FAILED' : 'NO_BACKEND_CONFIGURED'
+      );
     }
 
     return this.fallbackToRoboflow(request, startTime);
