@@ -1476,12 +1476,24 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
           totalImages: data.totalImages || 0,
         });
       } else {
-        const errorData = await response.json();
-        // Provide clearer error for Redis unavailability
-        if (errorData.error?.includes('Queue service unavailable')) {
+        let backendMessage = '';
+        try {
+          const errorData = await response.json();
+          backendMessage = errorData?.error || '';
+        } catch {
+          try {
+            backendMessage = (await response.text())?.slice(0, 180) || '';
+          } catch {
+            backendMessage = '';
+          }
+        }
+
+        if (backendMessage.includes('Queue service unavailable')) {
           setSam3Error('Batch processing requires Redis. Use "Apply to This Image" for single-image processing, or contact support to enable batch processing.');
+        } else if (backendMessage) {
+          setSam3Error(`Failed to start batch processing (${response.status}): ${backendMessage}`);
         } else {
-          setSam3Error(errorData.error || 'Failed to start batch processing');
+          setSam3Error(`Failed to start batch processing (HTTP ${response.status})`);
         }
       }
     } catch (err) {
