@@ -43,6 +43,11 @@ interface CameraProfile {
   opticalCenterY?: number | null;
 }
 
+async function getApiErrorMessage(response: Response, fallback: string): Promise<string> {
+  const data = (await response.json().catch(() => null)) as { error?: string } | null;
+  return data?.error || fallback;
+}
+
 function UploadPageContent() {
   const searchParams = useSearchParams();
   const projectParam = searchParams.get("project");
@@ -71,15 +76,15 @@ function UploadPageContent() {
       : undefined;
 
   useEffect(() => {
-    setProjectsError(null);
-    fetch("/api/projects")
-      .then((res) => {
-        if (!res.ok) {
-          throw new Error("Failed to load projects");
+    const loadProjects = async () => {
+      setProjectsError(null);
+      try {
+        const response = await fetch("/api/projects");
+        if (!response.ok) {
+          throw new Error(await getApiErrorMessage(response, "Failed to load projects"));
         }
-        return res.json();
-      })
-      .then((data) => {
+
+        const data = await response.json();
         const projectList = data.projects || [];
         setProjects(projectList);
         if (projectParam && projectList.some((project: Project) => project.id === projectParam)) {
@@ -87,31 +92,36 @@ function UploadPageContent() {
         } else if (projectList.length > 0) {
           setSelectedProject((current) => current || projectList[0].id);
         }
-      })
-      .catch((error) => {
+      } catch (error) {
         console.error("Failed to load projects:", error);
         setProjectsError(error instanceof Error ? error.message : "Unable to load projects.");
-      });
+      }
+    };
+
+    void loadProjects();
   }, [projectParam]);
 
   useEffect(() => {
-    setCameraProfilesError(null);
-    fetch("/api/camera-profiles")
-      .then((res) => {
-        if (!res.ok) {
-          throw new Error("Failed to load camera profiles");
+    const loadCameraProfiles = async () => {
+      setCameraProfilesError(null);
+      try {
+        const response = await fetch("/api/camera-profiles");
+        if (!response.ok) {
+          throw new Error(
+            await getApiErrorMessage(response, "Failed to load camera profiles")
+          );
         }
-        return res.json();
-      })
-      .then((data) => {
+        const data = await response.json();
         setCameraProfiles(data.profiles || []);
-      })
-      .catch((error) => {
+      } catch (error) {
         console.error("Failed to load camera profiles:", error);
         setCameraProfilesError(
           error instanceof Error ? error.message : "Unable to load camera profiles."
         );
-      });
+      }
+    };
+
+    void loadCameraProfiles();
   }, []);
 
   useEffect(() => {

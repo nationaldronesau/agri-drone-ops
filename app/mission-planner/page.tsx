@@ -247,6 +247,11 @@ function parseMissionMetadata(value: Prisma.JsonValue | null): ParsedMissionMeta
   return fallback;
 }
 
+async function getApiErrorMessage(response: Response, fallback: string): Promise<string> {
+  const data = (await response.json().catch(() => null)) as { error?: string } | null;
+  return data?.error || fallback;
+}
+
 export default function MissionPlannerPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [plans, setPlans] = useState<PlanListItem[]>([]);
@@ -277,7 +282,7 @@ export default function MissionPlannerPage() {
     try {
       const response = await fetch('/api/projects?pageSize=200');
       if (!response.ok) {
-        throw new Error('Failed to load projects');
+        throw new Error(await getApiErrorMessage(response, 'Failed to load projects'));
       }
       const data = await response.json();
       setProjects(Array.isArray(data.projects) ? data.projects : []);
@@ -298,7 +303,7 @@ export default function MissionPlannerPage() {
 
       const response = await fetch(`/api/spray-plans?${params.toString()}`);
       if (!response.ok) {
-        throw new Error('Failed to load plans');
+        throw new Error(await getApiErrorMessage(response, 'Failed to load plans'));
       }
 
       const data = await response.json();
@@ -324,7 +329,7 @@ export default function MissionPlannerPage() {
     try {
       const response = await fetch(`/api/spray-plans/${planId}`);
       if (!response.ok) {
-        throw new Error('Failed to load plan details');
+        throw new Error(await getApiErrorMessage(response, 'Failed to load plan details'));
       }
       const data = (await response.json()) as PlanDetail;
       setSelectedPlan(data);
@@ -380,7 +385,7 @@ export default function MissionPlannerPage() {
     try {
       const response = await fetch(`/api/compliance-layers?projectId=${projectId}`);
       if (!response.ok) {
-        throw new Error('Failed to load compliance layers');
+        throw new Error(await getApiErrorMessage(response, 'Failed to load compliance layers'));
       }
 
       const data = await response.json();
@@ -441,7 +446,7 @@ export default function MissionPlannerPage() {
         body: JSON.stringify({ isActive }),
       });
       if (!response.ok) {
-        throw new Error('Failed to update compliance layer');
+        throw new Error(await getApiErrorMessage(response, 'Failed to update compliance layer'));
       }
 
       await fetchComplianceLayers();
@@ -456,7 +461,7 @@ export default function MissionPlannerPage() {
         method: 'DELETE',
       });
       if (!response.ok) {
-        throw new Error('Failed to delete compliance layer');
+        throw new Error(await getApiErrorMessage(response, 'Failed to delete compliance layer'));
       }
 
       await fetchComplianceLayers();
@@ -587,7 +592,7 @@ export default function MissionPlannerPage() {
     try {
       const response = await fetch(`/api/spray-plans/${planId}`, { method: 'DELETE' });
       if (!response.ok) {
-        throw new Error('Failed to delete spray plan');
+        throw new Error(await getApiErrorMessage(response, 'Failed to delete spray plan'));
       }
 
       if (selectedPlanId === planId) {

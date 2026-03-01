@@ -500,6 +500,7 @@ export default function TrainingPage() {
   const [health, setHealth] = useState<{
     loading: boolean;
     available: boolean;
+    authRequired?: boolean;
     error?: string;
     details?: HealthResponse;
   }>({
@@ -733,11 +734,24 @@ export default function TrainingPage() {
       const response = await fetch("/api/training/health");
       const data = await readJsonResponse(response, "Failed to check service health");
       if (!response.ok) {
-        throw new Error((data?.error as string) || "Failed to check service health");
+        const errorMessage = (data?.error as string) || "Failed to check service health";
+        const unauthorized =
+          response.status === 401 || errorMessage.toLowerCase().includes("unauthorized");
+        if (unauthorized) {
+          setHealth({
+            loading: false,
+            available: false,
+            authRequired: true,
+            error: errorMessage,
+          });
+          return;
+        }
+        throw new Error(errorMessage);
       }
       setHealth({
         loading: false,
         available: Boolean(data.available),
+        authRequired: false,
         error: data.error as string | undefined,
         details: data.health as HealthResponse | undefined,
       });
@@ -745,6 +759,7 @@ export default function TrainingPage() {
       setHealth({
         loading: false,
         available: false,
+        authRequired: false,
         error: err instanceof Error ? err.message : "Service unavailable",
       });
     }
@@ -1436,6 +1451,8 @@ export default function TrainingPage() {
                 <h1 className="text-xl font-semibold text-gray-900">YOLO Training Dashboard</h1>
                 {health.loading ? (
                   <Badge variant="secondary">Checking...</Badge>
+                ) : health.authRequired ? (
+                  <Badge className="bg-amber-100 text-amber-700">Sign In Required</Badge>
                 ) : health.available ? (
                   <Badge className="bg-emerald-100 text-emerald-700">Service Online</Badge>
                 ) : (
@@ -2208,7 +2225,21 @@ export default function TrainingPage() {
       </header>
 
       <main className="container mx-auto px-4 py-8 space-y-6">
-        {!health.loading && !health.available && (
+        {!health.loading && health.authRequired && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4" />
+              <span>Please sign in to access YOLO training and project data.</span>
+            </div>
+            <Link href="/auth/signin?callbackUrl=%2Ftraining">
+              <Button variant="outline" size="sm">
+                Sign In
+              </Button>
+            </Link>
+          </div>
+        )}
+
+        {!health.loading && !health.available && !health.authRequired && (
           <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <AlertTriangle className="h-4 w-4" />
@@ -2881,6 +2912,16 @@ export default function TrainingPage() {
                     </span>
                   </div>
                 </>
+              ) : health.authRequired ? (
+                <div className="flex items-start gap-2 text-amber-700">
+                  <ShieldCheck className="h-4 w-4 mt-0.5" />
+                  <div>
+                    <p className="font-medium">Sign in required</p>
+                    <p className="text-xs text-amber-700">
+                      Please sign in to check the YOLO service status.
+                    </p>
+                  </div>
+                </div>
               ) : (
                 <div className="flex items-start gap-2 text-red-700">
                   <XCircle className="h-4 w-4 mt-0.5" />
