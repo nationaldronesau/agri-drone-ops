@@ -303,7 +303,11 @@ export async function GET(request: NextRequest) {
               ...(sessionId && sessionBatchJobIds && sessionBatchJobIds.length > 0
                 ? { batchJobId: { in: sessionBatchJobIds } }
                 : {}),
-              ...(createdAfter ? { createdAt: { gte: createdAfter } } : {}),
+              ...(
+                sessionId && sessionBatchJobIds && sessionBatchJobIds.length > 0
+                  ? {}
+                  : (createdAfter ? { createdAt: { gte: createdAfter } } : {})
+              ),
               ...(classFilter.length > 0 ? { weedType: { in: classFilter } } : {}),
             },
             include: {
