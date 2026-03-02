@@ -118,6 +118,22 @@ function manualConfidenceToScore(confidence: string | null): number {
   return 0.5;
 }
 
+function normalizeGeoPoint(lat: unknown, lon: unknown): { lat: number; lon: number } | null {
+  if (
+    typeof lat !== 'number' ||
+    typeof lon !== 'number' ||
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lon) ||
+    lat < -90 ||
+    lat > 90 ||
+    lon < -180 ||
+    lon > 180
+  ) {
+    return null;
+  }
+  return { lat, lon };
+}
+
 export async function GET(request: NextRequest) {
   try {
     const auth = await getAuthenticatedUser();
@@ -326,6 +342,23 @@ export async function GET(request: NextRequest) {
 
     for (const detection of detections) {
       const asset = detection.asset;
+      const storedGeo = normalizeGeoPoint(detection.centerLat, detection.centerLon);
+      if (storedGeo) {
+        exportableDetections.push({
+          id: detection.id,
+          className: detection.className,
+          confidence: detection.confidence ?? 0,
+          centerLat: storedGeo.lat,
+          centerLon: storedGeo.lon,
+          createdAt: detection.createdAt,
+          asset: {
+            fileName: asset.fileName,
+            project: asset.project,
+          },
+        });
+        continue;
+      }
+
       const validation = validateGeoParams(asset);
       if (!validation.valid) {
         skippedItems.push({
@@ -408,6 +441,27 @@ export async function GET(request: NextRequest) {
 
     for (const annotation of annotations) {
       const asset = annotation.session.asset;
+      const storedGeo = normalizeGeoPoint(annotation.centerLat, annotation.centerLon);
+      if (storedGeo) {
+        exportableAnnotations.push({
+          id: annotation.id,
+          weedType: annotation.weedType,
+          confidence: annotation.confidence,
+          centerLat: storedGeo.lat,
+          centerLon: storedGeo.lon,
+          coordinates: annotation.coordinates,
+          notes: annotation.notes,
+          createdAt: annotation.createdAt,
+          session: {
+            asset: {
+              fileName: asset.fileName,
+              project: asset.project,
+            },
+          },
+        });
+        continue;
+      }
+
       const validation = validateGeoParams(asset);
       if (!validation.valid) {
         skippedItems.push({
@@ -483,6 +537,23 @@ export async function GET(request: NextRequest) {
 
     for (const pending of pendingAnnotations) {
       const asset = pending.asset;
+      const storedGeo = normalizeGeoPoint(pending.centerLat, pending.centerLon);
+      if (storedGeo) {
+        exportableDetections.push({
+          id: pending.id,
+          className: pending.weedType,
+          confidence: pending.confidence ?? 0,
+          centerLat: storedGeo.lat,
+          centerLon: storedGeo.lon,
+          createdAt: pending.createdAt,
+          asset: {
+            fileName: asset.fileName,
+            project: asset.project,
+          },
+        });
+        continue;
+      }
+
       const validation = validateGeoParams(asset);
       if (!validation.valid) {
         skippedItems.push({
@@ -571,8 +642,23 @@ export async function GET(request: NextRequest) {
     }
 
     if (exportedCount === 0) {
+      const reasonCounts = skippedItems.reduce<Record<string, number>>((acc, item) => {
+        const key = item.reason || 'Unknown';
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {});
+      const topReasons = Object.entries(reasonCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([reason, count]) => `${reason} (${count})`);
+
       return NextResponse.json(
-        { error: 'No exportable records found for the selected filters' },
+        {
+          error: 'No exportable records found for the selected filters',
+          message: topReasons.length > 0 ? `Top skip reasons: ${topReasons.join('; ')}` : undefined,
+          totalItems,
+          skippedCount: skippedItems.length,
+        },
         { status: 400 }
       );
     }

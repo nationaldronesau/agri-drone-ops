@@ -305,8 +305,10 @@ function ReviewPageContent() {
       const response = await fetch(`/api/export/stream?${params.toString()}`);
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        const message = typeof data?.error === 'string'
-          ? data.error
+        const message = typeof data?.message === 'string'
+          ? data.message
+          : typeof data?.error === 'string'
+            ? data.error
           : `Export failed (HTTP ${response.status})`;
         throw new Error(message);
       }
