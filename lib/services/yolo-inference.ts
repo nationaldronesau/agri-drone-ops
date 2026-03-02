@@ -106,6 +106,13 @@ class YOLOInferenceService {
       : getDefaultRoboflowModels();
 
     const result = await roboflowService.detectMultipleModels(imageBase64, models);
+    if (result.failures.length > 0 && result.detections.length === 0) {
+      const details = result.failures
+        .map((failure) => `${failure.model}: ${failure.error}`)
+        .join('; ');
+      throw new Error(`Roboflow fallback failed for all models (${details})`);
+    }
+
     const detections = result.detections.map((d) => ({
       class: d.class,
       confidence: d.confidence,

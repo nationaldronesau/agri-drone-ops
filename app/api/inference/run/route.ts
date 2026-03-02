@@ -275,6 +275,22 @@ export async function POST(request: NextRequest) {
         backend: backendPreference as 'local' | 'roboflow' | 'auto',
       });
 
+      if (result.processedImages === 0 && result.errors.length > 0) {
+        return NextResponse.json(
+          {
+            error: 'Inference failed for all selected images',
+            details: result.errors.slice(0, 5),
+            jobId: processingJob.id,
+            totalImages,
+            skippedImages,
+            skippedReason: 'missing_gps_or_dimensions',
+            duplicateImages,
+            detectionsFound: result.detectionsFound,
+          },
+          { status: 502 }
+        );
+      }
+
       return NextResponse.json({
         jobId: processingJob.id,
         totalImages,
@@ -284,6 +300,7 @@ export async function POST(request: NextRequest) {
         skippedReason: 'missing_gps_or_dimensions',
         duplicateImages,
         detectionsFound: result.detectionsFound,
+        errors: result.errors.slice(0, 10),
       });
     }
 
