@@ -1448,7 +1448,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
           : {};
 
       const exemplarBoxesForBatch = useVisualCrops
-        ? boxExemplars.slice(0, MAX_VISUAL_EXEMPLARS).map(e => e.box)
+        ? boxExemplars.slice(0, MAX_VISUAL_EXEMPLAR_CROPS).map(e => e.box)
         : boxExemplars.map(e => e.box);
 
       const response = await fetch('/api/sam3/batch', {
