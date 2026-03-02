@@ -6,12 +6,13 @@ import {
   polygonToCenterBox,
   rescaleToOriginalWithMeta,
   validateGeoParams,
-  pixelToGeoWithDSM,
+  pixelToGeo,
 } from '@/lib/utils/georeferencing';
 import { generateShapefileExport, type DetectionRecord, type AnnotationRecord } from '@/lib/services/shapefile';
 import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
 
 const EXPORT_ITEM_LIMIT = 5000;
+const DEFAULT_EXPORT_CAMERA_FOV = 84;
 
 interface ExportManifest {
   exportedAt: string;
@@ -132,6 +133,67 @@ function normalizeGeoPoint(lat: unknown, lon: unknown): { lat: number; lon: numb
     return null;
   }
   return { lat, lon };
+}
+
+function extractExportCameraFov(metadata: unknown): number {
+  if (!metadata || typeof metadata !== 'object') return DEFAULT_EXPORT_CAMERA_FOV;
+  const record = metadata as Record<string, unknown>;
+  const candidates = [
+    record.FieldOfView,
+    record.CameraFOV,
+    record.FOV,
+  ];
+  for (const value of candidates) {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 180) {
+      return value;
+    }
+  }
+  return DEFAULT_EXPORT_CAMERA_FOV;
+}
+
+async function computeExportGeo(
+  asset: {
+    gpsLatitude: number | null;
+    gpsLongitude: number | null;
+    altitude: number | null;
+    gimbalPitch: number | null;
+    gimbalRoll: number | null;
+    gimbalYaw: number | null;
+    imageWidth: number | null;
+    imageHeight: number | null;
+    metadata?: unknown | null;
+    lrfDistance?: number | null;
+    lrfTargetLat?: number | null;
+    lrfTargetLon?: number | null;
+  },
+  pixel: { x: number; y: number }
+): Promise<{ lat: number; lon: number } | null> {
+  const validation = validateGeoParams(asset);
+  if (!validation.valid) return null;
+
+  try {
+    const geo = await pixelToGeo(
+      {
+        gpsLatitude: asset.gpsLatitude as number,
+        gpsLongitude: asset.gpsLongitude as number,
+        altitude: asset.altitude ?? 100,
+        gimbalRoll: asset.gimbalRoll ?? 0,
+        gimbalPitch: asset.gimbalPitch ?? 0,
+        gimbalYaw: asset.gimbalYaw ?? 0,
+        cameraFov: extractExportCameraFov(asset.metadata),
+        imageWidth: asset.imageWidth as number,
+        imageHeight: asset.imageHeight as number,
+        lrfDistance: asset.lrfDistance ?? undefined,
+        lrfTargetLat: asset.lrfTargetLat ?? undefined,
+        lrfTargetLon: asset.lrfTargetLon ?? undefined,
+      },
+      pixel
+    );
+    return normalizeGeoPoint(geo.lat, geo.lon);
+  } catch {
+    // Fast export path failed; avoid expensive DSM/elevation calls that can trigger 504.
+    return null;
+  }
 }
 
 export async function GET(request: NextRequest) {
@@ -416,15 +478,15 @@ export async function GET(request: NextRequest) {
         gimbalPitch: asset.gimbalPitch,
         gimbalRoll: asset.gimbalRoll,
         gimbalYaw: asset.gimbalYaw,
-        geoMethod: 'pixelToGeoWithDSM',
+        geoMethod: 'pixelToGeoFastExport',
       });
-      const geo = await pixelToGeoWithDSM(asset, { x: centerBox.x, y: centerBox.y });
+      const geo = await computeExportGeo(asset, { x: centerBox.x, y: centerBox.y });
       if (!geo) {
         skippedItems.push({
           assetId: asset.id,
           assetName: asset.fileName,
           annotationId: detection.id,
-          reason: 'Georeferencing failed',
+          reason: 'Georeferencing failed (fast export mode)',
         });
         continue;
       }
@@ -508,15 +570,15 @@ export async function GET(request: NextRequest) {
         gimbalPitch: asset.gimbalPitch,
         gimbalRoll: asset.gimbalRoll,
         gimbalYaw: asset.gimbalYaw,
-        geoMethod: 'pixelToGeoWithDSM',
+        geoMethod: 'pixelToGeoFastExport',
       });
-      const geo = await pixelToGeoWithDSM(asset, { x: centerBox.x, y: centerBox.y });
+      const geo = await computeExportGeo(asset, { x: centerBox.x, y: centerBox.y });
       if (!geo) {
         skippedItems.push({
           assetId: asset.id,
           assetName: asset.fileName,
           annotationId: annotation.id,
-          reason: 'Georeferencing failed',
+          reason: 'Georeferencing failed (fast export mode)',
         });
         continue;
       }
@@ -602,15 +664,15 @@ export async function GET(request: NextRequest) {
         gimbalPitch: asset.gimbalPitch,
         gimbalRoll: asset.gimbalRoll,
         gimbalYaw: asset.gimbalYaw,
-        geoMethod: 'pixelToGeoWithDSM',
+        geoMethod: 'pixelToGeoFastExport',
       });
-      const geo = await pixelToGeoWithDSM(asset, { x: centerBox.x, y: centerBox.y });
+      const geo = await computeExportGeo(asset, { x: centerBox.x, y: centerBox.y });
       if (!geo) {
         skippedItems.push({
           assetId: asset.id,
           assetName: asset.fileName,
           annotationId: pending.id,
-          reason: 'Georeferencing failed',
+          reason: 'Georeferencing failed (fast export mode)',
         });
         continue;
       }
