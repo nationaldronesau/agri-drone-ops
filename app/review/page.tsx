@@ -51,6 +51,7 @@ function ReviewPageContent() {
   const [exportFormat, setExportFormat] = useState<'csv' | 'kml' | 'shapefile'>('csv');
   const [exportIncludeAI, setExportIncludeAI] = useState(true);
   const [exportIncludeManual, setExportIncludeManual] = useState(true);
+  const [exportLoading, setExportLoading] = useState(false);
   const [exportDefaultsInitialized, setExportDefaultsInitialized] = useState(false);
 
   const [showYoloModal, setShowYoloModal] = useState(false);
@@ -289,13 +290,40 @@ function ReviewPageContent() {
     }
   }, [bulkCandidates, loadItems, loadSession, sessionId]);
 
-  const handleExport = useCallback(() => {
-    if (!sessionId) return;
+  const handleExport = useCallback(async () => {
+    if (!sessionId || exportLoading) return;
     const params = new URLSearchParams({ format: exportFormat, sessionId });
     if (!exportIncludeAI) params.set('includeAI', 'false');
     if (!exportIncludeManual) params.set('includeManual', 'false');
-    window.location.href = `/api/export/stream?${params.toString()}`;
-  }, [exportFormat, exportIncludeAI, exportIncludeManual, sessionId]);
+    if (exportIncludeAI && (session?.batchJobIds?.length ?? 0) > 0) {
+      params.set('includePending', 'true');
+    }
+
+    setActionError(null);
+    setExportLoading(true);
+    try {
+      const response = await fetch(`/api/export/stream?${params.toString()}`);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        const message = typeof data?.error === 'string'
+          ? data.error
+          : `Export failed (HTTP ${response.status})`;
+        throw new Error(message);
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `review-export-${new Date().toISOString().split('T')[0]}.zip`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to export review results');
+    } finally {
+      setExportLoading(false);
+    }
+  }, [exportFormat, exportIncludeAI, exportIncludeManual, exportLoading, session?.batchJobIds, sessionId]);
 
   if (loading) {
     return (
@@ -491,8 +519,8 @@ function ReviewPageContent() {
             />
             Include AI
           </label>
-          <Button variant="outline" size="sm" onClick={handleExport}>
-            Export ZIP
+          <Button variant="outline" size="sm" onClick={handleExport} disabled={exportLoading}>
+            {exportLoading ? 'Exporting...' : 'Export ZIP'}
           </Button>
         </div>
 
@@ -513,15 +541,16 @@ function ReviewPageContent() {
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleExport}
-                    className="gap-2 border-orange-200 text-orange-600 hover:bg-orange-50"
-                  >
-                    <Download className="h-4 w-4" />
-                    Export for Spray Drones
-                  </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleExport}
+                      disabled={exportLoading}
+                      className="gap-2 border-orange-200 text-orange-600 hover:bg-orange-50"
+                    >
+                      <Download className="h-4 w-4" />
+                      {exportLoading ? 'Exporting...' : 'Export for Spray Drones'}
+                    </Button>
                   <Button
                     size="sm"
                     onClick={() => setShowYoloModal(true)}

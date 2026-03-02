@@ -136,6 +136,9 @@ export async function GET(request: NextRequest) {
     const sessionId = searchParams.get('sessionId');
     const includeAI = searchParams.get('includeAI') !== 'false';
     const includeManual = searchParams.get('includeManual') !== 'false';
+    const includePendingParam = searchParams.get('includePending');
+    const includePending =
+      includePendingParam === 'true' || (Boolean(sessionId) && includeAI && includePendingParam !== 'false');
     const classFilter = searchParams.get('classes')?.split(',').filter(Boolean) || [];
     // GEO_DEBUG=1 logs a single JSON payload per request; optional GEO_DEBUG_ASSET_ID/GEO_DEBUG_ITEM_ID filter it.
     const geoDebugEnabled = process.env.GEO_DEBUG === '1';
@@ -166,10 +169,11 @@ export async function GET(request: NextRequest) {
 
     let assetIds: string[] | null = null;
     let createdAfter: Date | null = null;
+    let sessionBatchJobIds: string[] | null = null;
     if (sessionId) {
       const session = await prisma.reviewSession.findUnique({
         where: { id: sessionId },
-        select: { assetIds: true, teamId: true, createdAt: true },
+        select: { assetIds: true, teamId: true, createdAt: true, batchJobIds: true },
       });
       if (!session) {
         return NextResponse.json({ error: 'Review session not found' }, { status: 404 });
@@ -181,6 +185,9 @@ export async function GET(request: NextRequest) {
         ? (session.assetIds as string[]).filter((id) => typeof id === 'string')
         : [];
       createdAfter = session.createdAt;
+      sessionBatchJobIds = Array.isArray(session.batchJobIds)
+        ? (session.batchJobIds as string[]).filter((id) => typeof id === 'string')
+        : [];
       baseWhere.asset = {
         ...(baseWhere.asset as Record<string, unknown>),
         id: { in: assetIds },
@@ -191,7 +198,7 @@ export async function GET(request: NextRequest) {
       (baseWhere.asset as Record<string, unknown>).projectId = projectId;
     }
 
-    const [detections, annotations] = await Promise.all([
+    const [detections, annotations, pendingAnnotations] = await Promise.all([
       includeAI
         ? prisma.detection.findMany({
             where: {
@@ -265,6 +272,45 @@ export async function GET(request: NextRequest) {
                           location: true,
                         },
                       },
+                    },
+                  },
+                },
+              },
+            },
+          })
+        : Promise.resolve([]),
+      includePending && (!sessionId || (sessionBatchJobIds?.length ?? 0) > 0)
+        ? prisma.pendingAnnotation.findMany({
+            where: {
+              asset: baseWhere.asset,
+              status: { not: 'REJECTED' },
+              ...(sessionId && sessionBatchJobIds && sessionBatchJobIds.length > 0
+                ? { batchJobId: { in: sessionBatchJobIds } }
+                : {}),
+              ...(createdAfter ? { createdAt: { gte: createdAfter } } : {}),
+              ...(classFilter.length > 0 ? { weedType: { in: classFilter } } : {}),
+            },
+            include: {
+              asset: {
+                select: {
+                  id: true,
+                  fileName: true,
+                  gpsLatitude: true,
+                  gpsLongitude: true,
+                  altitude: true,
+                  gimbalPitch: true,
+                  gimbalRoll: true,
+                  gimbalYaw: true,
+                  imageWidth: true,
+                  imageHeight: true,
+                  metadata: true,
+                  lrfDistance: true,
+                  lrfTargetLat: true,
+                  lrfTargetLon: true,
+                  project: {
+                    select: {
+                      name: true,
+                      location: true,
                     },
                   },
                 },
@@ -435,7 +481,80 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const totalItems = detections.length + annotations.length;
+    for (const pending of pendingAnnotations) {
+      const asset = pending.asset;
+      const validation = validateGeoParams(asset);
+      if (!validation.valid) {
+        skippedItems.push({
+          assetId: asset.id,
+          assetName: asset.fileName,
+          annotationId: pending.id,
+          reason: validation.warnings[0] || 'Missing EXIF data',
+        });
+        continue;
+      }
+
+      const bboxCenter = parseCenterBox(pending.bbox);
+      const polygon = Array.isArray(pending.polygon)
+        ? (pending.polygon as number[][])
+        : [];
+      const centerBox = bboxCenter || polygonToCenterBox(polygon);
+
+      if (!centerBox) {
+        skippedItems.push({
+          assetId: asset.id,
+          assetName: asset.fileName,
+          annotationId: pending.id,
+          reason: 'Invalid pending annotation geometry',
+        });
+        continue;
+      }
+
+      logGeoDebugOnce({
+        format,
+        itemKind: 'pending',
+        itemId: pending.id,
+        assetId: asset.id,
+        fileName: asset.fileName,
+        pixel: { x: centerBox.x, y: centerBox.y },
+        bboxPreRescale: { ...centerBox },
+        bboxPostRescale: null,
+        imageWidth: asset.imageWidth,
+        imageHeight: asset.imageHeight,
+        gpsLatitude: asset.gpsLatitude,
+        gpsLongitude: asset.gpsLongitude,
+        altitude: asset.altitude,
+        gimbalPitch: asset.gimbalPitch,
+        gimbalRoll: asset.gimbalRoll,
+        gimbalYaw: asset.gimbalYaw,
+        geoMethod: 'pixelToGeoWithDSM',
+      });
+      const geo = await pixelToGeoWithDSM(asset, { x: centerBox.x, y: centerBox.y });
+      if (!geo) {
+        skippedItems.push({
+          assetId: asset.id,
+          assetName: asset.fileName,
+          annotationId: pending.id,
+          reason: 'Georeferencing failed',
+        });
+        continue;
+      }
+
+      exportableDetections.push({
+        id: pending.id,
+        className: pending.weedType,
+        confidence: pending.confidence ?? 0,
+        centerLat: geo.lat,
+        centerLon: geo.lon,
+        createdAt: pending.createdAt,
+        asset: {
+          fileName: asset.fileName,
+          project: asset.project,
+        },
+      });
+    }
+
+    const totalItems = detections.length + annotations.length + pendingAnnotations.length;
     const exportedCount = exportableDetections.length + exportableAnnotations.length;
 
     if (exportedCount > EXPORT_ITEM_LIMIT) {
