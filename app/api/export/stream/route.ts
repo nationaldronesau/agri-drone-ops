@@ -118,6 +118,11 @@ function manualConfidenceToScore(confidence: string | null): number {
   return 0.5;
 }
 
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry) => typeof entry === 'string') as string[];
+}
+
 function normalizeGeoPoint(lat: unknown, lon: unknown): { lat: number; lon: number } | null {
   if (
     typeof lat !== 'number' ||
@@ -291,10 +296,23 @@ export async function GET(request: NextRequest) {
     let assetIds: string[] | null = null;
     let createdAfter: Date | null = null;
     let sessionBatchJobIds: string[] | null = null;
+    let sessionInferenceJobIds: string[] = [];
+    let sessionProjectId: string | null = null;
+    let isBatchReviewSession = false;
+    let aiProcessingJobIds: string[] = [];
+    let yoloInferenceJobIds: string[] = [];
     if (sessionId) {
       const session = await prisma.reviewSession.findUnique({
         where: { id: sessionId },
-        select: { assetIds: true, teamId: true, createdAt: true, batchJobIds: true },
+        select: {
+          assetIds: true,
+          teamId: true,
+          projectId: true,
+          createdAt: true,
+          batchJobIds: true,
+          inferenceJobIds: true,
+          workflowType: true,
+        },
       });
       if (!session) {
         return NextResponse.json({ error: 'Review session not found' }, { status: 404 });
@@ -302,34 +320,56 @@ export async function GET(request: NextRequest) {
       if (!membership.teamIds.includes(session.teamId)) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 });
       }
-      assetIds = Array.isArray(session.assetIds)
-        ? (session.assetIds as string[]).filter((id) => typeof id === 'string')
-        : [];
+      assetIds = toStringArray(session.assetIds);
       createdAfter = session.createdAt;
-      sessionBatchJobIds = Array.isArray(session.batchJobIds)
-        ? (session.batchJobIds as string[]).filter((id) => typeof id === 'string')
-        : [];
+      sessionProjectId = session.projectId;
+      sessionBatchJobIds = toStringArray(session.batchJobIds);
+      sessionInferenceJobIds = toStringArray(session.inferenceJobIds);
+      isBatchReviewSession = session.workflowType === 'batch_review';
       baseWhere.asset = {
         ...(baseWhere.asset as Record<string, unknown>),
         id: { in: assetIds },
       };
+
+      if (sessionInferenceJobIds.length > 0) {
+        const [yoloJobs, processingJobs] = await Promise.all([
+          prisma.yOLOInferenceJob.findMany({
+            where: { id: { in: sessionInferenceJobIds }, projectId: sessionProjectId },
+            select: { id: true },
+          }),
+          prisma.processingJob.findMany({
+            where: {
+              id: { in: sessionInferenceJobIds },
+              projectId: sessionProjectId,
+              type: 'AI_DETECTION',
+            },
+            select: { id: true },
+          }),
+        ]);
+        yoloInferenceJobIds = yoloJobs.map((job) => job.id);
+        aiProcessingJobIds = processingJobs.map((job) => job.id);
+      }
     }
 
     if (projectId && projectId !== 'all') {
       (baseWhere.asset as Record<string, unknown>).projectId = projectId;
     }
 
-    const [detections, annotations, pendingAnnotations] = await Promise.all([
-      includeAI
+    const [aiDetections, yoloDetections, annotations, pendingAnnotations] = await Promise.all([
+      includeAI && !isBatchReviewSession
         ? prisma.detection.findMany({
             where: {
               ...baseWhere,
-              type: { in: ['AI', 'YOLO_LOCAL'] },
+              type: 'AI',
               rejected: false,
               ...(needsReview
                 ? { verified: false, userCorrected: false }
                 : { OR: [{ verified: true }, { userCorrected: true }] }),
-              ...(createdAfter ? { createdAt: { gte: createdAfter } } : {}),
+              ...(sessionId
+                ? aiProcessingJobIds.length > 0
+                  ? { jobId: { in: aiProcessingJobIds } }
+                  : (createdAfter ? { createdAt: { gte: createdAfter } } : {})
+                : {}),
               ...(minConfidence != null ? { confidence: { gte: minConfidence } } : {}),
               ...(classFilter.length > 0 ? { className: { in: classFilter } } : {}),
             },
@@ -361,7 +401,48 @@ export async function GET(request: NextRequest) {
             },
           })
         : Promise.resolve([]),
-      includeManual
+      includeAI && !isBatchReviewSession && (!sessionId || yoloInferenceJobIds.length > 0)
+        ? prisma.detection.findMany({
+            where: {
+              ...baseWhere,
+              type: 'YOLO_LOCAL',
+              rejected: false,
+              ...(needsReview
+                ? { verified: false, userCorrected: false }
+                : { OR: [{ verified: true }, { userCorrected: true }] }),
+              ...(sessionId ? { inferenceJobId: { in: yoloInferenceJobIds } } : {}),
+              ...(minConfidence != null ? { confidence: { gte: minConfidence } } : {}),
+              ...(classFilter.length > 0 ? { className: { in: classFilter } } : {}),
+            },
+            include: {
+              asset: {
+                select: {
+                  id: true,
+                  fileName: true,
+                  gpsLatitude: true,
+                  gpsLongitude: true,
+                  altitude: true,
+                  gimbalPitch: true,
+                  gimbalRoll: true,
+                  gimbalYaw: true,
+                  imageWidth: true,
+                  imageHeight: true,
+                  metadata: true,
+                  lrfDistance: true,
+                  lrfTargetLat: true,
+                  lrfTargetLon: true,
+                  project: {
+                    select: {
+                      name: true,
+                      location: true,
+                    },
+                  },
+                },
+              },
+            },
+          })
+        : Promise.resolve([]),
+      includeManual && !isBatchReviewSession
         ? prisma.manualAnnotation.findMany({
             where: {
               ...(needsReview ? { verified: false, verifiedAt: null } : { verified: true }),
@@ -448,6 +529,7 @@ export async function GET(request: NextRequest) {
           })
         : Promise.resolve([]),
     ]);
+    const detections = [...aiDetections, ...yoloDetections];
 
     const skippedItems: ExportManifest['skippedItems'] = [];
     const exportableDetections: DetectionRecord[] = [];
