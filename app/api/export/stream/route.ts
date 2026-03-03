@@ -6,7 +6,6 @@ import {
   polygonToCenterBox,
   rescaleToOriginalWithMeta,
   validateGeoParams,
-  pixelToGeo,
 } from '@/lib/utils/georeferencing';
 import { generateShapefileExport, type DetectionRecord, type AnnotationRecord } from '@/lib/services/shapefile';
 import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
@@ -168,32 +167,67 @@ async function computeExportGeo(
   },
   pixel: { x: number; y: number }
 ): Promise<{ lat: number; lon: number } | null> {
-  const validation = validateGeoParams(asset);
-  if (!validation.valid) return null;
-
-  try {
-    const geo = await pixelToGeo(
-      {
-        gpsLatitude: asset.gpsLatitude as number,
-        gpsLongitude: asset.gpsLongitude as number,
-        altitude: asset.altitude ?? 100,
-        gimbalRoll: asset.gimbalRoll ?? 0,
-        gimbalPitch: asset.gimbalPitch ?? 0,
-        gimbalYaw: asset.gimbalYaw ?? 0,
-        cameraFov: extractExportCameraFov(asset.metadata),
-        imageWidth: asset.imageWidth as number,
-        imageHeight: asset.imageHeight as number,
-        lrfDistance: asset.lrfDistance ?? undefined,
-        lrfTargetLat: asset.lrfTargetLat ?? undefined,
-        lrfTargetLon: asset.lrfTargetLon ?? undefined,
-      },
-      pixel
-    );
-    return normalizeGeoPoint(geo.lat, geo.lon);
-  } catch {
-    // Fast export path failed; avoid expensive DSM/elevation calls that can trigger 504.
+  const gpsLat = asset.gpsLatitude;
+  const gpsLon = asset.gpsLongitude;
+  const width = asset.imageWidth;
+  const height = asset.imageHeight;
+  if (
+    typeof gpsLat !== 'number' ||
+    typeof gpsLon !== 'number' ||
+    typeof width !== 'number' ||
+    typeof height !== 'number' ||
+    !Number.isFinite(gpsLat) ||
+    !Number.isFinite(gpsLon) ||
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width <= 0 ||
+    height <= 0
+  ) {
     return null;
   }
+
+  const altitude =
+    typeof asset.altitude === 'number' && Number.isFinite(asset.altitude) && asset.altitude > 0
+      ? asset.altitude
+      : 100;
+  const cameraFov = extractExportCameraFov(asset.metadata);
+  const hFovRad = (cameraFov * Math.PI) / 180;
+  const vFovRad = hFovRad * (height / width);
+
+  const normalizedX = pixel.x / width - 0.5;
+  const normalizedY = pixel.y / height - 0.5;
+
+  const angleX = normalizedX * hFovRad;
+  const angleY = normalizedY * vFovRad;
+
+  if (!Number.isFinite(angleX) || !Number.isFinite(angleY)) {
+    return null;
+  }
+
+  // Stable footprint projection: avoids singularities from extreme gimbal pitch during export.
+  let offsetEast = altitude * Math.tan(angleX);
+  let offsetNorth = -altitude * Math.tan(angleY);
+  if (!Number.isFinite(offsetEast) || !Number.isFinite(offsetNorth)) {
+    return null;
+  }
+
+  const yaw = ((asset.gimbalYaw ?? 0) * Math.PI) / 180;
+  if (Number.isFinite(yaw)) {
+    const rotatedEast = offsetEast * Math.cos(yaw) - offsetNorth * Math.sin(yaw);
+    const rotatedNorth = offsetEast * Math.sin(yaw) + offsetNorth * Math.cos(yaw);
+    offsetEast = rotatedEast;
+    offsetNorth = rotatedNorth;
+  }
+
+  const metersPerLat = 111111;
+  const metersPerLon = 111111 * Math.cos((gpsLat * Math.PI) / 180);
+  if (!Number.isFinite(metersPerLon) || Math.abs(metersPerLon) < 1e-6) {
+    return null;
+  }
+
+  const lat = gpsLat + offsetNorth / metersPerLat;
+  const lon = gpsLon + offsetEast / metersPerLon;
+  return normalizeGeoPoint(lat, lon);
 }
 
 export async function GET(request: NextRequest) {
@@ -214,6 +248,15 @@ export async function GET(request: NextRequest) {
     const sessionId = searchParams.get('sessionId');
     const includeAI = searchParams.get('includeAI') !== 'false';
     const includeManual = searchParams.get('includeManual') !== 'false';
+    const needsReview = searchParams.get('needsReview') === 'true';
+    const minConfidenceParam = searchParams.get('minConfidence');
+    let minConfidence: number | null = null;
+    if (minConfidenceParam) {
+      const parsed = Number(minConfidenceParam);
+      if (Number.isFinite(parsed)) {
+        minConfidence = Math.max(0, Math.min(1, parsed > 1 ? parsed / 100 : parsed));
+      }
+    }
     const includePendingParam = searchParams.get('includePending');
     const includePending =
       includePendingParam === 'true' || (Boolean(sessionId) && includeAI && includePendingParam !== 'false');
@@ -283,8 +326,11 @@ export async function GET(request: NextRequest) {
               ...baseWhere,
               type: { in: ['AI', 'YOLO_LOCAL'] },
               rejected: false,
-              OR: [{ verified: true }, { userCorrected: true }],
+              ...(needsReview
+                ? { verified: false, userCorrected: false }
+                : { OR: [{ verified: true }, { userCorrected: true }] }),
               ...(createdAfter ? { createdAt: { gte: createdAfter } } : {}),
+              ...(minConfidence != null ? { confidence: { gte: minConfidence } } : {}),
               ...(classFilter.length > 0 ? { className: { in: classFilter } } : {}),
             },
             include: {
@@ -318,7 +364,7 @@ export async function GET(request: NextRequest) {
       includeManual
         ? prisma.manualAnnotation.findMany({
             where: {
-              verified: true,
+              ...(needsReview ? { verified: false, verifiedAt: null } : { verified: true }),
               session: {
                 asset: baseWhere.asset,
               },
@@ -361,7 +407,7 @@ export async function GET(request: NextRequest) {
         ? prisma.pendingAnnotation.findMany({
             where: {
               asset: baseWhere.asset,
-              status: { not: 'REJECTED' },
+              ...(needsReview ? { status: 'PENDING' } : { status: { not: 'REJECTED' } }),
               ...(sessionId && sessionBatchJobIds && sessionBatchJobIds.length > 0
                 ? { batchJobId: { in: sessionBatchJobIds } }
                 : {}),
@@ -370,6 +416,7 @@ export async function GET(request: NextRequest) {
                   ? {}
                   : (createdAfter ? { createdAt: { gte: createdAfter } } : {})
               ),
+              ...(minConfidence != null ? { confidence: { gte: minConfidence } } : {}),
               ...(classFilter.length > 0 ? { weedType: { in: classFilter } } : {}),
             },
             include: {
@@ -506,6 +553,10 @@ export async function GET(request: NextRequest) {
     }
 
     for (const annotation of annotations) {
+      if (minConfidence != null && manualConfidenceToScore(annotation.confidence) < minConfidence) {
+        continue;
+      }
+
       const asset = annotation.session.asset;
       const storedGeo = normalizeGeoPoint(annotation.centerLat, annotation.centerLon);
       if (storedGeo) {

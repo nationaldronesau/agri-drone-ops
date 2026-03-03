@@ -295,6 +295,8 @@ function ReviewPageContent() {
     const params = new URLSearchParams({ format: exportFormat, sessionId });
     if (!exportIncludeAI) params.set('includeAI', 'false');
     if (!exportIncludeManual) params.set('includeManual', 'false');
+    if (pendingOnly) params.set('needsReview', 'true');
+    if (minConfidence > 0) params.set('minConfidence', (minConfidence / 100).toFixed(4));
     if (exportIncludeAI && (session?.batchJobIds?.length ?? 0) > 0) {
       params.set('includePending', 'true');
     }
@@ -325,7 +327,7 @@ function ReviewPageContent() {
     } finally {
       setExportLoading(false);
     }
-  }, [exportFormat, exportIncludeAI, exportIncludeManual, exportLoading, session?.batchJobIds, sessionId]);
+  }, [exportFormat, exportIncludeAI, exportIncludeManual, exportLoading, minConfidence, pendingOnly, session?.batchJobIds, sessionId]);
 
   if (loading) {
     return (
