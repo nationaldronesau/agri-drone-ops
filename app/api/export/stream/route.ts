@@ -13,6 +13,7 @@ import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
 
 const EXPORT_ITEM_LIMIT = 5000;
 const DEFAULT_EXPORT_CAMERA_FOV = 84;
+const MIN_EXPORT_MAX_OFFSET_M = 2000;
 
 interface ExportManifest {
   exportedAt: string;
@@ -156,6 +157,19 @@ function extractExportCameraFov(metadata: unknown): number {
   return DEFAULT_EXPORT_CAMERA_FOV;
 }
 
+function haversineDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const earthRadiusM = 6371000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return earthRadiusM * c;
+}
+
 async function computeExportGeo(
   asset: {
     gpsLatitude: number | null;
@@ -240,7 +254,20 @@ async function computeExportGeo(
       : standardGeoResult;
     const normalizedStandardGeo = normalizeGeoPoint(standardGeo.lat, standardGeo.lon);
     if (normalizedStandardGeo) {
-      return normalizedStandardGeo;
+      // Guardrail: if projection explodes (e.g. pitch singularity), use stable fallback path.
+      const projectedOffsetMeters = haversineDistanceMeters(
+        gpsLat,
+        gpsLon,
+        normalizedStandardGeo.lat,
+        normalizedStandardGeo.lon
+      );
+      const maxOffsetMeters = Math.max(MIN_EXPORT_MAX_OFFSET_M, altitude * 20);
+      if (Number.isFinite(projectedOffsetMeters) && projectedOffsetMeters <= maxOffsetMeters) {
+        return normalizedStandardGeo;
+      }
+      console.warn(
+        `[export] ignoring implausible projected point (${projectedOffsetMeters.toFixed(1)}m from asset GPS, max ${maxOffsetMeters.toFixed(1)}m)`
+      );
     }
   } catch {
     // Continue to stable projection fallback
