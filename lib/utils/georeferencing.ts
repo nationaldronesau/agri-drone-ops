@@ -257,13 +257,24 @@ export function pixelToGeo(
     const angleX = normalizedX * hFov;
     const angleY = normalizedY * vFov;
     
-    // Apply gimbal rotations
+    // Apply camera-frame offsets from the LRF target point
     const distance = params.lrfDistance || params.altitude;
     const offsetEast = distance * Math.tan(angleX);
-    const offsetNorth = distance * Math.tan(angleY);
+    // Image Y increases downward, so northing offset is inverted.
+    const offsetNorth = -distance * Math.tan(angleY);
 
-    const resultLat = params.lrfTargetLat + offsetNorth / metersPerLat;
-    const resultLon = params.lrfTargetLon + offsetEast / metersPerLon;
+    const yaw = params.gimbalYaw * Math.PI / 180;
+    const rotatedEast = offsetEast * Math.cos(yaw) - offsetNorth * Math.sin(yaw);
+    const rotatedNorth = offsetEast * Math.sin(yaw) + offsetNorth * Math.cos(yaw);
+
+    const metersPerLonAtTarget =
+      111111 * Math.cos(params.lrfTargetLat * Math.PI / 180);
+    if (!Number.isFinite(metersPerLonAtTarget) || Math.abs(metersPerLonAtTarget) < 1e-6) {
+      throw new Error('Invalid longitude scale for LRF georeferencing');
+    }
+
+    const resultLat = params.lrfTargetLat + rotatedNorth / metersPerLat;
+    const resultLon = params.lrfTargetLon + rotatedEast / metersPerLonAtTarget;
 
     // SAFETY: Validate before returning (throws on invalid)
     assertValidGeoCoordinates(resultLat, resultLon, 'LRF-based');
