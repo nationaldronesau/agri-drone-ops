@@ -57,6 +57,22 @@ export interface GeoCoordinates {
   lon: number;
 }
 
+const METERS_PER_DEGREE_LAT = 111111;
+const DEFAULT_MAX_LRF_OFFSET_M = 2000;
+
+function haversineDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const earthRadiusM = 6371000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return earthRadiusM * c;
+}
+
 type GeoFeaturePolygon = {
   type: 'Feature';
   geometry: {
@@ -242,10 +258,40 @@ export function pixelToGeo(
     throw new Error('Invalid parameters');
   }
 
-  const metersPerLat = 111111; // approximately
-  const metersPerLon = 111111 * Math.cos(params.gpsLatitude * Math.PI / 180);
+  const metersPerLat = METERS_PER_DEGREE_LAT; // approximately
+  const metersPerLon = METERS_PER_DEGREE_LAT * Math.cos(params.gpsLatitude * Math.PI / 180);
 
-  if (useLrf && params.lrfTargetLat !== undefined && params.lrfTargetLon !== undefined) {
+  const hasLrfTarget =
+    typeof params.lrfTargetLat === 'number' &&
+    typeof params.lrfTargetLon === 'number' &&
+    Number.isFinite(params.lrfTargetLat) &&
+    Number.isFinite(params.lrfTargetLon);
+  const hasLrfDistance =
+    typeof params.lrfDistance === 'number' &&
+    Number.isFinite(params.lrfDistance) &&
+    params.lrfDistance > 0;
+
+  let lrfLooksPlausible = false;
+  if (useLrf && hasLrfTarget && hasLrfDistance) {
+    const gpsToLrfMeters = haversineDistanceMeters(
+      params.gpsLatitude,
+      params.gpsLongitude,
+      params.lrfTargetLat,
+      params.lrfTargetLon
+    );
+    const maxExpectedOffset = Math.max(
+      DEFAULT_MAX_LRF_OFFSET_M,
+      params.lrfDistance * 8 + 500
+    );
+    lrfLooksPlausible = Number.isFinite(gpsToLrfMeters) && gpsToLrfMeters <= maxExpectedOffset;
+    if (!lrfLooksPlausible) {
+      console.warn(
+        `[GEO] Ignoring implausible LRF target offset (${gpsToLrfMeters.toFixed(1)}m > ${maxExpectedOffset.toFixed(1)}m)`
+      );
+    }
+  }
+
+  if (lrfLooksPlausible && params.lrfTargetLat !== undefined && params.lrfTargetLon !== undefined && params.lrfDistance !== undefined) {
     // Off-center LRF targeting and projection
     const normalizedX = (pixel.x / params.imageWidth) - 0.5;
     const normalizedY = (pixel.y / params.imageHeight) - 0.5;
@@ -258,7 +304,7 @@ export function pixelToGeo(
     const angleY = normalizedY * vFov;
     
     // Apply camera-frame offsets from the LRF target point
-    const distance = params.lrfDistance || params.altitude;
+    const distance = params.lrfDistance;
     const offsetEast = distance * Math.tan(angleX);
     // Image Y increases downward, so northing offset is inverted.
     const offsetNorth = -distance * Math.tan(angleY);
