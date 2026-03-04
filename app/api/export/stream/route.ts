@@ -4,6 +4,7 @@ import prisma from '@/lib/db';
 import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
 import {
   polygonToCenterBox,
+  pixelToGeo,
   rescaleToOriginalWithMeta,
   validateGeoParams,
 } from '@/lib/utils/georeferencing';
@@ -163,6 +164,7 @@ async function computeExportGeo(
     gimbalPitch: number | null;
     gimbalRoll: number | null;
     gimbalYaw: number | null;
+    cameraFov: number | null;
     imageWidth: number | null;
     imageHeight: number | null;
     metadata?: unknown | null;
@@ -195,7 +197,55 @@ async function computeExportGeo(
     typeof asset.altitude === 'number' && Number.isFinite(asset.altitude) && asset.altitude > 0
       ? asset.altitude
       : 100;
-  const cameraFov = extractExportCameraFov(asset.metadata);
+  const cameraFov =
+    typeof asset.cameraFov === 'number' &&
+    Number.isFinite(asset.cameraFov) &&
+    asset.cameraFov > 0 &&
+    asset.cameraFov < 180
+      ? asset.cameraFov
+      : extractExportCameraFov(asset.metadata);
+
+  // Fast path: use standard georeferencing math (with LRF support) but without DSM/elevation APIs.
+  // If this throws (e.g. extreme pitch singularities), we fall back to the stable export projection below.
+  try {
+    const standardGeoResult = pixelToGeo(
+      {
+        gpsLatitude: gpsLat,
+        gpsLongitude: gpsLon,
+        altitude,
+        gimbalRoll: asset.gimbalRoll ?? 0,
+        gimbalPitch: asset.gimbalPitch ?? 0,
+        gimbalYaw: asset.gimbalYaw ?? 0,
+        cameraFov,
+        imageWidth: width,
+        imageHeight: height,
+        lrfDistance:
+          typeof asset.lrfDistance === 'number' && Number.isFinite(asset.lrfDistance)
+            ? asset.lrfDistance
+            : undefined,
+        lrfTargetLat:
+          typeof asset.lrfTargetLat === 'number' && Number.isFinite(asset.lrfTargetLat)
+            ? asset.lrfTargetLat
+            : undefined,
+        lrfTargetLon:
+          typeof asset.lrfTargetLon === 'number' && Number.isFinite(asset.lrfTargetLon)
+            ? asset.lrfTargetLon
+            : undefined,
+      },
+      pixel,
+      true
+    );
+    const standardGeo = standardGeoResult instanceof Promise
+      ? await standardGeoResult
+      : standardGeoResult;
+    const normalizedStandardGeo = normalizeGeoPoint(standardGeo.lat, standardGeo.lon);
+    if (normalizedStandardGeo) {
+      return normalizedStandardGeo;
+    }
+  } catch {
+    // Continue to stable projection fallback
+  }
+
   const hFovRad = (cameraFov * Math.PI) / 180;
   const vFovRad = hFovRad * (height / width);
 
@@ -384,6 +434,7 @@ export async function GET(request: NextRequest) {
                   gimbalPitch: true,
                   gimbalRoll: true,
                   gimbalYaw: true,
+                  cameraFov: true,
                   imageWidth: true,
                   imageHeight: true,
                   metadata: true,
@@ -425,6 +476,7 @@ export async function GET(request: NextRequest) {
                   gimbalPitch: true,
                   gimbalRoll: true,
                   gimbalYaw: true,
+                  cameraFov: true,
                   imageWidth: true,
                   imageHeight: true,
                   metadata: true,
@@ -465,6 +517,7 @@ export async function GET(request: NextRequest) {
                       gimbalPitch: true,
                       gimbalRoll: true,
                       gimbalYaw: true,
+                      cameraFov: true,
                       imageWidth: true,
                       imageHeight: true,
                       metadata: true,
@@ -511,6 +564,7 @@ export async function GET(request: NextRequest) {
                   gimbalPitch: true,
                   gimbalRoll: true,
                   gimbalYaw: true,
+                  cameraFov: true,
                   imageWidth: true,
                   imageHeight: true,
                   metadata: true,
@@ -538,33 +592,8 @@ export async function GET(request: NextRequest) {
     for (const detection of detections) {
       const asset = detection.asset;
       const storedGeo = normalizeGeoPoint(detection.centerLat, detection.centerLon);
-      if (storedGeo) {
-        exportableDetections.push({
-          id: detection.id,
-          className: detection.className,
-          confidence: detection.confidence ?? 0,
-          centerLat: storedGeo.lat,
-          centerLon: storedGeo.lon,
-          createdAt: detection.createdAt,
-          asset: {
-            fileName: asset.fileName,
-            project: asset.project,
-          },
-        });
-        continue;
-      }
 
       const validation = validateGeoParams(asset);
-      if (!validation.valid) {
-        skippedItems.push({
-          assetId: asset.id,
-          assetName: asset.fileName,
-          annotationId: detection.id,
-          reason: validation.warnings[0] || 'Missing EXIF data',
-        });
-        continue;
-      }
-
       let centerBox = parseCenterBox(detection.boundingBox);
       const preRescaleBox = centerBox ? { ...centerBox } : null;
       let meta = detection.preprocessingMeta as YOLOPreprocessingMeta | null;
@@ -580,7 +609,7 @@ export async function GET(request: NextRequest) {
         centerBox = rescaleToOriginalWithMeta(centerBox, meta);
       }
 
-      if (!centerBox) {
+      if (!centerBox && !storedGeo) {
         skippedItems.push({
           assetId: asset.id,
           assetName: asset.fileName,
@@ -590,32 +619,44 @@ export async function GET(request: NextRequest) {
         continue;
       }
 
-      logGeoDebugOnce({
-        format,
-        itemKind: 'detection',
-        itemId: detection.id,
-        assetId: asset.id,
-        fileName: asset.fileName,
-        pixel: { x: centerBox.x, y: centerBox.y },
-        bboxPreRescale: preRescaleBox,
-        bboxPostRescale: didRescale ? { ...centerBox } : null,
-        imageWidth: asset.imageWidth,
-        imageHeight: asset.imageHeight,
-        gpsLatitude: asset.gpsLatitude,
-        gpsLongitude: asset.gpsLongitude,
-        altitude: asset.altitude,
-        gimbalPitch: asset.gimbalPitch,
-        gimbalRoll: asset.gimbalRoll,
-        gimbalYaw: asset.gimbalYaw,
-        geoMethod: 'pixelToGeoFastExport',
-      });
-      const geo = await computeExportGeo(asset, { x: centerBox.x, y: centerBox.y });
-      if (!geo) {
+      let finalGeo = storedGeo;
+      if (validation.valid && centerBox) {
+        logGeoDebugOnce({
+          format,
+          itemKind: 'detection',
+          itemId: detection.id,
+          assetId: asset.id,
+          fileName: asset.fileName,
+          pixel: { x: centerBox.x, y: centerBox.y },
+          bboxPreRescale: preRescaleBox,
+          bboxPostRescale: didRescale ? { ...centerBox } : null,
+          imageWidth: asset.imageWidth,
+          imageHeight: asset.imageHeight,
+          gpsLatitude: asset.gpsLatitude,
+          gpsLongitude: asset.gpsLongitude,
+          altitude: asset.altitude,
+          gimbalPitch: asset.gimbalPitch,
+          gimbalRoll: asset.gimbalRoll,
+          gimbalYaw: asset.gimbalYaw,
+          geoMethod: 'pixelToGeoFastExport',
+        });
+        const computedGeo = await computeExportGeo(asset, { x: centerBox.x, y: centerBox.y });
+        if (computedGeo) {
+          finalGeo = computedGeo;
+        }
+      }
+
+      if (!finalGeo) {
+        const reason = !validation.valid
+          ? (validation.warnings[0] || 'Missing EXIF data')
+          : centerBox
+            ? 'Georeferencing failed (fast export mode)'
+            : 'Invalid bounding box';
         skippedItems.push({
           assetId: asset.id,
           assetName: asset.fileName,
           annotationId: detection.id,
-          reason: 'Georeferencing failed (fast export mode)',
+          reason,
         });
         continue;
       }
@@ -624,8 +665,8 @@ export async function GET(request: NextRequest) {
         id: detection.id,
         className: detection.className,
         confidence: detection.confidence ?? 0,
-        centerLat: geo.lat,
-        centerLon: geo.lon,
+        centerLat: finalGeo.lat,
+        centerLon: finalGeo.lon,
         createdAt: detection.createdAt,
         asset: {
           fileName: asset.fileName,
@@ -641,42 +682,13 @@ export async function GET(request: NextRequest) {
 
       const asset = annotation.session.asset;
       const storedGeo = normalizeGeoPoint(annotation.centerLat, annotation.centerLon);
-      if (storedGeo) {
-        exportableAnnotations.push({
-          id: annotation.id,
-          weedType: annotation.weedType,
-          confidence: annotation.confidence,
-          centerLat: storedGeo.lat,
-          centerLon: storedGeo.lon,
-          coordinates: annotation.coordinates,
-          notes: annotation.notes,
-          createdAt: annotation.createdAt,
-          session: {
-            asset: {
-              fileName: asset.fileName,
-              project: asset.project,
-            },
-          },
-        });
-        continue;
-      }
 
       const validation = validateGeoParams(asset);
-      if (!validation.valid) {
-        skippedItems.push({
-          assetId: asset.id,
-          assetName: asset.fileName,
-          annotationId: annotation.id,
-          reason: validation.warnings[0] || 'Missing EXIF data',
-        });
-        continue;
-      }
-
       const polygon = Array.isArray(annotation.coordinates)
         ? (annotation.coordinates as number[][])
         : [];
       const centerBox = polygonToCenterBox(polygon);
-      if (!centerBox) {
+      if (!centerBox && !storedGeo) {
         skippedItems.push({
           assetId: asset.id,
           assetName: asset.fileName,
@@ -686,32 +698,44 @@ export async function GET(request: NextRequest) {
         continue;
       }
 
-      logGeoDebugOnce({
-        format,
-        itemKind: 'annotation',
-        itemId: annotation.id,
-        assetId: asset.id,
-        fileName: asset.fileName,
-        pixel: { x: centerBox.x, y: centerBox.y },
-        bboxPreRescale: { ...centerBox },
-        bboxPostRescale: null,
-        imageWidth: asset.imageWidth,
-        imageHeight: asset.imageHeight,
-        gpsLatitude: asset.gpsLatitude,
-        gpsLongitude: asset.gpsLongitude,
-        altitude: asset.altitude,
-        gimbalPitch: asset.gimbalPitch,
-        gimbalRoll: asset.gimbalRoll,
-        gimbalYaw: asset.gimbalYaw,
-        geoMethod: 'pixelToGeoFastExport',
-      });
-      const geo = await computeExportGeo(asset, { x: centerBox.x, y: centerBox.y });
-      if (!geo) {
+      let finalGeo = storedGeo;
+      if (validation.valid && centerBox) {
+        logGeoDebugOnce({
+          format,
+          itemKind: 'annotation',
+          itemId: annotation.id,
+          assetId: asset.id,
+          fileName: asset.fileName,
+          pixel: { x: centerBox.x, y: centerBox.y },
+          bboxPreRescale: { ...centerBox },
+          bboxPostRescale: null,
+          imageWidth: asset.imageWidth,
+          imageHeight: asset.imageHeight,
+          gpsLatitude: asset.gpsLatitude,
+          gpsLongitude: asset.gpsLongitude,
+          altitude: asset.altitude,
+          gimbalPitch: asset.gimbalPitch,
+          gimbalRoll: asset.gimbalRoll,
+          gimbalYaw: asset.gimbalYaw,
+          geoMethod: 'pixelToGeoFastExport',
+        });
+        const computedGeo = await computeExportGeo(asset, { x: centerBox.x, y: centerBox.y });
+        if (computedGeo) {
+          finalGeo = computedGeo;
+        }
+      }
+
+      if (!finalGeo) {
+        const reason = !validation.valid
+          ? (validation.warnings[0] || 'Missing EXIF data')
+          : centerBox
+            ? 'Georeferencing failed (fast export mode)'
+            : 'Invalid polygon geometry';
         skippedItems.push({
           assetId: asset.id,
           assetName: asset.fileName,
           annotationId: annotation.id,
-          reason: 'Georeferencing failed (fast export mode)',
+          reason,
         });
         continue;
       }
@@ -720,8 +744,8 @@ export async function GET(request: NextRequest) {
         id: annotation.id,
         weedType: annotation.weedType,
         confidence: annotation.confidence,
-        centerLat: geo.lat,
-        centerLon: geo.lon,
+        centerLat: finalGeo.lat,
+        centerLon: finalGeo.lon,
         coordinates: annotation.coordinates,
         notes: annotation.notes,
         createdAt: annotation.createdAt,
@@ -737,40 +761,15 @@ export async function GET(request: NextRequest) {
     for (const pending of pendingAnnotations) {
       const asset = pending.asset;
       const storedGeo = normalizeGeoPoint(pending.centerLat, pending.centerLon);
-      if (storedGeo) {
-        exportableDetections.push({
-          id: pending.id,
-          className: pending.weedType,
-          confidence: pending.confidence ?? 0,
-          centerLat: storedGeo.lat,
-          centerLon: storedGeo.lon,
-          createdAt: pending.createdAt,
-          asset: {
-            fileName: asset.fileName,
-            project: asset.project,
-          },
-        });
-        continue;
-      }
 
       const validation = validateGeoParams(asset);
-      if (!validation.valid) {
-        skippedItems.push({
-          assetId: asset.id,
-          assetName: asset.fileName,
-          annotationId: pending.id,
-          reason: validation.warnings[0] || 'Missing EXIF data',
-        });
-        continue;
-      }
-
       const bboxCenter = parseCenterBox(pending.bbox);
       const polygon = Array.isArray(pending.polygon)
         ? (pending.polygon as number[][])
         : [];
       const centerBox = bboxCenter || polygonToCenterBox(polygon);
 
-      if (!centerBox) {
+      if (!centerBox && !storedGeo) {
         skippedItems.push({
           assetId: asset.id,
           assetName: asset.fileName,
@@ -780,32 +779,44 @@ export async function GET(request: NextRequest) {
         continue;
       }
 
-      logGeoDebugOnce({
-        format,
-        itemKind: 'pending',
-        itemId: pending.id,
-        assetId: asset.id,
-        fileName: asset.fileName,
-        pixel: { x: centerBox.x, y: centerBox.y },
-        bboxPreRescale: { ...centerBox },
-        bboxPostRescale: null,
-        imageWidth: asset.imageWidth,
-        imageHeight: asset.imageHeight,
-        gpsLatitude: asset.gpsLatitude,
-        gpsLongitude: asset.gpsLongitude,
-        altitude: asset.altitude,
-        gimbalPitch: asset.gimbalPitch,
-        gimbalRoll: asset.gimbalRoll,
-        gimbalYaw: asset.gimbalYaw,
-        geoMethod: 'pixelToGeoFastExport',
-      });
-      const geo = await computeExportGeo(asset, { x: centerBox.x, y: centerBox.y });
-      if (!geo) {
+      let finalGeo = storedGeo;
+      if (validation.valid && centerBox) {
+        logGeoDebugOnce({
+          format,
+          itemKind: 'pending',
+          itemId: pending.id,
+          assetId: asset.id,
+          fileName: asset.fileName,
+          pixel: { x: centerBox.x, y: centerBox.y },
+          bboxPreRescale: { ...centerBox },
+          bboxPostRescale: null,
+          imageWidth: asset.imageWidth,
+          imageHeight: asset.imageHeight,
+          gpsLatitude: asset.gpsLatitude,
+          gpsLongitude: asset.gpsLongitude,
+          altitude: asset.altitude,
+          gimbalPitch: asset.gimbalPitch,
+          gimbalRoll: asset.gimbalRoll,
+          gimbalYaw: asset.gimbalYaw,
+          geoMethod: 'pixelToGeoFastExport',
+        });
+        const computedGeo = await computeExportGeo(asset, { x: centerBox.x, y: centerBox.y });
+        if (computedGeo) {
+          finalGeo = computedGeo;
+        }
+      }
+
+      if (!finalGeo) {
+        const reason = !validation.valid
+          ? (validation.warnings[0] || 'Missing EXIF data')
+          : centerBox
+            ? 'Georeferencing failed (fast export mode)'
+            : 'Invalid pending annotation geometry';
         skippedItems.push({
           assetId: asset.id,
           assetName: asset.fileName,
           annotationId: pending.id,
-          reason: 'Georeferencing failed (fast export mode)',
+          reason,
         });
         continue;
       }
@@ -814,8 +825,8 @@ export async function GET(request: NextRequest) {
         id: pending.id,
         className: pending.weedType,
         confidence: pending.confidence ?? 0,
-        centerLat: geo.lat,
-        centerLon: geo.lon,
+        centerLat: finalGeo.lat,
+        centerLon: finalGeo.lon,
         createdAt: pending.createdAt,
         asset: {
           fileName: asset.fileName,
