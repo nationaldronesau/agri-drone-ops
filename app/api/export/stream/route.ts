@@ -620,7 +620,7 @@ export async function GET(request: NextRequest) {
       }
 
       let finalGeo = storedGeo;
-      if (validation.valid && centerBox) {
+      if (centerBox) {
         logGeoDebugOnce({
           format,
           itemKind: 'detection',
@@ -647,11 +647,9 @@ export async function GET(request: NextRequest) {
       }
 
       if (!finalGeo) {
-        const reason = !validation.valid
-          ? (validation.warnings[0] || 'Missing EXIF data')
-          : centerBox
-            ? 'Georeferencing failed (fast export mode)'
-            : 'Invalid bounding box';
+        const reason = centerBox
+          ? 'Georeferencing failed (fast export mode)'
+          : (validation.warnings[0] || 'Missing EXIF data');
         skippedItems.push({
           assetId: asset.id,
           assetName: asset.fileName,
@@ -699,7 +697,7 @@ export async function GET(request: NextRequest) {
       }
 
       let finalGeo = storedGeo;
-      if (validation.valid && centerBox) {
+      if (centerBox) {
         logGeoDebugOnce({
           format,
           itemKind: 'annotation',
@@ -726,11 +724,9 @@ export async function GET(request: NextRequest) {
       }
 
       if (!finalGeo) {
-        const reason = !validation.valid
-          ? (validation.warnings[0] || 'Missing EXIF data')
-          : centerBox
-            ? 'Georeferencing failed (fast export mode)'
-            : 'Invalid polygon geometry';
+        const reason = centerBox
+          ? 'Georeferencing failed (fast export mode)'
+          : (validation.warnings[0] || 'Invalid polygon geometry');
         skippedItems.push({
           assetId: asset.id,
           assetName: asset.fileName,
@@ -780,7 +776,7 @@ export async function GET(request: NextRequest) {
       }
 
       let finalGeo = storedGeo;
-      if (validation.valid && centerBox) {
+      if (centerBox) {
         logGeoDebugOnce({
           format,
           itemKind: 'pending',
@@ -807,11 +803,9 @@ export async function GET(request: NextRequest) {
       }
 
       if (!finalGeo) {
-        const reason = !validation.valid
-          ? (validation.warnings[0] || 'Missing EXIF data')
-          : centerBox
-            ? 'Georeferencing failed (fast export mode)'
-            : 'Invalid pending annotation geometry';
+        const reason = centerBox
+          ? 'Georeferencing failed (fast export mode)'
+          : (validation.warnings[0] || 'Invalid pending annotation geometry');
         skippedItems.push({
           assetId: asset.id,
           assetName: asset.fileName,
