@@ -14,6 +14,7 @@ import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
 const EXPORT_ITEM_LIMIT = 5000;
 const DEFAULT_EXPORT_CAMERA_FOV = 84;
 const MIN_EXPORT_MAX_OFFSET_M = 2000;
+const MAX_EXPORT_LRF_GPS_OFFSET_M = 2000;
 
 interface ExportManifest {
   exportedAt: string;
@@ -170,6 +171,42 @@ function haversineDistanceMeters(lat1: number, lon1: number, lat2: number, lon2:
   return earthRadiusM * c;
 }
 
+function hasPlausibleLrf(asset: {
+  gpsLatitude: number | null;
+  gpsLongitude: number | null;
+  lrfDistance?: number | null;
+  lrfTargetLat?: number | null;
+  lrfTargetLon?: number | null;
+}): boolean {
+  if (
+    typeof asset.gpsLatitude !== 'number' ||
+    typeof asset.gpsLongitude !== 'number' ||
+    typeof asset.lrfDistance !== 'number' ||
+    typeof asset.lrfTargetLat !== 'number' ||
+    typeof asset.lrfTargetLon !== 'number' ||
+    !Number.isFinite(asset.gpsLatitude) ||
+    !Number.isFinite(asset.gpsLongitude) ||
+    !Number.isFinite(asset.lrfDistance) ||
+    !Number.isFinite(asset.lrfTargetLat) ||
+    !Number.isFinite(asset.lrfTargetLon) ||
+    asset.lrfDistance <= 0
+  ) {
+    return false;
+  }
+
+  const gpsToLrfMeters = haversineDistanceMeters(
+    asset.gpsLatitude,
+    asset.gpsLongitude,
+    asset.lrfTargetLat,
+    asset.lrfTargetLon
+  );
+  const maxExpectedOffset = Math.max(
+    MAX_EXPORT_LRF_GPS_OFFSET_M,
+    asset.lrfDistance * 8 + 500
+  );
+  return Number.isFinite(gpsToLrfMeters) && gpsToLrfMeters <= maxExpectedOffset;
+}
+
 async function computeExportGeo(
   asset: {
     gpsLatitude: number | null;
@@ -219,58 +256,59 @@ async function computeExportGeo(
       ? asset.cameraFov
       : extractExportCameraFov(asset.metadata);
 
-  // Fast path: use standard georeferencing math (with LRF support) but without DSM/elevation APIs.
-  // If this throws (e.g. extreme pitch singularities), we fall back to the stable export projection below.
-  try {
-    const standardGeoResult = pixelToGeo(
-      {
-        gpsLatitude: gpsLat,
-        gpsLongitude: gpsLon,
-        altitude,
-        gimbalRoll: asset.gimbalRoll ?? 0,
-        gimbalPitch: asset.gimbalPitch ?? 0,
-        gimbalYaw: asset.gimbalYaw ?? 0,
-        cameraFov,
-        imageWidth: width,
-        imageHeight: height,
-        lrfDistance:
-          typeof asset.lrfDistance === 'number' && Number.isFinite(asset.lrfDistance)
-            ? asset.lrfDistance
-            : undefined,
-        lrfTargetLat:
-          typeof asset.lrfTargetLat === 'number' && Number.isFinite(asset.lrfTargetLat)
-            ? asset.lrfTargetLat
-            : undefined,
-        lrfTargetLon:
-          typeof asset.lrfTargetLon === 'number' && Number.isFinite(asset.lrfTargetLon)
-            ? asset.lrfTargetLon
-            : undefined,
-      },
-      pixel,
-      true
-    );
-    const standardGeo = standardGeoResult instanceof Promise
-      ? await standardGeoResult
-      : standardGeoResult;
-    const normalizedStandardGeo = normalizeGeoPoint(standardGeo.lat, standardGeo.lon);
-    if (normalizedStandardGeo) {
-      // Guardrail: if projection explodes (e.g. pitch singularity), use stable fallback path.
-      const projectedOffsetMeters = haversineDistanceMeters(
-        gpsLat,
-        gpsLon,
-        normalizedStandardGeo.lat,
-        normalizedStandardGeo.lon
+  // Use the standard pixelToGeo path only when LRF metadata is plausibly valid.
+  // Otherwise, prefer the stable export projection below (it avoids pitch singularities).
+  if (hasPlausibleLrf(asset)) {
+    try {
+      const standardGeoResult = pixelToGeo(
+        {
+          gpsLatitude: gpsLat,
+          gpsLongitude: gpsLon,
+          altitude,
+          gimbalRoll: asset.gimbalRoll ?? 0,
+          gimbalPitch: asset.gimbalPitch ?? 0,
+          gimbalYaw: asset.gimbalYaw ?? 0,
+          cameraFov,
+          imageWidth: width,
+          imageHeight: height,
+          lrfDistance:
+            typeof asset.lrfDistance === 'number' && Number.isFinite(asset.lrfDistance)
+              ? asset.lrfDistance
+              : undefined,
+          lrfTargetLat:
+            typeof asset.lrfTargetLat === 'number' && Number.isFinite(asset.lrfTargetLat)
+              ? asset.lrfTargetLat
+              : undefined,
+          lrfTargetLon:
+            typeof asset.lrfTargetLon === 'number' && Number.isFinite(asset.lrfTargetLon)
+              ? asset.lrfTargetLon
+              : undefined,
+        },
+        pixel,
+        true
       );
-      const maxOffsetMeters = Math.max(MIN_EXPORT_MAX_OFFSET_M, altitude * 20);
-      if (Number.isFinite(projectedOffsetMeters) && projectedOffsetMeters <= maxOffsetMeters) {
-        return normalizedStandardGeo;
+      const standardGeo = standardGeoResult instanceof Promise
+        ? await standardGeoResult
+        : standardGeoResult;
+      const normalizedStandardGeo = normalizeGeoPoint(standardGeo.lat, standardGeo.lon);
+      if (normalizedStandardGeo) {
+        const projectedOffsetMeters = haversineDistanceMeters(
+          gpsLat,
+          gpsLon,
+          normalizedStandardGeo.lat,
+          normalizedStandardGeo.lon
+        );
+        const maxOffsetMeters = Math.max(MIN_EXPORT_MAX_OFFSET_M, altitude * 20);
+        if (Number.isFinite(projectedOffsetMeters) && projectedOffsetMeters <= maxOffsetMeters) {
+          return normalizedStandardGeo;
+        }
+        console.warn(
+          `[export] ignoring implausible LRF projected point (${projectedOffsetMeters.toFixed(1)}m from asset GPS, max ${maxOffsetMeters.toFixed(1)}m)`
+        );
       }
-      console.warn(
-        `[export] ignoring implausible projected point (${projectedOffsetMeters.toFixed(1)}m from asset GPS, max ${maxOffsetMeters.toFixed(1)}m)`
-      );
+    } catch {
+      // Continue to stable projection fallback
     }
-  } catch {
-    // Continue to stable projection fallback
   }
 
   const hFovRad = (cameraFov * Math.PI) / 180;
