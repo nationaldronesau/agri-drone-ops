@@ -337,6 +337,23 @@ function capProjectedOffset(
   };
 }
 
+function rotateOffsetsByYaw(
+  offsetEast: number,
+  offsetNorth: number,
+  yawDegrees: number
+): { east: number; north: number } {
+  if (!Number.isFinite(yawDegrees)) {
+    return { east: offsetEast, north: offsetNorth };
+  }
+
+  // DJI yaw metadata is a compass bearing: clockwise-positive from true north.
+  const yaw = (yawDegrees * Math.PI) / 180;
+  return {
+    east: offsetEast * Math.cos(yaw) + offsetNorth * Math.sin(yaw),
+    north: -offsetEast * Math.sin(yaw) + offsetNorth * Math.cos(yaw),
+  };
+}
+
 type GeoFeaturePolygon = {
   type: 'Feature';
   geometry: {
@@ -614,9 +631,11 @@ export function pixelToGeo(
     // Image Y increases downward, so northing offset is inverted.
     const offsetNorth = -distance * Math.tan(angleY);
 
-    const yaw = params.gimbalYaw * Math.PI / 180;
-    const rotatedEast = offsetEast * Math.cos(yaw) - offsetNorth * Math.sin(yaw);
-    const rotatedNorth = offsetEast * Math.sin(yaw) + offsetNorth * Math.cos(yaw);
+    const rotated = rotateOffsetsByYaw(
+      offsetEast,
+      offsetNorth,
+      params.gimbalYaw
+    );
 
     const metersPerLonAtTarget =
       111111 * Math.cos(params.lrfTargetLat * Math.PI / 180);
@@ -624,8 +643,8 @@ export function pixelToGeo(
       throw new Error('Invalid longitude scale for LRF georeferencing');
     }
 
-    const resultLat = params.lrfTargetLat + rotatedNorth / metersPerLat;
-    const resultLon = params.lrfTargetLon + rotatedEast / metersPerLonAtTarget;
+    const resultLat = params.lrfTargetLat + rotated.north / metersPerLat;
+    const resultLon = params.lrfTargetLon + rotated.east / metersPerLonAtTarget;
 
     // SAFETY: Validate before returning (throws on invalid)
     assertValidGeoCoordinates(resultLat, resultLon, 'LRF-based');
@@ -647,7 +666,8 @@ export function pixelToGeo(
   
   // Apply gimbal rotations (simplified)
   const pitch = params.gimbalPitch * Math.PI / 180;
-  const yaw = params.gimbalYaw * Math.PI / 180;
+  const yawDeg = params.gimbalYaw;
+  const yaw = yawDeg * Math.PI / 180;
 
   const pitchPlusRay = pitch + rayAngleY;
   const pitchCos = Math.cos(pitchPlusRay);
@@ -661,8 +681,13 @@ export function pixelToGeo(
     if (!Number.isFinite(stableOffsetEast) || !Number.isFinite(stableOffsetNorth)) {
       throw new Error('Projection became unstable for current pixel and camera angles');
     }
-    rotatedOffsetX = stableOffsetEast * Math.cos(yaw) - stableOffsetNorth * Math.sin(yaw);
-    rotatedOffsetY = stableOffsetEast * Math.sin(yaw) + stableOffsetNorth * Math.cos(yaw);
+    const rotated = rotateOffsetsByYaw(
+      stableOffsetEast,
+      stableOffsetNorth,
+      yawDeg
+    );
+    rotatedOffsetX = rotated.east;
+    rotatedOffsetY = rotated.north;
   } else {
     // Calculate ground distance
     const groundDistance = params.altitude / pitchCos;

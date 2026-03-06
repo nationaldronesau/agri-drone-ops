@@ -160,6 +160,23 @@ function haversineDistanceMeters(lat1: number, lon1: number, lat2: number, lon2:
   return earthRadiusM * c;
 }
 
+function rotateOffsetsByYaw(
+  offsetEast: number,
+  offsetNorth: number,
+  yawDegrees: number
+): { east: number; north: number } {
+  if (!Number.isFinite(yawDegrees)) {
+    return { east: offsetEast, north: offsetNorth };
+  }
+
+  // DJI yaw metadata is a compass bearing: clockwise-positive from true north.
+  const yaw = (yawDegrees * Math.PI) / 180;
+  return {
+    east: offsetEast * Math.cos(yaw) + offsetNorth * Math.sin(yaw),
+    north: -offsetEast * Math.sin(yaw) + offsetNorth * Math.cos(yaw),
+  };
+}
+
 function hasPlausibleLrf(asset: {
   gpsLatitude: number | null;
   gpsLongitude: number | null;
@@ -338,13 +355,9 @@ async function computeExportGeo(
     return null;
   }
 
-  const yaw = ((asset.gimbalYaw ?? 0) * Math.PI) / 180;
-  if (Number.isFinite(yaw)) {
-    const rotatedEast = offsetEast * Math.cos(yaw) - offsetNorth * Math.sin(yaw);
-    const rotatedNorth = offsetEast * Math.sin(yaw) + offsetNorth * Math.cos(yaw);
-    offsetEast = rotatedEast;
-    offsetNorth = rotatedNorth;
-  }
+  const rotated = rotateOffsetsByYaw(offsetEast, offsetNorth, asset.gimbalYaw ?? 0);
+  offsetEast = rotated.east;
+  offsetNorth = rotated.north;
 
   const metersPerLat = 111111;
   const metersPerLon = 111111 * Math.cos((gpsLat * Math.PI) / 180);
