@@ -59,6 +59,176 @@ export interface GeoCoordinates {
 
 const METERS_PER_DEGREE_LAT = 111111;
 const DEFAULT_MAX_LRF_OFFSET_M = 2000;
+const DEFAULT_CAMERA_FOV = 84;
+const DEFAULT_ALTITUDE = 100;
+const MIN_IMAGE_DIMENSION_PX = 16;
+const CAMERA_FOV_META_KEYS = ['FieldOfView', 'drone-dji:FieldOfView', 'FOV', 'CameraFOV'];
+const CALIBRATED_FOCAL_META_KEYS = ['CalibratedFocalLength', 'drone-dji:CalibratedFocalLength'];
+const RELATIVE_ALTITUDE_META_KEYS = ['RelativeAltitude', 'drone-dji:RelativeAltitude'];
+const ABSOLUTE_ALTITUDE_META_KEYS = [
+  'AbsoluteAltitude',
+  'GPSAltitude',
+  'altitude',
+  'drone-dji:AbsoluteAltitude',
+];
+const IMAGE_WIDTH_META_KEYS = ['ExifImageWidth', 'ImageWidth', 'PixelXDimension', 'imageWidth'];
+const IMAGE_HEIGHT_META_KEYS = ['ExifImageHeight', 'ImageHeight', 'PixelYDimension', 'imageHeight'];
+
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function asMetadataRecord(metadata: unknown | null | undefined): Record<string, unknown> {
+  return metadata && typeof metadata === 'object'
+    ? (metadata as Record<string, unknown>)
+    : {};
+}
+
+function readMetadataNumber(metadata: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = toFiniteNumber(metadata[key]);
+    if (value != null) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function readMaxMetadataNumber(metadata: Record<string, unknown>, keys: string[]): number | null {
+  let maxValue: number | null = null;
+  for (const key of keys) {
+    const value = toFiniteNumber(metadata[key]);
+    if (value != null && value > 0 && (maxValue == null || value > maxValue)) {
+      maxValue = value;
+    }
+  }
+  return maxValue;
+}
+
+function isValidFov(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 180;
+}
+
+function isPositiveFinite(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+export function resolveProjectionImageDimensions(
+  imageWidth: number | null | undefined,
+  imageHeight: number | null | undefined,
+  metadata?: unknown | null
+): { imageWidth: number | null; imageHeight: number | null } {
+  const record = asMetadataRecord(metadata);
+  const widthCandidates = [
+    toFiniteNumber(imageWidth),
+    readMaxMetadataNumber(record, IMAGE_WIDTH_META_KEYS),
+  ].filter((value): value is number => value != null && value >= MIN_IMAGE_DIMENSION_PX);
+  const heightCandidates = [
+    toFiniteNumber(imageHeight),
+    readMaxMetadataNumber(record, IMAGE_HEIGHT_META_KEYS),
+  ].filter((value): value is number => value != null && value >= MIN_IMAGE_DIMENSION_PX);
+
+  return {
+    imageWidth: widthCandidates.length > 0 ? Math.max(...widthCandidates) : null,
+    imageHeight: heightCandidates.length > 0 ? Math.max(...heightCandidates) : null,
+  };
+}
+
+export function resolveProjectionAltitude(
+  altitude: number | null | undefined,
+  metadata?: unknown | null
+): number | null {
+  const record = asMetadataRecord(metadata);
+  const relativeAltitude = readMetadataNumber(record, RELATIVE_ALTITUDE_META_KEYS);
+  if (isPositiveFinite(relativeAltitude)) {
+    return relativeAltitude;
+  }
+
+  if (isPositiveFinite(altitude)) {
+    return altitude;
+  }
+
+  const absoluteAltitude = readMetadataNumber(record, ABSOLUTE_ALTITUDE_META_KEYS);
+  if (isPositiveFinite(absoluteAltitude)) {
+    return absoluteAltitude;
+  }
+
+  return null;
+}
+
+export function deriveHorizontalFovFromCalibration(
+  imageWidth: number | null | undefined,
+  calibratedFocalLength: number | null | undefined
+): number | null {
+  if (!isPositiveFinite(imageWidth) || !isPositiveFinite(calibratedFocalLength)) {
+    return null;
+  }
+  const horizontalFovDeg =
+    (2 * Math.atan((imageWidth / 2) / calibratedFocalLength) * 180) / Math.PI;
+  return isValidFov(horizontalFovDeg) ? horizontalFovDeg : null;
+}
+
+export function resolveProjectionCameraFov(
+  cameraFov: number | null | undefined,
+  imageWidth: number | null | undefined,
+  metadata?: unknown | null,
+  fallbackFov = DEFAULT_CAMERA_FOV
+): number {
+  const record = asMetadataRecord(metadata);
+  const calibratedFocalLength = readMetadataNumber(record, CALIBRATED_FOCAL_META_KEYS);
+  const derivedCalibrationFov = deriveHorizontalFovFromCalibration(imageWidth, calibratedFocalLength);
+  const metadataFov = readMetadataNumber(record, CAMERA_FOV_META_KEYS);
+  const parsedMetadataFov = isValidFov(metadataFov) ? metadataFov : null;
+  const explicitFov = isValidFov(cameraFov) ? cameraFov : null;
+
+  if (
+    derivedCalibrationFov != null &&
+    (explicitFov == null || Math.abs(explicitFov - fallbackFov) < 0.01)
+  ) {
+    return derivedCalibrationFov;
+  }
+  if (explicitFov != null) return explicitFov;
+  if (derivedCalibrationFov != null) return derivedCalibrationFov;
+  if (parsedMetadataFov != null) return parsedMetadataFov;
+
+  const legacyFov = getCameraFovFromMetadata(record);
+  if (legacyFov != null && isValidFov(legacyFov)) {
+    return legacyFov;
+  }
+
+  return fallbackFov;
+}
+
+export function normalizePixelPoint(
+  pixel: PixelPoint,
+  imageWidth: number,
+  imageHeight: number
+): PixelPoint {
+  if (!isPositiveFinite(imageWidth) || !isPositiveFinite(imageHeight)) {
+    throw new Error('Invalid image dimensions for pixel normalization');
+  }
+  const rawX = toFiniteNumber(pixel.x);
+  const rawY = toFiniteNumber(pixel.y);
+  if (rawX == null || rawY == null) {
+    throw new Error('Invalid pixel coordinates');
+  }
+
+  // Some inference backends emit normalized [0..1] coordinates while others emit absolute pixels.
+  const absoluteX = rawX >= 0 && rawX <= 1 ? rawX * imageWidth : rawX;
+  const absoluteY = rawY >= 0 && rawY <= 1 ? rawY * imageHeight : rawY;
+
+  return {
+    x: Math.max(0, Math.min(imageWidth, absoluteX)),
+    y: Math.max(0, Math.min(imageHeight, absoluteY)),
+  };
+}
 
 function haversineDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const earthRadiusM = 6371000;
@@ -160,21 +330,33 @@ export function assertValidGeoCoordinates(lat: number, lon: number, context: str
 }
 
 export function validateGeoParams(asset: GeoAssetParams): GeoParamsValidationResult {
-  const required: Array<keyof GeoAssetParams> = [
-    'gpsLatitude',
-    'gpsLongitude',
-    'altitude',
-    'gimbalPitch',
-    'gimbalRoll',
-    'gimbalYaw',
-    'imageWidth',
-    'imageHeight',
-  ];
+  const missing: string[] = [];
+  if (asset.gpsLatitude == null) missing.push('gpsLatitude');
+  if (asset.gpsLongitude == null) missing.push('gpsLongitude');
+  if (asset.gimbalPitch == null) missing.push('gimbalPitch');
+  if (asset.gimbalRoll == null) missing.push('gimbalRoll');
+  if (asset.gimbalYaw == null) missing.push('gimbalYaw');
 
-  const missing = required.filter((field) => asset[field] == null);
+  const resolvedAltitude = resolveProjectionAltitude(asset.altitude, asset.metadata);
+  if (resolvedAltitude == null) {
+    missing.push('altitude');
+  }
+
+  const resolvedDimensions = resolveProjectionImageDimensions(
+    asset.imageWidth,
+    asset.imageHeight,
+    asset.metadata
+  );
+  if (resolvedDimensions.imageWidth == null) {
+    missing.push('imageWidth');
+  }
+  if (resolvedDimensions.imageHeight == null) {
+    missing.push('imageHeight');
+  }
+
   return {
     valid: missing.length === 0,
-    missingFields: missing as string[],
+    missingFields: missing,
     warnings: missing.length > 0 ? [`Missing EXIF: ${missing.join(', ')}`] : [],
   };
 }
@@ -186,9 +368,6 @@ export interface GeoResolution {
   method: GeoResolutionMethod;
 }
 
-const DEFAULT_CAMERA_FOV = 84;
-const DEFAULT_ALTITUDE = 100;
-
 export async function resolveGeoCoordinates(
   asset: GeoAssetParams,
   pixel: PixelPoint
@@ -197,20 +376,43 @@ export async function resolveGeoCoordinates(
     return null;
   }
 
-  if (asset.imageWidth == null || asset.imageHeight == null) {
-    return null;
-  }
-
   const metadata =
     asset.metadata && typeof asset.metadata === 'object'
       ? (asset.metadata as Record<string, unknown>)
       : {};
+  const resolvedDimensions = resolveProjectionImageDimensions(
+    asset.imageWidth,
+    asset.imageHeight,
+    metadata
+  );
+  if (resolvedDimensions.imageWidth == null || resolvedDimensions.imageHeight == null) {
+    return null;
+  }
+  const projectionAltitude = resolveProjectionAltitude(asset.altitude, metadata);
+  let normalizedPixel: PixelPoint;
+  try {
+    normalizedPixel = normalizePixelPoint(
+      pixel,
+      resolvedDimensions.imageWidth,
+      resolvedDimensions.imageHeight
+    );
+  } catch {
+    return null;
+  }
 
   const precisionStatus = getPrecisionMetadataStatus(metadata);
   const shouldUsePrecision = precisionStatus.hasCalibration || precisionStatus.hasLRF;
 
   if (shouldUsePrecision) {
-    const precision = await pixelToGeoWithDSM(asset, pixel);
+    const precision = await pixelToGeoWithDSM(
+      {
+        ...asset,
+        altitude: projectionAltitude,
+        imageWidth: resolvedDimensions.imageWidth,
+        imageHeight: resolvedDimensions.imageHeight,
+      },
+      normalizedPixel
+    );
     if (precision) {
       return {
         geo: precision,
@@ -219,28 +421,30 @@ export async function resolveGeoCoordinates(
     }
   }
 
-  const cameraFov =
-    asset.cameraFov ??
-    getCameraFovFromMetadata(metadata) ??
-    DEFAULT_CAMERA_FOV;
+  const cameraFov = resolveProjectionCameraFov(
+    asset.cameraFov,
+    resolvedDimensions.imageWidth,
+    metadata,
+    DEFAULT_CAMERA_FOV
+  );
 
   const geoParams: GeoreferenceParams = {
     gpsLatitude: asset.gpsLatitude,
     gpsLongitude: asset.gpsLongitude,
-    altitude: asset.altitude ?? DEFAULT_ALTITUDE,
+    altitude: projectionAltitude ?? DEFAULT_ALTITUDE,
     gimbalRoll: asset.gimbalRoll ?? 0,
     gimbalPitch: asset.gimbalPitch ?? 0,
     gimbalYaw: asset.gimbalYaw ?? 0,
     cameraFov,
-    imageWidth: asset.imageWidth,
-    imageHeight: asset.imageHeight,
+    imageWidth: resolvedDimensions.imageWidth,
+    imageHeight: resolvedDimensions.imageHeight,
     lrfDistance: asset.lrfDistance ?? undefined,
     lrfTargetLat: asset.lrfTargetLat ?? undefined,
     lrfTargetLon: asset.lrfTargetLon ?? undefined,
   };
 
   try {
-    const geoResult = pixelToGeo(geoParams, pixel);
+    const geoResult = pixelToGeo(geoParams, normalizedPixel);
     const geo = geoResult instanceof Promise ? await geoResult : geoResult;
     return { geo, method: 'standard' };
   } catch {
@@ -257,6 +461,10 @@ export function pixelToGeo(
   if (!params || !pixel) {
     throw new Error('Invalid parameters');
   }
+  if (!isPositiveFinite(params.imageWidth) || !isPositiveFinite(params.imageHeight)) {
+    throw new Error('Invalid image dimensions');
+  }
+  const normalizedPixel = normalizePixelPoint(pixel, params.imageWidth, params.imageHeight);
 
   const metersPerLat = METERS_PER_DEGREE_LAT; // approximately
   const metersPerLon = METERS_PER_DEGREE_LAT * Math.cos(params.gpsLatitude * Math.PI / 180);
@@ -273,15 +481,18 @@ export function pixelToGeo(
 
   let lrfLooksPlausible = false;
   if (useLrf && hasLrfTarget && hasLrfDistance) {
+    const lrfTargetLat = params.lrfTargetLat as number;
+    const lrfTargetLon = params.lrfTargetLon as number;
+    const lrfDistance = params.lrfDistance as number;
     const gpsToLrfMeters = haversineDistanceMeters(
       params.gpsLatitude,
       params.gpsLongitude,
-      params.lrfTargetLat,
-      params.lrfTargetLon
+      lrfTargetLat,
+      lrfTargetLon
     );
     const maxExpectedOffset = Math.max(
       DEFAULT_MAX_LRF_OFFSET_M,
-      params.lrfDistance * 8 + 500
+      lrfDistance * 8 + 500
     );
     lrfLooksPlausible = Number.isFinite(gpsToLrfMeters) && gpsToLrfMeters <= maxExpectedOffset;
     if (!lrfLooksPlausible) {
@@ -293,8 +504,8 @@ export function pixelToGeo(
 
   if (lrfLooksPlausible && params.lrfTargetLat !== undefined && params.lrfTargetLon !== undefined && params.lrfDistance !== undefined) {
     // Off-center LRF targeting and projection
-    const normalizedX = (pixel.x / params.imageWidth) - 0.5;
-    const normalizedY = (pixel.y / params.imageHeight) - 0.5;
+    const normalizedX = (normalizedPixel.x / params.imageWidth) - 0.5;
+    const normalizedY = (normalizedPixel.y / params.imageHeight) - 0.5;
     
     // Calculate offset based on camera FOV and normalized coordinates
     const hFov = params.cameraFov * Math.PI / 180;
@@ -329,8 +540,8 @@ export function pixelToGeo(
   }
 
   // Standard method without LRF
-  const normalizedX = (pixel.x / params.imageWidth) - 0.5;
-  const normalizedY = (pixel.y / params.imageHeight) - 0.5;
+  const normalizedX = (normalizedPixel.x / params.imageWidth) - 0.5;
+  const normalizedY = (normalizedPixel.y / params.imageHeight) - 0.5;
   
   // Calculate field of view angles
   const hFov = params.cameraFov * Math.PI / 180;
@@ -398,8 +609,13 @@ export function pixelToGeoSimple(
   dronePosition: DronePosition,
   cameraParams: CameraParams
 ): GeoCoordinates {
-  const normalizedX = (pixel.x / imageWidth) - 0.5;
-  const normalizedY = (pixel.y / imageHeight) - 0.5;
+  const normalizedPixel = normalizePixelPoint(
+    { x: pixel.x, y: pixel.y },
+    imageWidth,
+    imageHeight
+  );
+  const normalizedX = (normalizedPixel.x / imageWidth) - 0.5;
+  const normalizedY = (normalizedPixel.y / imageHeight) - 0.5;
   
   const hFov = cameraParams.fov * Math.PI / 180;
   const vFov = hFov * imageHeight / imageWidth;
@@ -504,9 +720,9 @@ export function extractGeoParams(metadata: Record<string, unknown>): Georeferenc
     cameraFov: (meta.FieldOfView || 84) as number,
     imageWidth: (meta.ImageWidth || meta.ExifImageWidth) as number,
     imageHeight: (meta.ImageHeight || meta.ExifImageHeight) as number,
-    lrfDistance: meta.LRFDistance,
-    lrfTargetLat: meta.LRFTargetLat,
-    lrfTargetLon: meta.LRFTargetLon
+    lrfDistance: (meta.LRFDistance ?? undefined) as number | undefined,
+    lrfTargetLat: (meta.LRFTargetLat ?? undefined) as number | undefined,
+    lrfTargetLon: (meta.LRFTargetLon ?? undefined) as number | undefined
   };
 }
 
@@ -587,14 +803,66 @@ export async function pixelToGeoWithDSM(
     asset.metadata && typeof asset.metadata === 'object'
       ? (asset.metadata as Record<string, unknown>)
       : {};
+  const resolvedDimensions = resolveProjectionImageDimensions(
+    asset.imageWidth,
+    asset.imageHeight,
+    metadata
+  );
+  const resolvedAltitude = resolveProjectionAltitude(asset.altitude, metadata);
+  if (
+    resolvedDimensions.imageWidth == null ||
+    resolvedDimensions.imageHeight == null ||
+    resolvedAltitude == null
+  ) {
+    return null;
+  }
+  const normalizedPixel = normalizePixelPoint(
+    pixel,
+    resolvedDimensions.imageWidth,
+    resolvedDimensions.imageHeight
+  );
+  const precisionStatus = getPrecisionMetadataStatus(metadata);
+
+  // Avoid Matrice-specific defaults when calibration/LRF metadata is absent.
+  if (!precisionStatus.hasCalibration && !precisionStatus.hasLRF) {
+    try {
+      const standardResult = pixelToGeo(
+        {
+          gpsLatitude: asset.gpsLatitude!,
+          gpsLongitude: asset.gpsLongitude!,
+          altitude: resolvedAltitude,
+          gimbalPitch: asset.gimbalPitch ?? 0,
+          gimbalRoll: asset.gimbalRoll ?? 0,
+          gimbalYaw: asset.gimbalYaw ?? 0,
+          cameraFov: resolveProjectionCameraFov(
+            asset.cameraFov,
+            resolvedDimensions.imageWidth,
+            metadata,
+            DEFAULT_CAMERA_FOV
+          ),
+          imageWidth: resolvedDimensions.imageWidth,
+          imageHeight: resolvedDimensions.imageHeight,
+          lrfDistance: asset.lrfDistance ?? undefined,
+          lrfTargetLat: asset.lrfTargetLat ?? undefined,
+          lrfTargetLon: asset.lrfTargetLon ?? undefined,
+        },
+        normalizedPixel,
+        false
+      );
+      const geo = standardResult instanceof Promise ? await standardResult : standardResult;
+      return { lat: geo.lat, lon: geo.lon };
+    } catch {
+      return null;
+    }
+  }
 
   const precisionParams = extractPrecisionParams({
     ...metadata,
-    ExifImageWidth: asset.imageWidth,
-    ExifImageHeight: asset.imageHeight,
+    ExifImageWidth: resolvedDimensions.imageWidth,
+    ExifImageHeight: resolvedDimensions.imageHeight,
     GpsLatitude: asset.gpsLatitude,
     GpsLongitude: asset.gpsLongitude,
-    AbsoluteAltitude: asset.altitude,
+    AbsoluteAltitude: resolvedAltitude,
     GimbalPitchDegree: asset.gimbalPitch,
     GimbalRollDegree: asset.gimbalRoll,
     GimbalYawDegree: asset.gimbalYaw,
@@ -603,7 +871,7 @@ export async function pixelToGeoWithDSM(
     LRFTargetLon: asset.lrfTargetLon ?? undefined,
   });
 
-  const result = await precisionPixelToGeo(pixel, precisionParams);
+  const result = await precisionPixelToGeo(normalizedPixel, precisionParams);
   if (!result) {
     return null;
   }

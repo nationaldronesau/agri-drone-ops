@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { Prisma } from '@prisma/client';
 import prisma from '@/lib/db';
-import { pixelToGeo } from '@/lib/utils/georeferencing';
+import {
+  pixelToGeo,
+  resolveProjectionAltitude,
+  resolveProjectionCameraFov,
+  resolveProjectionImageDimensions,
+} from '@/lib/utils/georeferencing';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
 
 async function checkAnnotationAccess(annotationId: string, userId: string) {
@@ -172,6 +177,9 @@ export async function PUT(
                 imageHeight: true,
                 cameraFov: true,
                 lrfDistance: true,
+                lrfTargetLat: true,
+                lrfTargetLon: true,
+                metadata: true,
               }
             }
           }
@@ -213,44 +221,68 @@ export async function PUT(
 
         if (hasGps) {
           try {
-          // Convert each point in the polygon
-          const geoPoints = coordinates.map(([x, y]: [number, number]) => {
-            const geoPoint = pixelToGeo(
-              {
-                gpsLatitude: existingAnnotation.session.asset.gpsLatitude!,
-                gpsLongitude: existingAnnotation.session.asset.gpsLongitude!,
-                altitude: existingAnnotation.session.asset.altitude || 100,
-                gimbalPitch: existingAnnotation.session.asset.gimbalPitch || 0,
-                gimbalRoll: existingAnnotation.session.asset.gimbalRoll || 0,
-                gimbalYaw: existingAnnotation.session.asset.gimbalYaw || 0,
-                imageWidth: existingAnnotation.session.asset.imageWidth || 4000,
-                imageHeight: existingAnnotation.session.asset.imageHeight || 3000,
-                cameraFov: existingAnnotation.session.asset.cameraFov || 84,
-                lrfDistance: existingAnnotation.session.asset.lrfDistance || undefined,
-              },
-              { x, y }
+            const resolvedDimensions = resolveProjectionImageDimensions(
+              existingAnnotation.session.asset.imageWidth,
+              existingAnnotation.session.asset.imageHeight,
+              existingAnnotation.session.asset.metadata
             );
-            
-            // Handle both sync and async return types
-            if (geoPoint instanceof Promise) {
-              throw new Error('Async coordinate conversion not supported in this context');
+            const imageWidth = resolvedDimensions.imageWidth;
+            const imageHeight = resolvedDimensions.imageHeight;
+            if (imageWidth == null || imageHeight == null) {
+              throw new Error('Image dimensions unavailable for georeferencing');
             }
+            const altitude =
+              resolveProjectionAltitude(
+                existingAnnotation.session.asset.altitude,
+                existingAnnotation.session.asset.metadata
+              ) ?? 100;
+            const cameraFov = resolveProjectionCameraFov(
+              existingAnnotation.session.asset.cameraFov,
+              resolvedDimensions.imageWidth,
+              existingAnnotation.session.asset.metadata,
+              84
+            );
+
+            // Convert each point in the polygon
+            const geoPoints: [number, number][] = coordinates.map(([x, y]: [number, number]) => {
+              const geoPoint = pixelToGeo(
+                {
+                  gpsLatitude: existingAnnotation.session.asset.gpsLatitude!,
+                  gpsLongitude: existingAnnotation.session.asset.gpsLongitude!,
+                  altitude,
+                  gimbalPitch: existingAnnotation.session.asset.gimbalPitch || 0,
+                  gimbalRoll: existingAnnotation.session.asset.gimbalRoll || 0,
+                  gimbalYaw: existingAnnotation.session.asset.gimbalYaw || 0,
+                  imageWidth,
+                  imageHeight,
+                  cameraFov,
+                  lrfDistance: existingAnnotation.session.asset.lrfDistance || undefined,
+                  lrfTargetLat: existingAnnotation.session.asset.lrfTargetLat || undefined,
+                  lrfTargetLon: existingAnnotation.session.asset.lrfTargetLon || undefined,
+                },
+                { x, y }
+              );
+              
+              // Handle both sync and async return types
+              if (geoPoint instanceof Promise) {
+                throw new Error('Async coordinate conversion not supported in this context');
+              }
+              
+              return [geoPoint.lon, geoPoint.lat] as [number, number];
+            });
             
-            return [geoPoint.lon, geoPoint.lat];
-          });
-          
-          // Create GeoJSON polygon
-          updateData.geoCoordinates = {
-            type: 'Polygon',
-            coordinates: [geoPoints.concat([geoPoints[0]])] // Close the polygon
-          };
-          
-          // Calculate center point for map display
-          const sumLat = geoPoints.reduce((sum: number, [, lat]: [number, number]) => sum + lat, 0);
-          const sumLon = geoPoints.reduce((sum: number, [lon]: [number, number]) => sum + lon, 0);
-          updateData.centerLat = sumLat / geoPoints.length;
-          updateData.centerLon = sumLon / geoPoints.length;
-          
+            // Create GeoJSON polygon
+            updateData.geoCoordinates = {
+              type: 'Polygon',
+              coordinates: [geoPoints.concat([geoPoints[0]])] // Close the polygon
+            };
+            
+            // Calculate center point for map display
+            const sumLat = geoPoints.reduce((sum: number, [, lat]: [number, number]) => sum + lat, 0);
+            const sumLon = geoPoints.reduce((sum: number, [lon]: [number, number]) => sum + lon, 0);
+            updateData.centerLat = sumLat / geoPoints.length;
+            updateData.centerLon = sumLon / geoPoints.length;
+            
           } catch (error) {
             console.warn('Failed to convert pixel to geo coordinates:', error);
             // Keep existing geo coordinates

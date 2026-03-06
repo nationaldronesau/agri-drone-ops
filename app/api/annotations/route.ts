@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { Prisma } from '@prisma/client';
 import prisma from '@/lib/db';
-import { pixelToGeo } from '@/lib/utils/georeferencing';
+import {
+  pixelToGeo,
+  resolveProjectionAltitude,
+  resolveProjectionCameraFov,
+  resolveProjectionImageDimensions,
+} from '@/lib/utils/georeferencing';
 import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
 import { parsePaginationParams, paginatedResponse } from '@/lib/utils/pagination';
 
@@ -174,6 +179,9 @@ export async function POST(request: NextRequest) {
             imageHeight: true,
             cameraFov: true,
             lrfDistance: true,
+            lrfTargetLat: true,
+            lrfTargetLon: true,
+            metadata: true,
             project: {
               select: {
                 teamId: true,
@@ -228,20 +236,41 @@ export async function POST(request: NextRequest) {
 
     if (hasGps) {
       try {
+        const resolvedDimensions = resolveProjectionImageDimensions(
+          session.asset.imageWidth,
+          session.asset.imageHeight,
+          session.asset.metadata
+        );
+        const imageWidth = resolvedDimensions.imageWidth;
+        const imageHeight = resolvedDimensions.imageHeight;
+        if (imageWidth == null || imageHeight == null) {
+          throw new Error('Image dimensions unavailable for georeferencing');
+        }
+        const altitude =
+          resolveProjectionAltitude(session.asset.altitude, session.asset.metadata) ?? 100;
+        const cameraFov = resolveProjectionCameraFov(
+          session.asset.cameraFov,
+          resolvedDimensions.imageWidth,
+          session.asset.metadata,
+          84
+        );
+
         // Convert each point in the polygon
-        const geoPoints = coordinates.map(([x, y]: [number, number]) => {
+        const geoPoints: [number, number][] = coordinates.map(([x, y]: [number, number]) => {
           const geoPoint = pixelToGeo(
             {
               gpsLatitude: session.asset.gpsLatitude!,
               gpsLongitude: session.asset.gpsLongitude!,
-              altitude: session.asset.altitude || 100,
+              altitude,
               gimbalPitch: session.asset.gimbalPitch || 0,
               gimbalRoll: session.asset.gimbalRoll || 0,
               gimbalYaw: session.asset.gimbalYaw || 0,
-              imageWidth: session.asset.imageWidth || 4000,
-              imageHeight: session.asset.imageHeight || 3000,
-              cameraFov: session.asset.cameraFov || 84,
+              imageWidth,
+              imageHeight,
+              cameraFov,
               lrfDistance: session.asset.lrfDistance || undefined,
+              lrfTargetLat: session.asset.lrfTargetLat || undefined,
+              lrfTargetLon: session.asset.lrfTargetLon || undefined,
             },
             { x, y }
           );
@@ -251,7 +280,7 @@ export async function POST(request: NextRequest) {
             throw new Error('Async coordinate conversion not supported in this context');
           }
 
-          return [geoPoint.lon, geoPoint.lat];
+          return [geoPoint.lon, geoPoint.lat] as [number, number];
         });
 
         // Create GeoJSON polygon

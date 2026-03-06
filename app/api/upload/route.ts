@@ -14,8 +14,12 @@ import { formatModelId } from "@/lib/services/yolo";
 import { processInferenceJob } from "@/lib/services/inference";
 import { checkRedisConnection } from "@/lib/queue/redis";
 import { enqueueInferenceJob } from "@/lib/queue/inference-queue";
-import { resolveGeoCoordinates } from "@/lib/utils/georeferencing";
-import { getCameraFovFromMetadata } from "@/lib/utils/precision-georeferencing";
+import {
+  resolveGeoCoordinates,
+  resolveProjectionAltitude,
+  resolveProjectionCameraFov,
+  resolveProjectionImageDimensions,
+} from "@/lib/utils/georeferencing";
 import { S3Service } from "@/lib/services/s3";
 import { resolveSurveyForAsset } from "@/lib/services/survey";
 
@@ -416,21 +420,13 @@ export async function POST(request: NextRequest) {
           });
 
           if (fullMetadata) {
-            extractedData.altitude =
-              extractedData.altitude ??
-              (fullMetadata["AbsoluteAltitude"] as number | undefined) ??
-              (fullMetadata["RelativeAltitude"] as number | undefined) ??
-              (fullMetadata["drone-dji:AbsoluteAltitude"] as
-                | number
-                | undefined) ??
-              (fullMetadata["drone-dji:RelativeAltitude"] as
-                | number
-                | undefined) ??
-              null;
-
-            extractedData.cameraFov =
-              extractedData.cameraFov ??
-              getCameraFovFromMetadata(fullMetadata);
+            const resolvedDimensions = resolveProjectionImageDimensions(
+              extractedData.imageWidth,
+              extractedData.imageHeight,
+              fullMetadata
+            );
+            extractedData.imageWidth = resolvedDimensions.imageWidth;
+            extractedData.imageHeight = resolvedDimensions.imageHeight;
 
             extractedData.gimbalPitch =
               (fullMetadata["GimbalPitchDegree"] as number | undefined) ??
@@ -517,6 +513,29 @@ export async function POST(request: NextRequest) {
                 },
               };
             }
+          }
+
+          extractedData.altitude = resolveProjectionAltitude(
+            extractedData.altitude,
+            fullMetadata
+          );
+
+          const resolvedDimensions = resolveProjectionImageDimensions(
+            extractedData.imageWidth,
+            extractedData.imageHeight,
+            fullMetadata
+          );
+          extractedData.imageWidth = resolvedDimensions.imageWidth;
+          extractedData.imageHeight = resolvedDimensions.imageHeight;
+
+          const derivedCameraFov = resolveProjectionCameraFov(
+            extractedData.cameraFov,
+            extractedData.imageWidth,
+            fullMetadata,
+            Number.NaN
+          );
+          if (Number.isFinite(derivedCameraFov)) {
+            extractedData.cameraFov = derivedCameraFov;
           }
 
           if (cameraFov != null) {

@@ -3,9 +3,13 @@ import JSZip from 'jszip';
 import prisma from '@/lib/db';
 import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
 import {
+  normalizePixelPoint,
   polygonToCenterBox,
   pixelToGeo,
   rescaleToOriginalWithMeta,
+  resolveProjectionAltitude,
+  resolveProjectionCameraFov,
+  resolveProjectionImageDimensions,
   validateGeoParams,
 } from '@/lib/utils/georeferencing';
 import { generateShapefileExport, type DetectionRecord, type AnnotationRecord } from '@/lib/services/shapefile';
@@ -13,7 +17,8 @@ import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
 
 const EXPORT_ITEM_LIMIT = 5000;
 const DEFAULT_EXPORT_CAMERA_FOV = 84;
-const MIN_EXPORT_MAX_OFFSET_M = 2000;
+const MIN_EXPORT_MAX_OFFSET_M = 250;
+const EXPORT_MAX_FOOTPRINT_MULTIPLIER = 3;
 const MAX_EXPORT_LRF_GPS_OFFSET_M = 2000;
 
 interface ExportManifest {
@@ -142,22 +147,6 @@ function normalizeGeoPoint(lat: unknown, lon: unknown): { lat: number; lon: numb
   return { lat, lon };
 }
 
-function extractExportCameraFov(metadata: unknown): number {
-  if (!metadata || typeof metadata !== 'object') return DEFAULT_EXPORT_CAMERA_FOV;
-  const record = metadata as Record<string, unknown>;
-  const candidates = [
-    record.FieldOfView,
-    record.CameraFOV,
-    record.FOV,
-  ];
-  for (const value of candidates) {
-    if (typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 180) {
-      return value;
-    }
-  }
-  return DEFAULT_EXPORT_CAMERA_FOV;
-}
-
 function haversineDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const earthRadiusM = 6371000;
   const toRad = (deg: number) => (deg * Math.PI) / 180;
@@ -227,8 +216,13 @@ async function computeExportGeo(
 ): Promise<{ lat: number; lon: number } | null> {
   const gpsLat = asset.gpsLatitude;
   const gpsLon = asset.gpsLongitude;
-  const width = asset.imageWidth;
-  const height = asset.imageHeight;
+  const resolvedDimensions = resolveProjectionImageDimensions(
+    asset.imageWidth,
+    asset.imageHeight,
+    asset.metadata
+  );
+  const width = resolvedDimensions.imageWidth;
+  const height = resolvedDimensions.imageHeight;
   if (
     typeof gpsLat !== 'number' ||
     typeof gpsLon !== 'number' ||
@@ -244,17 +238,34 @@ async function computeExportGeo(
     return null;
   }
 
-  const altitude =
-    typeof asset.altitude === 'number' && Number.isFinite(asset.altitude) && asset.altitude > 0
-      ? asset.altitude
-      : 100;
-  const cameraFov =
-    typeof asset.cameraFov === 'number' &&
-    Number.isFinite(asset.cameraFov) &&
-    asset.cameraFov > 0 &&
-    asset.cameraFov < 180
-      ? asset.cameraFov
-      : extractExportCameraFov(asset.metadata);
+  let normalizedPixel: { x: number; y: number };
+  try {
+    normalizedPixel = normalizePixelPoint(pixel, width, height);
+  } catch {
+    return null;
+  }
+
+  const altitude = resolveProjectionAltitude(asset.altitude, asset.metadata) ?? 100;
+  const cameraFov = resolveProjectionCameraFov(
+    asset.cameraFov,
+    width,
+    asset.metadata,
+    DEFAULT_EXPORT_CAMERA_FOV
+  );
+  const hFovRad = (cameraFov * Math.PI) / 180;
+  const vFovRad = hFovRad * (height / width);
+  const theoreticalMaxOffsetMeters =
+    altitude *
+    Math.hypot(
+      Math.tan(hFovRad / 2),
+      Math.tan(vFovRad / 2)
+    );
+  const maxOffsetMeters = Math.max(
+    MIN_EXPORT_MAX_OFFSET_M,
+    Number.isFinite(theoreticalMaxOffsetMeters)
+      ? theoreticalMaxOffsetMeters * EXPORT_MAX_FOOTPRINT_MULTIPLIER
+      : MIN_EXPORT_MAX_OFFSET_M
+  );
 
   // Use the standard pixelToGeo path only when LRF metadata is plausibly valid.
   // Otherwise, prefer the stable export projection below (it avoids pitch singularities).
@@ -284,7 +295,7 @@ async function computeExportGeo(
               ? asset.lrfTargetLon
               : undefined,
         },
-        pixel,
+        normalizedPixel,
         true
       );
       const standardGeo = standardGeoResult instanceof Promise
@@ -298,7 +309,6 @@ async function computeExportGeo(
           normalizedStandardGeo.lat,
           normalizedStandardGeo.lon
         );
-        const maxOffsetMeters = Math.max(MIN_EXPORT_MAX_OFFSET_M, altitude * 20);
         if (Number.isFinite(projectedOffsetMeters) && projectedOffsetMeters <= maxOffsetMeters) {
           return normalizedStandardGeo;
         }
@@ -311,11 +321,8 @@ async function computeExportGeo(
     }
   }
 
-  const hFovRad = (cameraFov * Math.PI) / 180;
-  const vFovRad = hFovRad * (height / width);
-
-  const normalizedX = pixel.x / width - 0.5;
-  const normalizedY = pixel.y / height - 0.5;
+  const normalizedX = normalizedPixel.x / width - 0.5;
+  const normalizedY = normalizedPixel.y / height - 0.5;
 
   const angleX = normalizedX * hFovRad;
   const angleY = normalizedY * vFovRad;
@@ -347,7 +354,26 @@ async function computeExportGeo(
 
   const lat = gpsLat + offsetNorth / metersPerLat;
   const lon = gpsLon + offsetEast / metersPerLon;
-  return normalizeGeoPoint(lat, lon);
+  const normalizedGeo = normalizeGeoPoint(lat, lon);
+  if (!normalizedGeo) {
+    return null;
+  }
+
+  const projectedOffsetMeters = haversineDistanceMeters(
+    gpsLat,
+    gpsLon,
+    normalizedGeo.lat,
+    normalizedGeo.lon
+  );
+  if (!Number.isFinite(projectedOffsetMeters) || projectedOffsetMeters <= maxOffsetMeters) {
+    return normalizedGeo;
+  }
+
+  // Cap implausible offsets rather than returning stale stored coordinates.
+  const scale = maxOffsetMeters / projectedOffsetMeters;
+  const clippedLat = gpsLat + (normalizedGeo.lat - gpsLat) * scale;
+  const clippedLon = gpsLon + (normalizedGeo.lon - gpsLon) * scale;
+  return normalizeGeoPoint(clippedLat, clippedLon);
 }
 
 export async function GET(request: NextRequest) {
