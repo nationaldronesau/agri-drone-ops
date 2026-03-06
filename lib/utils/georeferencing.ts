@@ -62,8 +62,15 @@ const DEFAULT_MAX_LRF_OFFSET_M = 2000;
 const DEFAULT_CAMERA_FOV = 84;
 const DEFAULT_ALTITUDE = 100;
 const MIN_IMAGE_DIMENSION_PX = 16;
+const MIN_STANDARD_MAX_OFFSET_M = 250;
+const STANDARD_MAX_FOOTPRINT_MULTIPLIER = 3;
 const CAMERA_FOV_META_KEYS = ['FieldOfView', 'drone-dji:FieldOfView', 'FOV', 'CameraFOV'];
 const CALIBRATED_FOCAL_META_KEYS = ['CalibratedFocalLength', 'drone-dji:CalibratedFocalLength'];
+const FOCAL_LENGTH_35MM_META_KEYS = [
+  'FocalLengthIn35mmFormat',
+  'FocalLengthIn35mmFilm',
+  'drone-dji:FocalLengthIn35mmFormat',
+];
 const RELATIVE_ALTITUDE_META_KEYS = ['RelativeAltitude', 'drone-dji:RelativeAltitude'];
 const ABSOLUTE_ALTITUDE_META_KEYS = [
   'AbsoluteAltitude',
@@ -175,6 +182,17 @@ export function deriveHorizontalFovFromCalibration(
   return isValidFov(horizontalFovDeg) ? horizontalFovDeg : null;
 }
 
+export function deriveHorizontalFovFrom35mmEquivalent(
+  focalLength35mm: number | null | undefined
+): number | null {
+  if (!isPositiveFinite(focalLength35mm)) {
+    return null;
+  }
+  const horizontalFovDeg =
+    (2 * Math.atan(36 / (2 * focalLength35mm)) * 180) / Math.PI;
+  return isValidFov(horizontalFovDeg) ? horizontalFovDeg : null;
+}
+
 export function resolveProjectionCameraFov(
   cameraFov: number | null | undefined,
   imageWidth: number | null | undefined,
@@ -184,6 +202,8 @@ export function resolveProjectionCameraFov(
   const record = asMetadataRecord(metadata);
   const calibratedFocalLength = readMetadataNumber(record, CALIBRATED_FOCAL_META_KEYS);
   const derivedCalibrationFov = deriveHorizontalFovFromCalibration(imageWidth, calibratedFocalLength);
+  const focalLength35mm = readMetadataNumber(record, FOCAL_LENGTH_35MM_META_KEYS);
+  const derived35mmFov = deriveHorizontalFovFrom35mmEquivalent(focalLength35mm);
   const metadataFov = readMetadataNumber(record, CAMERA_FOV_META_KEYS);
   const parsedMetadataFov = isValidFov(metadataFov) ? metadataFov : null;
   const explicitFov = isValidFov(cameraFov) ? cameraFov : null;
@@ -194,6 +214,12 @@ export function resolveProjectionCameraFov(
   ) {
     return derivedCalibrationFov;
   }
+  if (
+    derived35mmFov != null &&
+    (explicitFov == null || Math.abs(explicitFov - fallbackFov) < 0.01)
+  ) {
+    return derived35mmFov;
+  }
   if (explicitFov != null) return explicitFov;
   if (derivedCalibrationFov != null) return derivedCalibrationFov;
   if (parsedMetadataFov != null) return parsedMetadataFov;
@@ -202,6 +228,7 @@ export function resolveProjectionCameraFov(
   if (legacyFov != null && isValidFov(legacyFov)) {
     return legacyFov;
   }
+  if (derived35mmFov != null) return derived35mmFov;
 
   return fallbackFov;
 }
@@ -221,8 +248,12 @@ export function normalizePixelPoint(
   }
 
   // Some inference backends emit normalized [0..1] coordinates while others emit absolute pixels.
-  const absoluteX = rawX >= 0 && rawX <= 1 ? rawX * imageWidth : rawX;
-  const absoluteY = rawY >= 0 && rawY <= 1 ? rawY * imageHeight : rawY;
+  // Treat both axes as normalized together to avoid misclassifying low absolute pixel values.
+  const looksNormalized =
+    rawX >= 0 && rawX <= 1 &&
+    rawY >= 0 && rawY <= 1;
+  const absoluteX = looksNormalized ? rawX * imageWidth : rawX;
+  const absoluteY = looksNormalized ? rawY * imageHeight : rawY;
 
   return {
     x: Math.max(0, Math.min(imageWidth, absoluteX)),
@@ -241,6 +272,69 @@ function haversineDistanceMeters(lat1: number, lon1: number, lat2: number, lon2:
       Math.sin(dLon / 2) * Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return earthRadiusM * c;
+}
+
+function computeProjectionMaxOffsetMeters(
+  altitude: number,
+  cameraFov: number,
+  imageWidth: number,
+  imageHeight: number
+): number {
+  if (
+    !isPositiveFinite(altitude) ||
+    !isPositiveFinite(cameraFov) ||
+    !isPositiveFinite(imageWidth) ||
+    !isPositiveFinite(imageHeight)
+  ) {
+    return MIN_STANDARD_MAX_OFFSET_M;
+  }
+
+  const hFovRad = (cameraFov * Math.PI) / 180;
+  const vFovRad = hFovRad * (imageHeight / imageWidth);
+  const theoreticalMaxOffsetMeters =
+    altitude *
+    Math.hypot(
+      Math.tan(hFovRad / 2),
+      Math.tan(vFovRad / 2)
+    );
+
+  if (!Number.isFinite(theoreticalMaxOffsetMeters) || theoreticalMaxOffsetMeters <= 0) {
+    return MIN_STANDARD_MAX_OFFSET_M;
+  }
+
+  return Math.max(
+    MIN_STANDARD_MAX_OFFSET_M,
+    theoreticalMaxOffsetMeters * STANDARD_MAX_FOOTPRINT_MULTIPLIER
+  );
+}
+
+function capProjectedOffset(
+  originLat: number,
+  originLon: number,
+  projectedLat: number,
+  projectedLon: number,
+  maxOffsetMeters: number
+): { lat: number; lon: number; clipped: boolean } {
+  const distanceMeters = haversineDistanceMeters(
+    originLat,
+    originLon,
+    projectedLat,
+    projectedLon
+  );
+  if (
+    !Number.isFinite(distanceMeters) ||
+    !Number.isFinite(maxOffsetMeters) ||
+    distanceMeters <= maxOffsetMeters
+  ) {
+    return { lat: projectedLat, lon: projectedLon, clipped: false };
+  }
+
+  const scale = maxOffsetMeters / distanceMeters;
+  return {
+    lat: originLat + (projectedLat - originLat) * scale,
+    lon: originLon + (projectedLon - originLon) * scale,
+    clipped: true,
+  };
 }
 
 type GeoFeaturePolygon = {
@@ -554,44 +648,97 @@ export function pixelToGeo(
   // Apply gimbal rotations (simplified)
   const pitch = params.gimbalPitch * Math.PI / 180;
   const yaw = params.gimbalYaw * Math.PI / 180;
-  
-  // Calculate ground distance
-  const groundDistance = params.altitude / Math.cos(pitch + rayAngleY);
-  
-  // Calculate offsets
-  const offsetX = groundDistance * Math.tan(rayAngleX);
-  const offsetY = groundDistance * Math.sin(pitch + rayAngleY);
-  
-  // Rotate by yaw
-  const bearingRad = yaw;
-  const rotatedOffsetX = offsetX * Math.sin(bearingRad) + offsetY * Math.cos(bearingRad);
-  const rotatedOffsetY = offsetX * Math.cos(bearingRad) - offsetY * Math.sin(bearingRad);
+
+  const pitchPlusRay = pitch + rayAngleY;
+  const pitchCos = Math.cos(pitchPlusRay);
+  let rotatedOffsetX: number;
+  let rotatedOffsetY: number;
+
+  // Near-nadir pitch can make cos(pitch + rayAngleY) approach zero and explode offsets.
+  if (!Number.isFinite(pitchCos) || Math.abs(pitchCos) < 0.15) {
+    const stableOffsetEast = params.altitude * Math.tan(rayAngleX);
+    const stableOffsetNorth = -params.altitude * Math.tan(rayAngleY);
+    if (!Number.isFinite(stableOffsetEast) || !Number.isFinite(stableOffsetNorth)) {
+      throw new Error('Projection became unstable for current pixel and camera angles');
+    }
+    rotatedOffsetX = stableOffsetEast * Math.cos(yaw) - stableOffsetNorth * Math.sin(yaw);
+    rotatedOffsetY = stableOffsetEast * Math.sin(yaw) + stableOffsetNorth * Math.cos(yaw);
+  } else {
+    // Calculate ground distance
+    const groundDistance = params.altitude / pitchCos;
+    if (!Number.isFinite(groundDistance)) {
+      throw new Error('Invalid ground distance computed from camera pitch');
+    }
+
+    // Calculate offsets
+    const offsetX = groundDistance * Math.tan(rayAngleX);
+    const offsetY = groundDistance * Math.sin(pitchPlusRay);
+
+    // Rotate by yaw
+    const bearingRad = yaw;
+    rotatedOffsetX = offsetX * Math.sin(bearingRad) + offsetY * Math.cos(bearingRad);
+    rotatedOffsetY = offsetX * Math.cos(bearingRad) - offsetY * Math.sin(bearingRad);
+  }
   
   // Convert to lat/lon
   const latOffset = rotatedOffsetY / metersPerLat;
   const lonOffset = rotatedOffsetX / metersPerLon;
   
-  const finalLat = params.gpsLatitude + latOffset;
-  const finalLon = params.gpsLongitude + lonOffset;
+  const finalLatRaw = params.gpsLatitude + latOffset;
+  const finalLonRaw = params.gpsLongitude + lonOffset;
+  const maxOffsetMeters = computeProjectionMaxOffsetMeters(
+    params.altitude,
+    params.cameraFov,
+    params.imageWidth,
+    params.imageHeight
+  );
+  const cappedStandard = capProjectedOffset(
+    params.gpsLatitude,
+    params.gpsLongitude,
+    finalLatRaw,
+    finalLonRaw,
+    maxOffsetMeters
+  );
+  const finalLat = cappedStandard.lat;
+  const finalLon = cappedStandard.lon;
+  if (cappedStandard.clipped) {
+    console.warn(
+      `[GEO] Clipped standard projection offset to ${maxOffsetMeters.toFixed(1)}m guardrail`
+    );
+  }
 
   // If DTM data is available, refine with terrain height
   if (params.dtmData) {
     return params.dtmData(finalLat, finalLon).then(terrainHeight => {
       const adjustedAltitude = params.altitude - terrainHeight;
-      const adjustedDistance = adjustedAltitude / Math.cos(pitch + rayAngleY);
+      const adjustedPitchCos = Math.cos(pitchPlusRay);
+      if (!Number.isFinite(adjustedPitchCos) || Math.abs(adjustedPitchCos) < 1e-6) {
+        return { lat: finalLat, lon: finalLon };
+      }
+      const adjustedDistance = adjustedAltitude / adjustedPitchCos;
+      if (!Number.isFinite(adjustedDistance)) {
+        return { lat: finalLat, lon: finalLon };
+      }
       const adjustedOffsetX = adjustedDistance * Math.tan(rayAngleX);
-      const adjustedOffsetY = adjustedDistance * Math.sin(pitch + rayAngleY);
+      const adjustedOffsetY = adjustedDistance * Math.sin(pitchPlusRay);
 
-      const adjustedRotatedX = adjustedOffsetX * Math.sin(bearingRad) + adjustedOffsetY * Math.cos(bearingRad);
-      const adjustedRotatedY = adjustedOffsetX * Math.cos(bearingRad) - adjustedOffsetY * Math.sin(bearingRad);
+      const adjustedRotatedX = adjustedOffsetX * Math.sin(yaw) + adjustedOffsetY * Math.cos(yaw);
+      const adjustedRotatedY = adjustedOffsetX * Math.cos(yaw) - adjustedOffsetY * Math.sin(yaw);
 
-      const dtmLat = params.gpsLatitude + adjustedRotatedY / metersPerLat;
-      const dtmLon = params.gpsLongitude + adjustedRotatedX / metersPerLon;
+      const dtmLatRaw = params.gpsLatitude + adjustedRotatedY / metersPerLat;
+      const dtmLonRaw = params.gpsLongitude + adjustedRotatedX / metersPerLon;
+      const cappedDtm = capProjectedOffset(
+        params.gpsLatitude,
+        params.gpsLongitude,
+        dtmLatRaw,
+        dtmLonRaw,
+        maxOffsetMeters
+      );
 
       // SAFETY: Validate DTM-adjusted coordinates before returning (throws on invalid)
-      assertValidGeoCoordinates(dtmLat, dtmLon, 'DTM-adjusted');
+      assertValidGeoCoordinates(cappedDtm.lat, cappedDtm.lon, 'DTM-adjusted');
 
-      return { lat: dtmLat, lon: dtmLon };
+      return { lat: cappedDtm.lat, lon: cappedDtm.lon };
     });
   }
 
