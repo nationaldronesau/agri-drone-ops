@@ -292,6 +292,8 @@ export async function GET(
           asset,
           className: annotation.weedType,
           confidence: manualConfidenceToScore(annotation.confidence),
+          centerLat: annotation.centerLat,
+          centerLon: annotation.centerLon,
           geometry: {
             type: 'polygon' as const,
             polygon,
@@ -319,6 +321,8 @@ export async function GET(
           asset,
           className: detection.className,
           confidence: detection.confidence ?? 0,
+          centerLat: detection.centerLat,
+          centerLon: detection.centerLon,
           geometry: {
             type: 'bbox' as const,
             ...(centerBox ? { bboxCenter: centerBox } : {}),
@@ -368,6 +372,8 @@ export async function GET(
           asset,
           className: detection.className,
           confidence: detection.confidence ?? 0,
+          centerLat: detection.centerLat,
+          centerLon: detection.centerLon,
           geometry: {
             type: 'bbox' as const,
             ...(centerBox ? { bboxCenter: centerBox } : {}),
@@ -415,6 +421,8 @@ export async function GET(
           asset,
           className: pending.weedType,
           confidence: pending.confidence,
+          centerLat: pending.centerLat,
+          centerLon: pending.centerLon,
           geometry: {
             type: 'polygon' as const,
             polygon,

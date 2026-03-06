@@ -1,7 +1,18 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, XCircle, Pencil, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+import dynamic from 'next/dynamic';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  XCircle,
+  Pencil,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
+  Image as ImageIcon,
+  MapPinned,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Select,
@@ -13,6 +24,15 @@ import {
 import { InteractiveDetectionOverlay } from '@/components/training/InteractiveDetectionOverlay';
 
 type ReviewStatus = 'pending' | 'accepted' | 'rejected';
+
+const ReviewGeoMap = dynamic(() => import('@/components/review/ReviewGeoMap'), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-[600px] items-center justify-center rounded-lg border text-sm text-gray-500">
+      Loading satellite map...
+    </div>
+  ),
+});
 
 export interface ReviewItemAsset {
   id: string;
@@ -36,6 +56,8 @@ export interface ReviewItem {
   asset: ReviewItemAsset;
   className: string;
   confidence: number;
+  centerLat?: number | null;
+  centerLon?: number | null;
   geometry: {
     type: 'polygon' | 'bbox';
     polygon?: number[][];
@@ -70,6 +92,7 @@ export function ReviewViewer({ items, onAction, onEdit }: ReviewViewerProps) {
   const [corrections, setCorrections] = useState<Record<string, string>>({});
   const [zoomLevel, setZoomLevel] = useState(1);
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [viewMode, setViewMode] = useState<'image' | 'map'>('image');
 
   useEffect(() => {
     if (currentIndex >= groupedAssets.length) {
@@ -107,6 +130,14 @@ export function ReviewViewer({ items, onAction, onEdit }: ReviewViewerProps) {
       bbox: item.geometry.bbox as number[],
     }));
 
+  const currentAssetGeoCount = currentItems.filter(
+    (item) =>
+      typeof item.centerLat === 'number' &&
+      typeof item.centerLon === 'number' &&
+      Number.isFinite(item.centerLat) &&
+      Number.isFinite(item.centerLon)
+  ).length;
+
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[240px_minmax(0,1fr)_320px] xl:grid-cols-[280px_minmax(0,1fr)_360px]">
       <div className="space-y-3">
@@ -128,45 +159,79 @@ export function ReviewViewer({ items, onAction, onEdit }: ReviewViewerProps) {
       </div>
 
       <div className="space-y-4">
+        <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-2">
+          <div className="text-sm font-semibold text-gray-700">Visual Review</div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant={viewMode === 'image' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setViewMode('image')}
+              className="h-8 gap-1"
+            >
+              <ImageIcon className="h-3.5 w-3.5" />
+              Image
+            </Button>
+            <Button
+              variant={viewMode === 'map' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setViewMode('map')}
+              className="h-8 gap-1"
+            >
+              <MapPinned className="h-3.5 w-3.5" />
+              Map
+            </Button>
+          </div>
+        </div>
+
         {currentGroup ? (
-          <InteractiveDetectionOverlay
-            imageUrl={currentGroup.asset.storageUrl}
-            detections={overlayItems}
-            onAccept={(id) => {
-              const item = currentItems.find((entry) => entry.id === id);
-              if (item) onAction(item, 'accept');
-            }}
-            onReject={(id) => {
-              const item = currentItems.find((entry) => entry.id === id);
-              if (item) onAction(item, 'reject');
-            }}
-            imageWidth={currentGroup.asset.imageWidth || undefined}
-            imageHeight={currentGroup.asset.imageHeight || undefined}
-            zoomLevel={zoomLevel}
-            panOffset={panOffset}
-            onPanOffsetChange={setPanOffset}
-          />
+          viewMode === 'image' ? (
+            <InteractiveDetectionOverlay
+              imageUrl={currentGroup.asset.storageUrl}
+              detections={overlayItems}
+              onAccept={(id) => {
+                const item = currentItems.find((entry) => entry.id === id);
+                if (item) onAction(item, 'accept');
+              }}
+              onReject={(id) => {
+                const item = currentItems.find((entry) => entry.id === id);
+                if (item) onAction(item, 'reject');
+              }}
+              imageWidth={currentGroup.asset.imageWidth || undefined}
+              imageHeight={currentGroup.asset.imageHeight || undefined}
+              zoomLevel={zoomLevel}
+              panOffset={panOffset}
+              onPanOffsetChange={setPanOffset}
+            />
+          ) : (
+            <ReviewGeoMap items={items} selectedAssetId={currentGroup.asset.id} />
+          )
         ) : (
           <div className="rounded-lg border border-dashed p-6 text-center text-sm text-gray-500">
             No assets in this review session.
           </div>
         )}
         <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm text-gray-500">
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={handleZoomOut} className="h-8 w-8 p-0">
-              <ZoomOut className="h-4 w-4" />
-            </Button>
-            <span className="text-xs text-gray-500 w-12 text-center">
-              {Math.round(zoomLevel * 100)}%
+          {viewMode === 'image' ? (
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={handleZoomOut} className="h-8 w-8 p-0">
+                <ZoomOut className="h-4 w-4" />
+              </Button>
+              <span className="text-xs text-gray-500 w-12 text-center">
+                {Math.round(zoomLevel * 100)}%
+              </span>
+              <Button variant="ghost" size="sm" onClick={handleZoomIn} className="h-8 w-8 p-0">
+                <ZoomIn className="h-4 w-4" />
+              </Button>
+              <Button variant="ghost" size="sm" onClick={handleResetView} className="h-8 px-2">
+                <RotateCcw className="h-4 w-4 mr-1" />
+                <span className="text-xs">Fit</span>
+              </Button>
+            </div>
+          ) : (
+            <span className="text-xs text-gray-500">
+              {currentAssetGeoCount} of {currentItems.length} items geolocated for this asset
             </span>
-            <Button variant="ghost" size="sm" onClick={handleZoomIn} className="h-8 w-8 p-0">
-              <ZoomIn className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="sm" onClick={handleResetView} className="h-8 px-2">
-              <RotateCcw className="h-4 w-4 mr-1" />
-              <span className="text-xs">Fit</span>
-            </Button>
-          </div>
+          )}
           <span>
             {currentIndex + 1} of {groupedAssets.length} assets
           </span>
