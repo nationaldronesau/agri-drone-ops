@@ -20,6 +20,31 @@ const DEFAULT_EXPORT_CAMERA_FOV = 84;
 const MIN_EXPORT_MAX_OFFSET_M = 250;
 const EXPORT_MAX_FOOTPRINT_MULTIPLIER = 3;
 const MAX_EXPORT_LRF_GPS_OFFSET_M = 2000;
+const DEFAULT_DEDUPE_RADIUS_M = 1.8;
+const MIN_DEDUPE_RADIUS_M = 0.2;
+const MAX_DEDUPE_RADIUS_M = 6;
+
+interface ExportDetectionRecord extends DetectionRecord {
+  sourceAssetId: string;
+}
+
+interface DedupeOptions {
+  enabled: boolean;
+  radiusMeters: number;
+  byClass: boolean;
+  crossAssetOnly: boolean;
+}
+
+interface DedupeStats {
+  enabled: boolean;
+  radiusMeters: number;
+  byClass: boolean;
+  crossAssetOnly: boolean;
+  inputDetections: number;
+  outputDetections: number;
+  mergedDetections: number;
+  clusterCount: number;
+}
 
 interface ExportManifest {
   exportedAt: string;
@@ -35,6 +60,7 @@ interface ExportManifest {
     reason: string;
   }>;
   warnings: string[];
+  dedupe: DedupeStats;
 }
 
 function escapeCSV(field: unknown): string {
@@ -147,6 +173,21 @@ function normalizeGeoPoint(lat: unknown, lon: unknown): { lat: number; lon: numb
   return { lat, lon };
 }
 
+function parseBooleanParam(value: string | null, defaultValue: boolean): boolean {
+  if (value == null) return defaultValue;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1') return true;
+  if (normalized === 'false' || normalized === '0') return false;
+  return defaultValue;
+}
+
+function parseRadiusParam(value: string | null, defaultValue: number): number {
+  if (!value) return defaultValue;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return defaultValue;
+  return Math.min(MAX_DEDUPE_RADIUS_M, Math.max(MIN_DEDUPE_RADIUS_M, parsed));
+}
+
 function haversineDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const earthRadiusM = 6371000;
   const toRad = (deg: number) => (deg * Math.PI) / 180;
@@ -211,6 +252,176 @@ function hasPlausibleLrf(asset: {
     asset.lrfDistance * 8 + 500
   );
   return Number.isFinite(gpsToLrfMeters) && gpsToLrfMeters <= maxExpectedOffset;
+}
+
+function createClusterRepresentative(cluster: ExportDetectionRecord[]): ExportDetectionRecord {
+  const lead = cluster.reduce((best, current) =>
+    (current.confidence ?? 0) > (best.confidence ?? 0) ? current : best
+  );
+
+  let weightSum = 0;
+  let weightedLatSum = 0;
+  let weightedLonSum = 0;
+  for (const item of cluster) {
+    if (!hasValidGeo(item)) continue;
+    const weight = Math.max(item.confidence ?? 0, 0.05);
+    weightSum += weight;
+    weightedLatSum += item.centerLat * weight;
+    weightedLonSum += item.centerLon * weight;
+  }
+
+  const earliestCreatedAt = cluster.reduce(
+    (earliest, item) => (item.createdAt < earliest ? item.createdAt : earliest),
+    lead.createdAt
+  );
+
+  return {
+    ...lead,
+    centerLat: weightSum > 0 ? weightedLatSum / weightSum : lead.centerLat,
+    centerLon: weightSum > 0 ? weightedLonSum / weightSum : lead.centerLon,
+    createdAt: earliestCreatedAt,
+  };
+}
+
+function hasValidGeo(point: { centerLat: number | null; centerLon: number | null }): point is { centerLat: number; centerLon: number } {
+  return (
+    typeof point.centerLat === 'number' &&
+    typeof point.centerLon === 'number' &&
+    Number.isFinite(point.centerLat) &&
+    Number.isFinite(point.centerLon)
+  );
+}
+
+function dedupeDetections(
+  detections: ExportDetectionRecord[],
+  options: DedupeOptions
+): { detections: ExportDetectionRecord[]; stats: DedupeStats } {
+  const inputDetections = detections.length;
+  if (!options.enabled || detections.length < 2) {
+    return {
+      detections,
+      stats: {
+        enabled: options.enabled,
+        radiusMeters: options.radiusMeters,
+        byClass: options.byClass,
+        crossAssetOnly: options.crossAssetOnly,
+        inputDetections,
+        outputDetections: detections.length,
+        mergedDetections: 0,
+        clusterCount: 0,
+      },
+    };
+  }
+
+  const orderedIndexes = detections
+    .map((_, index) => index)
+    .sort((a, b) => {
+      const confidenceDiff = (detections[b].confidence ?? 0) - (detections[a].confidence ?? 0);
+      if (confidenceDiff !== 0) return confidenceDiff;
+      return detections[a].createdAt.getTime() - detections[b].createdAt.getTime();
+    });
+
+  const assigned = new Array(detections.length).fill(false);
+  const deduped: ExportDetectionRecord[] = [];
+  let clusterCount = 0;
+
+  for (const seedIndex of orderedIndexes) {
+    if (assigned[seedIndex]) continue;
+
+    assigned[seedIndex] = true;
+    const seed = detections[seedIndex];
+    const clusterIndexes = [seedIndex];
+    const clusterAssetIds = new Set([seed.sourceAssetId]);
+
+    for (const candidateIndex of orderedIndexes) {
+      if (assigned[candidateIndex] || candidateIndex === seedIndex) continue;
+
+      const candidate = detections[candidateIndex];
+      if (
+        options.byClass &&
+        candidate.className !== seed.className
+      ) {
+        continue;
+      }
+
+      if (
+        options.crossAssetOnly &&
+        clusterAssetIds.has(candidate.sourceAssetId)
+      ) {
+        continue;
+      }
+
+      if (
+        !hasValidGeo(seed) ||
+        !hasValidGeo(candidate)
+      ) {
+        continue;
+      }
+
+      const seedDistance = haversineDistanceMeters(
+        seed.centerLat,
+        seed.centerLon,
+        candidate.centerLat,
+        candidate.centerLon
+      );
+      if (seedDistance > options.radiusMeters) continue;
+
+      let matchesCluster = true;
+      for (const clusterIndex of clusterIndexes) {
+        const member = detections[clusterIndex];
+        if (
+          options.crossAssetOnly &&
+          member.sourceAssetId === candidate.sourceAssetId
+        ) {
+          matchesCluster = false;
+          break;
+        }
+        if (!hasValidGeo(member)) {
+          matchesCluster = false;
+          break;
+        }
+        const clusterDistance = haversineDistanceMeters(
+          member.centerLat,
+          member.centerLon,
+          candidate.centerLat,
+          candidate.centerLon
+        );
+        if (clusterDistance > options.radiusMeters) {
+          matchesCluster = false;
+          break;
+        }
+      }
+
+      if (!matchesCluster) continue;
+
+      clusterIndexes.push(candidateIndex);
+      clusterAssetIds.add(candidate.sourceAssetId);
+      assigned[candidateIndex] = true;
+    }
+
+    if (clusterIndexes.length === 1) {
+      deduped.push(seed);
+      continue;
+    }
+
+    clusterCount += 1;
+    const clusterRecords = clusterIndexes.map((index) => detections[index]);
+    deduped.push(createClusterRepresentative(clusterRecords));
+  }
+
+  return {
+    detections: deduped,
+    stats: {
+      enabled: true,
+      radiusMeters: options.radiusMeters,
+      byClass: options.byClass,
+      crossAssetOnly: options.crossAssetOnly,
+      inputDetections,
+      outputDetections: deduped.length,
+      mergedDetections: inputDetections - deduped.length,
+      clusterCount,
+    },
+  };
 }
 
 async function computeExportGeo(
@@ -419,6 +630,10 @@ export async function GET(request: NextRequest) {
     const includePendingParam = searchParams.get('includePending');
     const includePending =
       includePendingParam === 'true' || (Boolean(sessionId) && includeAI && includePendingParam !== 'false');
+    const dedupeEnabled = parseBooleanParam(searchParams.get('dedupe'), false);
+    const dedupeRadiusM = parseRadiusParam(searchParams.get('dedupeRadiusM'), DEFAULT_DEDUPE_RADIUS_M);
+    const dedupeByClass = parseBooleanParam(searchParams.get('dedupeByClass'), true);
+    const dedupeCrossAssetOnly = parseBooleanParam(searchParams.get('dedupeCrossAssetOnly'), true);
     const classFilter = searchParams.get('classes')?.split(',').filter(Boolean) || [];
     // GEO_DEBUG=1 logs a single JSON payload per request; optional GEO_DEBUG_ASSET_ID/GEO_DEBUG_ITEM_ID filter it.
     const geoDebugEnabled = process.env.GEO_DEBUG === '1';
@@ -690,7 +905,7 @@ export async function GET(request: NextRequest) {
     const detections = [...aiDetections, ...yoloDetections];
 
     const skippedItems: ExportManifest['skippedItems'] = [];
-    const exportableDetections: DetectionRecord[] = [];
+    const exportableDetections: ExportDetectionRecord[] = [];
     const exportableAnnotations: AnnotationRecord[] = [];
 
     for (const detection of detections) {
@@ -770,6 +985,7 @@ export async function GET(request: NextRequest) {
         centerLat: finalGeo.lat,
         centerLon: finalGeo.lon,
         createdAt: detection.createdAt,
+        sourceAssetId: asset.id,
         asset: {
           fileName: asset.fileName,
           project: asset.project,
@@ -926,6 +1142,7 @@ export async function GET(request: NextRequest) {
         centerLat: finalGeo.lat,
         centerLon: finalGeo.lon,
         createdAt: pending.createdAt,
+        sourceAssetId: asset.id,
         asset: {
           fileName: asset.fileName,
           project: asset.project,
@@ -933,8 +1150,15 @@ export async function GET(request: NextRequest) {
       });
     }
 
+    const dedupedDetections = dedupeDetections(exportableDetections, {
+      enabled: dedupeEnabled,
+      radiusMeters: dedupeRadiusM,
+      byClass: dedupeByClass,
+      crossAssetOnly: dedupeCrossAssetOnly,
+    });
+    const finalDetections = dedupedDetections.detections;
     const totalItems = detections.length + annotations.length + pendingAnnotations.length;
-    const exportedCount = exportableDetections.length + exportableAnnotations.length;
+    const exportedCount = finalDetections.length + exportableAnnotations.length;
 
     if (exportedCount > EXPORT_ITEM_LIMIT) {
       return NextResponse.json(
@@ -979,10 +1203,15 @@ export async function GET(request: NextRequest) {
       exportedCount,
       skippedCount: skippedItems.length,
       skippedItems,
-      warnings:
-        skippedItems.length > 0
+      warnings: [
+        ...(skippedItems.length > 0
           ? [`${skippedItems.length} items skipped - see skippedItems for details`]
-          : [],
+          : []),
+        ...(dedupedDetections.stats.enabled && dedupedDetections.stats.mergedDetections > 0
+          ? [`Deduped ${dedupedDetections.stats.mergedDetections} overlapping AI detections into ${dedupedDetections.stats.outputDetections} export points (${dedupedDetections.stats.radiusMeters.toFixed(2)}m radius)`]
+          : []),
+      ],
+      dedupe: dedupedDetections.stats,
     };
 
     const zip = new JSZip();
@@ -992,7 +1221,7 @@ export async function GET(request: NextRequest) {
         'ID,Type,Class,Latitude,Longitude,Confidence,Image,Project,Location,Date',
       ];
 
-      for (const detection of exportableDetections) {
+      for (const detection of finalDetections) {
         rows.push(
           [
             escapeCSV(detection.id),
@@ -1030,7 +1259,7 @@ export async function GET(request: NextRequest) {
     } else if (format === 'kml') {
       const placemarks: string[] = [];
 
-      for (const detection of exportableDetections) {
+      for (const detection of finalDetections) {
         placemarks.push(`    <Placemark>
       <name>${escapeXML(detection.className)} (AI)</name>
       <description>${escapeXML(`Confidence: ${((detection.confidence || 0) * 100).toFixed(1)}%\nImage: ${detection.asset.fileName}`)}</description>
@@ -1063,7 +1292,7 @@ ${placemarks.join('\n')}
       zip.file('export.kml', kmlContent);
     } else {
       const { buffer } = await generateShapefileExport(
-        exportableDetections,
+        finalDetections,
         exportableAnnotations
       );
 

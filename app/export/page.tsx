@@ -185,6 +185,12 @@ export default function ExportPage() {
         includeAI: includeAI.toString(),
         includeManual: includeManual.toString(),
       });
+      if (includeAI) {
+        params.set("dedupe", "true");
+        params.set("dedupeRadiusM", "1.8");
+        params.set("dedupeByClass", "true");
+        params.set("dedupeCrossAssetOnly", "true");
+      }
       if (includeSam3) {
         params.set("includePending", "true");
       }

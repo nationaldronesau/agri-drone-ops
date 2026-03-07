@@ -300,6 +300,12 @@ function ReviewPageContent() {
     if (exportIncludeAI && (session?.batchJobIds?.length ?? 0) > 0) {
       params.set('includePending', 'true');
     }
+    if (exportIncludeAI) {
+      params.set('dedupe', 'true');
+      params.set('dedupeRadiusM', '1.8');
+      params.set('dedupeByClass', 'true');
+      params.set('dedupeCrossAssetOnly', 'true');
+    }
 
     setActionError(null);
     setExportLoading(true);
