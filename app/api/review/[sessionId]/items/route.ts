@@ -3,7 +3,11 @@ import prisma from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
 import {
   centerBoxToCorner,
+  pixelToGeo,
   polygonToCenterBox,
+  resolveProjectionAltitude,
+  resolveProjectionCameraFov,
+  resolveProjectionImageDimensions,
   rescaleToOriginalWithMeta,
   validateGeoParams,
 } from '@/lib/utils/georeferencing';
@@ -105,6 +109,132 @@ function manualConfidenceToScore(confidence: string | null): number {
   return 0.5;
 }
 
+function isFiniteGeoCoordinate(lat: unknown, lon: unknown): lat is number {
+  return (
+    typeof lat === 'number' &&
+    typeof lon === 'number' &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lon) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lon >= -180 &&
+    lon <= 180
+  );
+}
+
+function toClientAsset<T extends {
+  id: string;
+  fileName: string;
+  storageUrl: string;
+  gpsLatitude: number | null;
+  gpsLongitude: number | null;
+  altitude: number | null;
+  gimbalPitch: number | null;
+  gimbalRoll: number | null;
+  gimbalYaw: number | null;
+  imageWidth: number | null;
+  imageHeight: number | null;
+}>(asset: T) {
+  return {
+    id: asset.id,
+    fileName: asset.fileName,
+    storageUrl: asset.storageUrl,
+    gpsLatitude: asset.gpsLatitude,
+    gpsLongitude: asset.gpsLongitude,
+    altitude: asset.altitude,
+    gimbalPitch: asset.gimbalPitch,
+    gimbalRoll: asset.gimbalRoll,
+    gimbalYaw: asset.gimbalYaw,
+    imageWidth: asset.imageWidth,
+    imageHeight: asset.imageHeight,
+  };
+}
+
+async function resolveCenterGeo(
+  asset: {
+    gpsLatitude: number | null;
+    gpsLongitude: number | null;
+    altitude: number | null;
+    gimbalPitch: number | null;
+    gimbalRoll: number | null;
+    gimbalYaw: number | null;
+    cameraFov: number | null;
+    imageWidth: number | null;
+    imageHeight: number | null;
+    metadata?: unknown | null;
+    lrfDistance?: number | null;
+    lrfTargetLat?: number | null;
+    lrfTargetLon?: number | null;
+  },
+  bboxCenter: CenterBox | null | undefined,
+  storedLat: number | null | undefined,
+  storedLon: number | null | undefined
+): Promise<{ lat: number | null; lon: number | null }> {
+  if (isFiniteGeoCoordinate(storedLat, storedLon)) {
+    return { lat: storedLat, lon: storedLon };
+  }
+
+  if (!bboxCenter) {
+    return { lat: null, lon: null };
+  }
+
+  if (
+    typeof asset.gpsLatitude !== 'number' ||
+    typeof asset.gpsLongitude !== 'number' ||
+    !Number.isFinite(asset.gpsLatitude) ||
+    !Number.isFinite(asset.gpsLongitude)
+  ) {
+    return { lat: null, lon: null };
+  }
+
+  const resolvedDimensions = resolveProjectionImageDimensions(
+    asset.imageWidth,
+    asset.imageHeight,
+    asset.metadata
+  );
+  const width = resolvedDimensions.imageWidth;
+  const height = resolvedDimensions.imageHeight;
+  if (width == null || height == null) {
+    return { lat: null, lon: null };
+  }
+
+  const altitude = resolveProjectionAltitude(asset.altitude, asset.metadata) ?? 100;
+  const cameraFov = resolveProjectionCameraFov(
+    asset.cameraFov,
+    width,
+    asset.metadata,
+    84
+  );
+
+  try {
+    const geoResult = pixelToGeo(
+      {
+        gpsLatitude: asset.gpsLatitude,
+        gpsLongitude: asset.gpsLongitude,
+        altitude,
+        gimbalPitch: asset.gimbalPitch ?? 0,
+        gimbalRoll: asset.gimbalRoll ?? 0,
+        gimbalYaw: asset.gimbalYaw ?? 0,
+        imageWidth: width,
+        imageHeight: height,
+        cameraFov,
+        lrfDistance: asset.lrfDistance ?? undefined,
+        lrfTargetLat: asset.lrfTargetLat ?? undefined,
+        lrfTargetLon: asset.lrfTargetLon ?? undefined,
+      },
+      { x: bboxCenter.x, y: bboxCenter.y },
+      true
+    );
+    const geo = geoResult instanceof Promise ? await geoResult : geoResult;
+    if (isFiniteGeoCoordinate(geo.lat, geo.lon)) {
+      return { lat: geo.lat, lon: geo.lon };
+    }
+    return { lat: null, lon: null };
+  } catch {
+    return { lat: null, lon: null };
+  }
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: { sessionId: string } }
@@ -195,8 +325,13 @@ export async function GET(
       gimbalPitch: true,
       gimbalRoll: true,
       gimbalYaw: true,
+      cameraFov: true,
       imageWidth: true,
       imageHeight: true,
+      lrfDistance: true,
+      lrfTargetLat: true,
+      lrfTargetLon: true,
+      metadata: true,
     };
 
     const manualAnnotationsPromise = !isBatchReview
@@ -268,15 +403,21 @@ export async function GET(
       pendingAnnotationsPromise,
     ]);
 
-    const items = [
-      ...manualAnnotations.map((annotation) => {
-        const asset = annotation.session.asset;
+    const manualItems = await Promise.all(manualAnnotations.map(async (annotation) => {
+        const assetRecord = annotation.session.asset;
+        const asset = toClientAsset(assetRecord);
         const validation = validateGeoParams(asset);
         const polygon = Array.isArray(annotation.coordinates)
           ? (annotation.coordinates as number[][])
           : [];
         const centerBox = polygonToCenterBox(polygon);
         const cornerBox = centerBox ? centerBoxToCorner(centerBox) : undefined;
+        const centerGeo = await resolveCenterGeo(
+          assetRecord,
+          centerBox,
+          annotation.centerLat,
+          annotation.centerLon
+        );
 
         const status: ReviewStatus = annotation.verified
           ? 'accepted'
@@ -292,8 +433,8 @@ export async function GET(
           asset,
           className: annotation.weedType,
           confidence: manualConfidenceToScore(annotation.confidence),
-          centerLat: annotation.centerLat,
-          centerLon: annotation.centerLon,
+          centerLat: centerGeo.lat,
+          centerLon: centerGeo.lon,
           geometry: {
             type: 'polygon' as const,
             polygon,
@@ -302,16 +443,23 @@ export async function GET(
           },
           status,
           correctedClass: null,
-          hasGeoData: annotation.centerLat != null && annotation.centerLon != null,
+          hasGeoData: centerGeo.lat != null && centerGeo.lon != null,
           canExport: validation.valid,
           warnings: validation.warnings,
         };
-      }),
-      ...aiDetections.map((detection) => {
-        const asset = detection.asset;
+      }));
+    const aiItems = await Promise.all(aiDetections.map(async (detection) => {
+        const assetRecord = detection.asset;
+        const asset = toClientAsset(assetRecord);
         const validation = validateGeoParams(asset);
         const centerBox = parseCenterBox(detection.boundingBox);
         const cornerBox = centerBox ? centerBoxToCorner(centerBox) : undefined;
+        const centerGeo = await resolveCenterGeo(
+          assetRecord,
+          centerBox,
+          detection.centerLat,
+          detection.centerLon
+        );
 
         return {
           id: detection.id,
@@ -321,8 +469,8 @@ export async function GET(
           asset,
           className: detection.className,
           confidence: detection.confidence ?? 0,
-          centerLat: detection.centerLat,
-          centerLon: detection.centerLon,
+          centerLat: centerGeo.lat,
+          centerLon: centerGeo.lon,
           geometry: {
             type: 'bbox' as const,
             ...(centerBox ? { bboxCenter: centerBox } : {}),
@@ -334,7 +482,7 @@ export async function GET(
               ? ('accepted' as ReviewStatus)
               : ('pending' as ReviewStatus),
           correctedClass: detection.userCorrected ? detection.className : null,
-          hasGeoData: detection.centerLat != null && detection.centerLon != null,
+          hasGeoData: centerGeo.lat != null && centerGeo.lon != null,
           canExport: validation.valid,
           warnings: validation.warnings,
           _sourceData: {
@@ -342,9 +490,10 @@ export async function GET(
             customModel: detection.customModel,
           },
         };
-      }),
-      ...yoloDetections.map((detection) => {
-        const asset = detection.asset;
+      }));
+    const yoloItems = await Promise.all(yoloDetections.map(async (detection) => {
+        const assetRecord = detection.asset;
+        const asset = toClientAsset(assetRecord);
         const validation = validateGeoParams(asset);
         let centerBox = parseCenterBox(detection.boundingBox);
         let meta = detection.preprocessingMeta as YOLOPreprocessingMeta | null;
@@ -359,8 +508,14 @@ export async function GET(
           centerBox = rescaleToOriginalWithMeta(centerBox, meta);
         }
         const cornerBox = centerBox ? centerBoxToCorner(centerBox) : undefined;
+        const centerGeo = await resolveCenterGeo(
+          assetRecord,
+          centerBox,
+          detection.centerLat,
+          detection.centerLon
+        );
         const warnings = [...validation.warnings];
-        if (detection.centerLat == null || detection.centerLon == null) {
+        if (centerGeo.lat == null || centerGeo.lon == null) {
           warnings.push('Coordinates will be computed at export');
         }
 
@@ -372,8 +527,8 @@ export async function GET(
           asset,
           className: detection.className,
           confidence: detection.confidence ?? 0,
-          centerLat: detection.centerLat,
-          centerLon: detection.centerLon,
+          centerLat: centerGeo.lat,
+          centerLon: centerGeo.lon,
           geometry: {
             type: 'bbox' as const,
             ...(centerBox ? { bboxCenter: centerBox } : {}),
@@ -385,7 +540,7 @@ export async function GET(
               ? ('accepted' as ReviewStatus)
               : ('pending' as ReviewStatus),
           correctedClass: detection.userCorrected ? detection.className : null,
-          hasGeoData: detection.centerLat != null && detection.centerLon != null,
+          hasGeoData: centerGeo.lat != null && centerGeo.lon != null,
           canExport: validation.valid,
           warnings,
           _sourceData: {
@@ -393,9 +548,10 @@ export async function GET(
             inferenceJobId: detection.inferenceJobId,
           },
         };
-      }),
-      ...pendingAnnotations.map((pending) => {
-        const asset = pending.asset;
+      }));
+    const pendingItems = await Promise.all(pendingAnnotations.map(async (pending) => {
+        const assetRecord = pending.asset;
+        const asset = toClientAsset(assetRecord);
         const validation = validateGeoParams(asset);
         const polygon = Array.isArray(pending.polygon)
           ? (pending.polygon as number[][])
@@ -405,6 +561,12 @@ export async function GET(
           : null;
         const cornerBox =
           centerBox ? centerBoxToCorner(centerBox) : parseCornerBox(pending.bbox);
+        const centerGeo = await resolveCenterGeo(
+          assetRecord,
+          centerBox,
+          pending.centerLat,
+          pending.centerLon
+        );
 
         const status: ReviewStatus =
           pending.status === 'ACCEPTED'
@@ -421,8 +583,8 @@ export async function GET(
           asset,
           className: pending.weedType,
           confidence: pending.confidence,
-          centerLat: pending.centerLat,
-          centerLon: pending.centerLon,
+          centerLat: centerGeo.lat,
+          centerLon: centerGeo.lon,
           geometry: {
             type: 'polygon' as const,
             polygon,
@@ -431,7 +593,7 @@ export async function GET(
           },
           status,
           correctedClass: null,
-          hasGeoData: pending.centerLat != null && pending.centerLon != null,
+          hasGeoData: centerGeo.lat != null && centerGeo.lon != null,
           canExport: validation.valid,
           warnings: validation.warnings,
           _sourceData: {
@@ -439,8 +601,8 @@ export async function GET(
             sourceType: pending.batchJob?.exemplarId ? 'CONCEPT' : 'SAM3_BATCH',
           },
         };
-      }),
-    ];
+      }));
+    const items = [...manualItems, ...aiItems, ...yoloItems, ...pendingItems];
 
     const filteredItems = items.filter((item) => {
       if (needsReview && item.status !== 'pending') return false;
