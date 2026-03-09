@@ -3,23 +3,15 @@ import JSZip from 'jszip';
 import prisma from '@/lib/db';
 import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
 import {
-  normalizePixelPoint,
+  computeExportProjectionGeo,
   polygonToCenterBox,
-  pixelToGeo,
   rescaleToOriginalWithMeta,
-  resolveProjectionAltitude,
-  resolveProjectionCameraFov,
-  resolveProjectionImageDimensions,
   validateGeoParams,
 } from '@/lib/utils/georeferencing';
 import { generateShapefileExport, type DetectionRecord, type AnnotationRecord } from '@/lib/services/shapefile';
 import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
 
 const EXPORT_ITEM_LIMIT = 5000;
-const DEFAULT_EXPORT_CAMERA_FOV = 84;
-const MIN_EXPORT_MAX_OFFSET_M = 250;
-const EXPORT_MAX_FOOTPRINT_MULTIPLIER = 3;
-const MAX_EXPORT_LRF_GPS_OFFSET_M = 2000;
 const DEFAULT_DEDUPE_RADIUS_M = 1.8;
 const MIN_DEDUPE_RADIUS_M = 0.2;
 const MAX_DEDUPE_RADIUS_M = 6;
@@ -201,59 +193,6 @@ function haversineDistanceMeters(lat1: number, lon1: number, lat2: number, lon2:
   return earthRadiusM * c;
 }
 
-function rotateOffsetsByYaw(
-  offsetEast: number,
-  offsetNorth: number,
-  yawDegrees: number
-): { east: number; north: number } {
-  if (!Number.isFinite(yawDegrees)) {
-    return { east: offsetEast, north: offsetNorth };
-  }
-
-  // DJI yaw metadata is a compass bearing: clockwise-positive from true north.
-  const yaw = (yawDegrees * Math.PI) / 180;
-  return {
-    east: offsetEast * Math.cos(yaw) + offsetNorth * Math.sin(yaw),
-    north: -offsetEast * Math.sin(yaw) + offsetNorth * Math.cos(yaw),
-  };
-}
-
-function hasPlausibleLrf(asset: {
-  gpsLatitude: number | null;
-  gpsLongitude: number | null;
-  lrfDistance?: number | null;
-  lrfTargetLat?: number | null;
-  lrfTargetLon?: number | null;
-}): boolean {
-  if (
-    typeof asset.gpsLatitude !== 'number' ||
-    typeof asset.gpsLongitude !== 'number' ||
-    typeof asset.lrfDistance !== 'number' ||
-    typeof asset.lrfTargetLat !== 'number' ||
-    typeof asset.lrfTargetLon !== 'number' ||
-    !Number.isFinite(asset.gpsLatitude) ||
-    !Number.isFinite(asset.gpsLongitude) ||
-    !Number.isFinite(asset.lrfDistance) ||
-    !Number.isFinite(asset.lrfTargetLat) ||
-    !Number.isFinite(asset.lrfTargetLon) ||
-    asset.lrfDistance <= 0
-  ) {
-    return false;
-  }
-
-  const gpsToLrfMeters = haversineDistanceMeters(
-    asset.gpsLatitude,
-    asset.gpsLongitude,
-    asset.lrfTargetLat,
-    asset.lrfTargetLon
-  );
-  const maxExpectedOffset = Math.max(
-    MAX_EXPORT_LRF_GPS_OFFSET_M,
-    asset.lrfDistance * 8 + 500
-  );
-  return Number.isFinite(gpsToLrfMeters) && gpsToLrfMeters <= maxExpectedOffset;
-}
-
 function createClusterRepresentative(cluster: ExportDetectionRecord[]): ExportDetectionRecord {
   const lead = cluster.reduce((best, current) =>
     (current.confidence ?? 0) > (best.confidence ?? 0) ? current : best
@@ -422,182 +361,6 @@ function dedupeDetections(
       clusterCount,
     },
   };
-}
-
-async function computeExportGeo(
-  asset: {
-    gpsLatitude: number | null;
-    gpsLongitude: number | null;
-    altitude: number | null;
-    gimbalPitch: number | null;
-    gimbalRoll: number | null;
-    gimbalYaw: number | null;
-    cameraFov: number | null;
-    imageWidth: number | null;
-    imageHeight: number | null;
-    metadata?: unknown | null;
-    lrfDistance?: number | null;
-    lrfTargetLat?: number | null;
-    lrfTargetLon?: number | null;
-  },
-  pixel: { x: number; y: number }
-): Promise<{ lat: number; lon: number } | null> {
-  const gpsLat = asset.gpsLatitude;
-  const gpsLon = asset.gpsLongitude;
-  const resolvedDimensions = resolveProjectionImageDimensions(
-    asset.imageWidth,
-    asset.imageHeight,
-    asset.metadata
-  );
-  const width = resolvedDimensions.imageWidth;
-  const height = resolvedDimensions.imageHeight;
-  if (
-    typeof gpsLat !== 'number' ||
-    typeof gpsLon !== 'number' ||
-    typeof width !== 'number' ||
-    typeof height !== 'number' ||
-    !Number.isFinite(gpsLat) ||
-    !Number.isFinite(gpsLon) ||
-    !Number.isFinite(width) ||
-    !Number.isFinite(height) ||
-    width <= 0 ||
-    height <= 0
-  ) {
-    return null;
-  }
-
-  let normalizedPixel: { x: number; y: number };
-  try {
-    normalizedPixel = normalizePixelPoint(pixel, width, height);
-  } catch {
-    return null;
-  }
-
-  const altitude = resolveProjectionAltitude(asset.altitude, asset.metadata) ?? 100;
-  const cameraFov = resolveProjectionCameraFov(
-    asset.cameraFov,
-    width,
-    asset.metadata,
-    DEFAULT_EXPORT_CAMERA_FOV
-  );
-  const hFovRad = (cameraFov * Math.PI) / 180;
-  const vFovRad = hFovRad * (height / width);
-  const theoreticalMaxOffsetMeters =
-    altitude *
-    Math.hypot(
-      Math.tan(hFovRad / 2),
-      Math.tan(vFovRad / 2)
-    );
-  const maxOffsetMeters = Math.max(
-    MIN_EXPORT_MAX_OFFSET_M,
-    Number.isFinite(theoreticalMaxOffsetMeters)
-      ? theoreticalMaxOffsetMeters * EXPORT_MAX_FOOTPRINT_MULTIPLIER
-      : MIN_EXPORT_MAX_OFFSET_M
-  );
-
-  // Use the standard pixelToGeo path only when LRF metadata is plausibly valid.
-  // Otherwise, prefer the stable export projection below (it avoids pitch singularities).
-  if (hasPlausibleLrf(asset)) {
-    try {
-      const standardGeoResult = pixelToGeo(
-        {
-          gpsLatitude: gpsLat,
-          gpsLongitude: gpsLon,
-          altitude,
-          gimbalRoll: asset.gimbalRoll ?? 0,
-          gimbalPitch: asset.gimbalPitch ?? 0,
-          gimbalYaw: asset.gimbalYaw ?? 0,
-          cameraFov,
-          imageWidth: width,
-          imageHeight: height,
-          lrfDistance:
-            typeof asset.lrfDistance === 'number' && Number.isFinite(asset.lrfDistance)
-              ? asset.lrfDistance
-              : undefined,
-          lrfTargetLat:
-            typeof asset.lrfTargetLat === 'number' && Number.isFinite(asset.lrfTargetLat)
-              ? asset.lrfTargetLat
-              : undefined,
-          lrfTargetLon:
-            typeof asset.lrfTargetLon === 'number' && Number.isFinite(asset.lrfTargetLon)
-              ? asset.lrfTargetLon
-              : undefined,
-        },
-        normalizedPixel,
-        true
-      );
-      const standardGeo = standardGeoResult instanceof Promise
-        ? await standardGeoResult
-        : standardGeoResult;
-      const normalizedStandardGeo = normalizeGeoPoint(standardGeo.lat, standardGeo.lon);
-      if (normalizedStandardGeo) {
-        const projectedOffsetMeters = haversineDistanceMeters(
-          gpsLat,
-          gpsLon,
-          normalizedStandardGeo.lat,
-          normalizedStandardGeo.lon
-        );
-        if (Number.isFinite(projectedOffsetMeters) && projectedOffsetMeters <= maxOffsetMeters) {
-          return normalizedStandardGeo;
-        }
-        console.warn(
-          `[export] ignoring implausible LRF projected point (${projectedOffsetMeters.toFixed(1)}m from asset GPS, max ${maxOffsetMeters.toFixed(1)}m)`
-        );
-      }
-    } catch {
-      // Continue to stable projection fallback
-    }
-  }
-
-  const normalizedX = normalizedPixel.x / width - 0.5;
-  const normalizedY = normalizedPixel.y / height - 0.5;
-
-  const angleX = normalizedX * hFovRad;
-  const angleY = normalizedY * vFovRad;
-
-  if (!Number.isFinite(angleX) || !Number.isFinite(angleY)) {
-    return null;
-  }
-
-  // Stable footprint projection: avoids singularities from extreme gimbal pitch during export.
-  let offsetEast = altitude * Math.tan(angleX);
-  let offsetNorth = -altitude * Math.tan(angleY);
-  if (!Number.isFinite(offsetEast) || !Number.isFinite(offsetNorth)) {
-    return null;
-  }
-
-  const rotated = rotateOffsetsByYaw(offsetEast, offsetNorth, asset.gimbalYaw ?? 0);
-  offsetEast = rotated.east;
-  offsetNorth = rotated.north;
-
-  const metersPerLat = 111111;
-  const metersPerLon = 111111 * Math.cos((gpsLat * Math.PI) / 180);
-  if (!Number.isFinite(metersPerLon) || Math.abs(metersPerLon) < 1e-6) {
-    return null;
-  }
-
-  const lat = gpsLat + offsetNorth / metersPerLat;
-  const lon = gpsLon + offsetEast / metersPerLon;
-  const normalizedGeo = normalizeGeoPoint(lat, lon);
-  if (!normalizedGeo) {
-    return null;
-  }
-
-  const projectedOffsetMeters = haversineDistanceMeters(
-    gpsLat,
-    gpsLon,
-    normalizedGeo.lat,
-    normalizedGeo.lon
-  );
-  if (!Number.isFinite(projectedOffsetMeters) || projectedOffsetMeters <= maxOffsetMeters) {
-    return normalizedGeo;
-  }
-
-  // Cap implausible offsets rather than returning stale stored coordinates.
-  const scale = maxOffsetMeters / projectedOffsetMeters;
-  const clippedLat = gpsLat + (normalizedGeo.lat - gpsLat) * scale;
-  const clippedLon = gpsLon + (normalizedGeo.lon - gpsLon) * scale;
-  return normalizeGeoPoint(clippedLat, clippedLon);
 }
 
 export async function GET(request: NextRequest) {
@@ -959,7 +722,7 @@ export async function GET(request: NextRequest) {
           gimbalYaw: asset.gimbalYaw,
           geoMethod: 'pixelToGeoFastExport',
         });
-        const computedGeo = await computeExportGeo(asset, { x: centerBox.x, y: centerBox.y });
+        const computedGeo = await computeExportProjectionGeo(asset, { x: centerBox.x, y: centerBox.y });
         if (computedGeo) {
           finalGeo = computedGeo;
         }
@@ -1037,7 +800,7 @@ export async function GET(request: NextRequest) {
           gimbalYaw: asset.gimbalYaw,
           geoMethod: 'pixelToGeoFastExport',
         });
-        const computedGeo = await computeExportGeo(asset, { x: centerBox.x, y: centerBox.y });
+        const computedGeo = await computeExportProjectionGeo(asset, { x: centerBox.x, y: centerBox.y });
         if (computedGeo) {
           finalGeo = computedGeo;
         }
@@ -1116,7 +879,7 @@ export async function GET(request: NextRequest) {
           gimbalYaw: asset.gimbalYaw,
           geoMethod: 'pixelToGeoFastExport',
         });
-        const computedGeo = await computeExportGeo(asset, { x: centerBox.x, y: centerBox.y });
+        const computedGeo = await computeExportProjectionGeo(asset, { x: centerBox.x, y: centerBox.y });
         if (computedGeo) {
           finalGeo = computedGeo;
         }

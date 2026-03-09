@@ -3,11 +3,8 @@ import prisma from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
 import {
   centerBoxToCorner,
-  pixelToGeo,
+  computeExportProjectionGeo,
   polygonToCenterBox,
-  resolveProjectionAltitude,
-  resolveProjectionCameraFov,
-  resolveProjectionImageDimensions,
   rescaleToOriginalWithMeta,
   validateGeoParams,
 } from '@/lib/utils/georeferencing';
@@ -178,55 +175,12 @@ async function resolveCenterGeo(
     return { lat: null, lon: null };
   }
 
-  if (
-    typeof asset.gpsLatitude !== 'number' ||
-    typeof asset.gpsLongitude !== 'number' ||
-    !Number.isFinite(asset.gpsLatitude) ||
-    !Number.isFinite(asset.gpsLongitude)
-  ) {
-    return { lat: null, lon: null };
-  }
-
-  const resolvedDimensions = resolveProjectionImageDimensions(
-    asset.imageWidth,
-    asset.imageHeight,
-    asset.metadata
-  );
-  const width = resolvedDimensions.imageWidth;
-  const height = resolvedDimensions.imageHeight;
-  if (width == null || height == null) {
-    return { lat: null, lon: null };
-  }
-
-  const altitude = resolveProjectionAltitude(asset.altitude, asset.metadata) ?? 100;
-  const cameraFov = resolveProjectionCameraFov(
-    asset.cameraFov,
-    width,
-    asset.metadata,
-    84
-  );
-
   try {
-    const geoResult = pixelToGeo(
-      {
-        gpsLatitude: asset.gpsLatitude,
-        gpsLongitude: asset.gpsLongitude,
-        altitude,
-        gimbalPitch: asset.gimbalPitch ?? 0,
-        gimbalRoll: asset.gimbalRoll ?? 0,
-        gimbalYaw: asset.gimbalYaw ?? 0,
-        imageWidth: width,
-        imageHeight: height,
-        cameraFov,
-        lrfDistance: asset.lrfDistance ?? undefined,
-        lrfTargetLat: asset.lrfTargetLat ?? undefined,
-        lrfTargetLon: asset.lrfTargetLon ?? undefined,
-      },
-      { x: bboxCenter.x, y: bboxCenter.y },
-      true
+    const geo = await computeExportProjectionGeo(
+      asset,
+      { x: bboxCenter.x, y: bboxCenter.y }
     );
-    const geo = geoResult instanceof Promise ? await geoResult : geoResult;
-    if (isFiniteGeoCoordinate(geo.lat, geo.lon)) {
+    if (geo && isFiniteGeoCoordinate(geo.lat, geo.lon)) {
       return { lat: geo.lat, lon: geo.lon };
     }
     return { lat: null, lon: null };
@@ -553,12 +507,11 @@ export async function GET(
         const assetRecord = pending.asset;
         const asset = toClientAsset(assetRecord);
         const validation = validateGeoParams(asset);
+        const bboxCenter = parseCenterBox(pending.bbox);
         const polygon = Array.isArray(pending.polygon)
           ? (pending.polygon as number[][])
           : [];
-        const centerBox = polygon.length > 0
-          ? polygonToCenterBox(polygon)
-          : null;
+        const centerBox = bboxCenter || polygonToCenterBox(polygon);
         const cornerBox =
           centerBox ? centerBoxToCorner(centerBox) : parseCornerBox(pending.bbox);
         const centerGeo = await resolveCenterGeo(

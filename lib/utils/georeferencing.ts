@@ -390,6 +390,184 @@ export interface GeoAssetParams {
   lrfTargetLon?: number | null;
 }
 
+function hasPlausibleLrfTarget(asset: GeoAssetParams): boolean {
+  if (
+    typeof asset.gpsLatitude !== 'number' ||
+    typeof asset.gpsLongitude !== 'number' ||
+    typeof asset.lrfDistance !== 'number' ||
+    typeof asset.lrfTargetLat !== 'number' ||
+    typeof asset.lrfTargetLon !== 'number' ||
+    !Number.isFinite(asset.gpsLatitude) ||
+    !Number.isFinite(asset.gpsLongitude) ||
+    !Number.isFinite(asset.lrfDistance) ||
+    !Number.isFinite(asset.lrfTargetLat) ||
+    !Number.isFinite(asset.lrfTargetLon) ||
+    asset.lrfDistance <= 0
+  ) {
+    return false;
+  }
+
+  const gpsToLrfMeters = haversineDistanceMeters(
+    asset.gpsLatitude,
+    asset.gpsLongitude,
+    asset.lrfTargetLat,
+    asset.lrfTargetLon
+  );
+  const maxExpectedOffset = Math.max(
+    DEFAULT_MAX_LRF_OFFSET_M,
+    asset.lrfDistance * 8 + 500
+  );
+  return Number.isFinite(gpsToLrfMeters) && gpsToLrfMeters <= maxExpectedOffset;
+}
+
+function isValidGeoPoint(lat: number, lon: number): boolean {
+  return validateGeoCoordinates(lat, lon).valid;
+}
+
+/**
+ * Export-safe pixel to geo projection used by both export and review map view.
+ *
+ * Behavior:
+ * - Uses full pixelToGeo path only when LRF metadata is plausibly valid.
+ * - Falls back to a stable footprint projection that is resilient to pitch singularities.
+ * - Applies max-offset guardrails and clips implausible output.
+ */
+export async function computeExportProjectionGeo(
+  asset: GeoAssetParams,
+  pixel: PixelPoint,
+  options?: { fallbackAltitude?: number; fallbackFov?: number }
+): Promise<GeoPoint | null> {
+  const gpsLat = asset.gpsLatitude;
+  const gpsLon = asset.gpsLongitude;
+  const resolvedDimensions = resolveProjectionImageDimensions(
+    asset.imageWidth,
+    asset.imageHeight,
+    asset.metadata
+  );
+  const width = resolvedDimensions.imageWidth;
+  const height = resolvedDimensions.imageHeight;
+  if (
+    typeof gpsLat !== 'number' ||
+    typeof gpsLon !== 'number' ||
+    typeof width !== 'number' ||
+    typeof height !== 'number' ||
+    !Number.isFinite(gpsLat) ||
+    !Number.isFinite(gpsLon) ||
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    return null;
+  }
+
+  let normalizedPixel: PixelPoint;
+  try {
+    normalizedPixel = normalizePixelPoint(pixel, width, height);
+  } catch {
+    return null;
+  }
+
+  const altitude = resolveProjectionAltitude(asset.altitude, asset.metadata)
+    ?? options?.fallbackAltitude
+    ?? DEFAULT_ALTITUDE;
+  const cameraFov = resolveProjectionCameraFov(
+    asset.cameraFov,
+    width,
+    asset.metadata,
+    options?.fallbackFov ?? DEFAULT_CAMERA_FOV
+  );
+  const maxOffsetMeters = computeProjectionMaxOffsetMeters(
+    altitude,
+    cameraFov,
+    width,
+    height
+  );
+
+  if (hasPlausibleLrfTarget(asset)) {
+    try {
+      const standardGeoResult = pixelToGeo(
+        {
+          gpsLatitude: gpsLat,
+          gpsLongitude: gpsLon,
+          altitude,
+          gimbalRoll: asset.gimbalRoll ?? 0,
+          gimbalPitch: asset.gimbalPitch ?? 0,
+          gimbalYaw: asset.gimbalYaw ?? 0,
+          cameraFov,
+          imageWidth: width,
+          imageHeight: height,
+          lrfDistance: asset.lrfDistance ?? undefined,
+          lrfTargetLat: asset.lrfTargetLat ?? undefined,
+          lrfTargetLon: asset.lrfTargetLon ?? undefined,
+        },
+        normalizedPixel,
+        true
+      );
+      const standardGeo = standardGeoResult instanceof Promise
+        ? await standardGeoResult
+        : standardGeoResult;
+      if (isValidGeoPoint(standardGeo.lat, standardGeo.lon)) {
+        const projectedOffsetMeters = haversineDistanceMeters(
+          gpsLat,
+          gpsLon,
+          standardGeo.lat,
+          standardGeo.lon
+        );
+        if (Number.isFinite(projectedOffsetMeters) && projectedOffsetMeters <= maxOffsetMeters) {
+          return standardGeo;
+        }
+      }
+    } catch {
+      // Continue to stable projection fallback
+    }
+  }
+
+  const normalizedX = normalizedPixel.x / width - 0.5;
+  const normalizedY = normalizedPixel.y / height - 0.5;
+  const hFovRad = (cameraFov * Math.PI) / 180;
+  const vFovRad = hFovRad * (height / width);
+  const angleX = normalizedX * hFovRad;
+  const angleY = normalizedY * vFovRad;
+  if (!Number.isFinite(angleX) || !Number.isFinite(angleY)) {
+    return null;
+  }
+
+  // Stable projection avoids singularities from extreme gimbal pitch.
+  let offsetEast = altitude * Math.tan(angleX);
+  let offsetNorth = -altitude * Math.tan(angleY);
+  if (!Number.isFinite(offsetEast) || !Number.isFinite(offsetNorth)) {
+    return null;
+  }
+
+  const rotated = rotateOffsetsByYaw(offsetEast, offsetNorth, asset.gimbalYaw ?? 0);
+  offsetEast = rotated.east;
+  offsetNorth = rotated.north;
+
+  const metersPerLon = METERS_PER_DEGREE_LAT * Math.cos((gpsLat * Math.PI) / 180);
+  if (!Number.isFinite(metersPerLon) || Math.abs(metersPerLon) < 1e-6) {
+    return null;
+  }
+
+  const projectedLat = gpsLat + offsetNorth / METERS_PER_DEGREE_LAT;
+  const projectedLon = gpsLon + offsetEast / metersPerLon;
+  if (!isValidGeoPoint(projectedLat, projectedLon)) {
+    return null;
+  }
+
+  const capped = capProjectedOffset(
+    gpsLat,
+    gpsLon,
+    projectedLat,
+    projectedLon,
+    maxOffsetMeters
+  );
+  if (!isValidGeoPoint(capped.lat, capped.lon)) {
+    return null;
+  }
+  return { lat: capped.lat, lon: capped.lon };
+}
+
 /**
  * SAFETY CRITICAL: Validates computed GPS coordinates for spray drone operations.
  * Invalid coordinates could send drones to wrong locations.
