@@ -605,6 +605,9 @@ model CameraProfile {
   name                  String
   description           String?
   fov                   Float?
+  fovScale              Float?
+  altitudeScale         Float?
+  yawOffsetDeg          Float?
   calibratedFocalLength Float?
   opticalCenterX        Float?
   opticalCenterY        Float?

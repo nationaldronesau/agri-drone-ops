@@ -16,6 +16,8 @@ export interface GeoreferenceParams {
   cameraFov: number;
   imageWidth: number;
   imageHeight: number;
+  opticalCenterX?: number;
+  opticalCenterY?: number;
   lrfDistance?: number;
   lrfTargetLat?: number;
   lrfTargetLon?: number;
@@ -72,11 +74,26 @@ const FOCAL_LENGTH_35MM_META_KEYS = [
   'drone-dji:FocalLengthIn35mmFormat',
 ];
 const RELATIVE_ALTITUDE_META_KEYS = ['RelativeAltitude', 'drone-dji:RelativeAltitude'];
+const ALTITUDE_SCALE_META_KEYS = ['GeoAltitudeScale', 'geoAltitudeScale'];
 const ABSOLUTE_ALTITUDE_META_KEYS = [
   'AbsoluteAltitude',
   'GPSAltitude',
   'altitude',
   'drone-dji:AbsoluteAltitude',
+];
+const FOV_SCALE_META_KEYS = ['GeoFovScale', 'geoFovScale'];
+const YAW_OFFSET_META_KEYS = ['GeoYawOffsetDeg', 'geoYawOffsetDeg', 'YawOffsetDeg'];
+const OPTICAL_CENTER_X_META_KEYS = [
+  'CalibratedOpticalCenterX',
+  'drone-dji:CalibratedOpticalCenterX',
+  'OpticalCenterX',
+  'geoOpticalCenterX',
+];
+const OPTICAL_CENTER_Y_META_KEYS = [
+  'CalibratedOpticalCenterY',
+  'drone-dji:CalibratedOpticalCenterY',
+  'OpticalCenterY',
+  'geoOpticalCenterY',
 ];
 const IMAGE_WIDTH_META_KEYS = ['ExifImageWidth', 'ImageWidth', 'PixelXDimension', 'imageWidth'];
 const IMAGE_HEIGHT_META_KEYS = ['ExifImageHeight', 'ImageHeight', 'PixelYDimension', 'imageHeight'];
@@ -127,6 +144,22 @@ function isPositiveFinite(value: number | null | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
+function readMetadataScale(
+  metadata: Record<string, unknown>,
+  keys: string[],
+  min: number,
+  max: number
+): number | null {
+  const value = readMetadataNumber(metadata, keys);
+  if (value == null || !Number.isFinite(value)) {
+    return null;
+  }
+  if (value < min || value > max) {
+    return null;
+  }
+  return value;
+}
+
 export function resolveProjectionImageDimensions(
   imageWidth: number | null | undefined,
   imageHeight: number | null | undefined,
@@ -153,18 +186,20 @@ export function resolveProjectionAltitude(
   metadata?: unknown | null
 ): number | null {
   const record = asMetadataRecord(metadata);
+  const altitudeScale = readMetadataScale(record, ALTITUDE_SCALE_META_KEYS, 0.5, 1.5);
+  const applyScale = (value: number): number => (altitudeScale != null ? value * altitudeScale : value);
   const relativeAltitude = readMetadataNumber(record, RELATIVE_ALTITUDE_META_KEYS);
   if (isPositiveFinite(relativeAltitude)) {
-    return relativeAltitude;
+    return applyScale(relativeAltitude);
   }
 
   if (isPositiveFinite(altitude)) {
-    return altitude;
+    return applyScale(altitude);
   }
 
   const absoluteAltitude = readMetadataNumber(record, ABSOLUTE_ALTITUDE_META_KEYS);
   if (isPositiveFinite(absoluteAltitude)) {
-    return absoluteAltitude;
+    return applyScale(absoluteAltitude);
   }
 
   return null;
@@ -200,6 +235,7 @@ export function resolveProjectionCameraFov(
   fallbackFov = DEFAULT_CAMERA_FOV
 ): number {
   const record = asMetadataRecord(metadata);
+  const fovScale = readMetadataScale(record, FOV_SCALE_META_KEYS, 0.5, 1.5);
   const calibratedFocalLength = readMetadataNumber(record, CALIBRATED_FOCAL_META_KEYS);
   const derivedCalibrationFov = deriveHorizontalFovFromCalibration(imageWidth, calibratedFocalLength);
   const focalLength35mm = readMetadataNumber(record, FOCAL_LENGTH_35MM_META_KEYS);
@@ -208,29 +244,84 @@ export function resolveProjectionCameraFov(
   const parsedMetadataFov = isValidFov(metadataFov) ? metadataFov : null;
   const explicitFov = isValidFov(cameraFov) ? cameraFov : null;
 
+  let resolvedFov: number;
   if (
     derivedCalibrationFov != null &&
     (explicitFov == null || Math.abs(explicitFov - fallbackFov) < 0.01)
   ) {
-    return derivedCalibrationFov;
-  }
-  if (
+    resolvedFov = derivedCalibrationFov;
+  } else if (
     derived35mmFov != null &&
     (explicitFov == null || Math.abs(explicitFov - fallbackFov) < 0.01)
   ) {
-    return derived35mmFov;
+    resolvedFov = derived35mmFov;
+  } else if (explicitFov != null) {
+    resolvedFov = explicitFov;
+  } else if (derivedCalibrationFov != null) {
+    resolvedFov = derivedCalibrationFov;
+  } else if (parsedMetadataFov != null) {
+    resolvedFov = parsedMetadataFov;
+  } else {
+    const legacyFov = getCameraFovFromMetadata(record);
+    if (legacyFov != null && isValidFov(legacyFov)) {
+      resolvedFov = legacyFov;
+    } else if (derived35mmFov != null) {
+      resolvedFov = derived35mmFov;
+    } else {
+      resolvedFov = fallbackFov;
+    }
   }
-  if (explicitFov != null) return explicitFov;
-  if (derivedCalibrationFov != null) return derivedCalibrationFov;
-  if (parsedMetadataFov != null) return parsedMetadataFov;
 
-  const legacyFov = getCameraFovFromMetadata(record);
-  if (legacyFov != null && isValidFov(legacyFov)) {
-    return legacyFov;
+  if (fovScale != null) {
+    const scaled = resolvedFov * fovScale;
+    if (isValidFov(scaled)) {
+      return scaled;
+    }
   }
-  if (derived35mmFov != null) return derived35mmFov;
+  return resolvedFov;
+}
 
-  return fallbackFov;
+export function resolveProjectionYaw(
+  gimbalYaw: number | null | undefined,
+  metadata?: unknown | null
+): number {
+  const record = asMetadataRecord(metadata);
+  const baseYaw = toFiniteNumber(gimbalYaw) ?? 0;
+  const yawOffset = readMetadataNumber(record, YAW_OFFSET_META_KEYS);
+  if (yawOffset == null || !Number.isFinite(yawOffset) || Math.abs(yawOffset) > 45) {
+    return baseYaw;
+  }
+  return baseYaw + yawOffset;
+}
+
+export function resolveProjectionOpticalCenter(
+  imageWidth: number,
+  imageHeight: number,
+  metadata?: unknown | null
+): { opticalCenterX: number; opticalCenterY: number } {
+  const record = asMetadataRecord(metadata);
+  const defaultCenterX = imageWidth / 2;
+  const defaultCenterY = imageHeight / 2;
+  const metadataCenterX = readMetadataNumber(record, OPTICAL_CENTER_X_META_KEYS);
+  const metadataCenterY = readMetadataNumber(record, OPTICAL_CENTER_Y_META_KEYS);
+
+  const opticalCenterX =
+    metadataCenterX != null &&
+    Number.isFinite(metadataCenterX) &&
+    metadataCenterX >= 0 &&
+    metadataCenterX <= imageWidth
+      ? metadataCenterX
+      : defaultCenterX;
+
+  const opticalCenterY =
+    metadataCenterY != null &&
+    Number.isFinite(metadataCenterY) &&
+    metadataCenterY >= 0 &&
+    metadataCenterY <= imageHeight
+      ? metadataCenterY
+      : defaultCenterY;
+
+  return { opticalCenterX, opticalCenterY };
 }
 
 export function normalizePixelPoint(
@@ -471,12 +562,14 @@ export async function computeExportProjectionGeo(
   const altitude = resolveProjectionAltitude(asset.altitude, asset.metadata)
     ?? options?.fallbackAltitude
     ?? DEFAULT_ALTITUDE;
+  const resolvedYaw = resolveProjectionYaw(asset.gimbalYaw, asset.metadata);
   const cameraFov = resolveProjectionCameraFov(
     asset.cameraFov,
     width,
     asset.metadata,
     options?.fallbackFov ?? DEFAULT_CAMERA_FOV
   );
+  const opticalCenter = resolveProjectionOpticalCenter(width, height, asset.metadata);
   const maxOffsetMeters = computeProjectionMaxOffsetMeters(
     altitude,
     cameraFov,
@@ -493,10 +586,12 @@ export async function computeExportProjectionGeo(
           altitude,
           gimbalRoll: asset.gimbalRoll ?? 0,
           gimbalPitch: asset.gimbalPitch ?? 0,
-          gimbalYaw: asset.gimbalYaw ?? 0,
+          gimbalYaw: resolvedYaw,
           cameraFov,
           imageWidth: width,
           imageHeight: height,
+          opticalCenterX: opticalCenter.opticalCenterX,
+          opticalCenterY: opticalCenter.opticalCenterY,
           lrfDistance: asset.lrfDistance ?? undefined,
           lrfTargetLat: asset.lrfTargetLat ?? undefined,
           lrfTargetLon: asset.lrfTargetLon ?? undefined,
@@ -523,8 +618,8 @@ export async function computeExportProjectionGeo(
     }
   }
 
-  const normalizedX = normalizedPixel.x / width - 0.5;
-  const normalizedY = normalizedPixel.y / height - 0.5;
+  const normalizedX = (normalizedPixel.x - opticalCenter.opticalCenterX) / width;
+  const normalizedY = (normalizedPixel.y - opticalCenter.opticalCenterY) / height;
   const hFovRad = (cameraFov * Math.PI) / 180;
   const vFovRad = hFovRad * (height / width);
   const angleX = normalizedX * hFovRad;
@@ -540,7 +635,7 @@ export async function computeExportProjectionGeo(
     return null;
   }
 
-  const rotated = rotateOffsetsByYaw(offsetEast, offsetNorth, asset.gimbalYaw ?? 0);
+  const rotated = rotateOffsetsByYaw(offsetEast, offsetNorth, resolvedYaw);
   offsetEast = rotated.east;
   offsetNorth = rotated.north;
 
@@ -716,6 +811,12 @@ export async function resolveGeoCoordinates(
     metadata,
     DEFAULT_CAMERA_FOV
   );
+  const resolvedYaw = resolveProjectionYaw(asset.gimbalYaw, metadata);
+  const opticalCenter = resolveProjectionOpticalCenter(
+    resolvedDimensions.imageWidth,
+    resolvedDimensions.imageHeight,
+    metadata
+  );
 
   const geoParams: GeoreferenceParams = {
     gpsLatitude: asset.gpsLatitude,
@@ -723,10 +824,12 @@ export async function resolveGeoCoordinates(
     altitude: projectionAltitude ?? DEFAULT_ALTITUDE,
     gimbalRoll: asset.gimbalRoll ?? 0,
     gimbalPitch: asset.gimbalPitch ?? 0,
-    gimbalYaw: asset.gimbalYaw ?? 0,
+    gimbalYaw: resolvedYaw,
     cameraFov,
     imageWidth: resolvedDimensions.imageWidth,
     imageHeight: resolvedDimensions.imageHeight,
+    opticalCenterX: opticalCenter.opticalCenterX,
+    opticalCenterY: opticalCenter.opticalCenterY,
     lrfDistance: asset.lrfDistance ?? undefined,
     lrfTargetLat: asset.lrfTargetLat ?? undefined,
     lrfTargetLon: asset.lrfTargetLon ?? undefined,
@@ -754,6 +857,20 @@ export function pixelToGeo(
     throw new Error('Invalid image dimensions');
   }
   const normalizedPixel = normalizePixelPoint(pixel, params.imageWidth, params.imageHeight);
+  const opticalCenterX =
+    typeof params.opticalCenterX === 'number' &&
+    Number.isFinite(params.opticalCenterX) &&
+    params.opticalCenterX >= 0 &&
+    params.opticalCenterX <= params.imageWidth
+      ? params.opticalCenterX
+      : params.imageWidth / 2;
+  const opticalCenterY =
+    typeof params.opticalCenterY === 'number' &&
+    Number.isFinite(params.opticalCenterY) &&
+    params.opticalCenterY >= 0 &&
+    params.opticalCenterY <= params.imageHeight
+      ? params.opticalCenterY
+      : params.imageHeight / 2;
 
   const metersPerLat = METERS_PER_DEGREE_LAT; // approximately
   const metersPerLon = METERS_PER_DEGREE_LAT * Math.cos(params.gpsLatitude * Math.PI / 180);
@@ -793,8 +910,8 @@ export function pixelToGeo(
 
   if (lrfLooksPlausible && params.lrfTargetLat !== undefined && params.lrfTargetLon !== undefined && params.lrfDistance !== undefined) {
     // Off-center LRF targeting and projection
-    const normalizedX = (normalizedPixel.x / params.imageWidth) - 0.5;
-    const normalizedY = (normalizedPixel.y / params.imageHeight) - 0.5;
+    const normalizedX = (normalizedPixel.x - opticalCenterX) / params.imageWidth;
+    const normalizedY = (normalizedPixel.y - opticalCenterY) / params.imageHeight;
     
     // Calculate offset based on camera FOV and normalized coordinates
     const hFov = params.cameraFov * Math.PI / 180;
@@ -831,8 +948,8 @@ export function pixelToGeo(
   }
 
   // Standard method without LRF
-  const normalizedX = (normalizedPixel.x / params.imageWidth) - 0.5;
-  const normalizedY = (normalizedPixel.y / params.imageHeight) - 0.5;
+  const normalizedX = (normalizedPixel.x - opticalCenterX) / params.imageWidth;
+  const normalizedY = (normalizedPixel.y - opticalCenterY) / params.imageHeight;
   
   // Calculate field of view angles
   const hFov = params.cameraFov * Math.PI / 180;
@@ -1172,6 +1289,12 @@ export async function pixelToGeoWithDSM(
     resolvedDimensions.imageHeight
   );
   const precisionStatus = getPrecisionMetadataStatus(metadata);
+  const resolvedYaw = resolveProjectionYaw(asset.gimbalYaw, metadata);
+  const opticalCenter = resolveProjectionOpticalCenter(
+    resolvedDimensions.imageWidth,
+    resolvedDimensions.imageHeight,
+    metadata
+  );
 
   // Avoid Matrice-specific defaults when calibration/LRF metadata is absent.
   if (!precisionStatus.hasCalibration && !precisionStatus.hasLRF) {
@@ -1183,7 +1306,7 @@ export async function pixelToGeoWithDSM(
           altitude: resolvedAltitude,
           gimbalPitch: asset.gimbalPitch ?? 0,
           gimbalRoll: asset.gimbalRoll ?? 0,
-          gimbalYaw: asset.gimbalYaw ?? 0,
+          gimbalYaw: resolvedYaw,
           cameraFov: resolveProjectionCameraFov(
             asset.cameraFov,
             resolvedDimensions.imageWidth,
@@ -1192,6 +1315,8 @@ export async function pixelToGeoWithDSM(
           ),
           imageWidth: resolvedDimensions.imageWidth,
           imageHeight: resolvedDimensions.imageHeight,
+          opticalCenterX: opticalCenter.opticalCenterX,
+          opticalCenterY: opticalCenter.opticalCenterY,
           lrfDistance: asset.lrfDistance ?? undefined,
           lrfTargetLat: asset.lrfTargetLat ?? undefined,
           lrfTargetLon: asset.lrfTargetLon ?? undefined,
@@ -1215,7 +1340,7 @@ export async function pixelToGeoWithDSM(
     AbsoluteAltitude: resolvedAltitude,
     GimbalPitchDegree: asset.gimbalPitch,
     GimbalRollDegree: asset.gimbalRoll,
-    GimbalYawDegree: asset.gimbalYaw,
+    GimbalYawDegree: resolvedYaw,
     LRFTargetDistance: asset.lrfDistance ?? undefined,
     LRFTargetLat: asset.lrfTargetLat ?? undefined,
     LRFTargetLon: asset.lrfTargetLon ?? undefined,

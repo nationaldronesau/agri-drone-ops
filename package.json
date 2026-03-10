@@ -20,6 +20,7 @@
     "worker:yolo-inference:dev": "tsx -r tsconfig-paths/register --env-file=.env workers/yolo-inference-worker.ts",
     "worker:temporal": "tsx -r tsconfig-paths/register workers/temporal-worker.ts",
     "worker:temporal:dev": "tsx -r tsconfig-paths/register --env-file=.env workers/temporal-worker.ts",
+    "calibrate:camera-profile": "tsx -r tsconfig-paths/register scripts/calibrate-camera-profile.ts",
     "feature:dataset-versions": "tsx -r tsconfig-paths/register scripts/feature-dataset-versions.ts",
     "migrate:model-weights": "tsx -r tsconfig-paths/register scripts/migrate-model-weights.ts",
     "seed:verified": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed-verified.ts",

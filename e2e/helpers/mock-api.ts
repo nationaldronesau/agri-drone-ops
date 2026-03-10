@@ -25,6 +25,9 @@ type CameraProfile = {
   name: string;
   description?: string | null;
   fov?: number | null;
+  fovScale?: number | null;
+  altitudeScale?: number | null;
+  yawOffsetDeg?: number | null;
   calibratedFocalLength?: number | null;
   opticalCenterX?: number | null;
   opticalCenterY?: number | null;
@@ -303,6 +306,9 @@ const DEFAULT_CAMERA_PROFILES: CameraProfile[] = [
     name: "DJI M4E Wide",
     description: "Default calibrated profile",
     fov: 84,
+    fovScale: 1,
+    altitudeScale: 1,
+    yawOffsetDeg: 0,
     calibratedFocalLength: 2920.4,
     opticalCenterX: 2010.1,
     opticalCenterY: 1512.8,
@@ -917,6 +923,9 @@ export async function setupMockApi(page: Page, options: MockApiOptions = {}) {
           name: payload?.name?.toString().trim() || `Camera ${state.cameraProfiles.length + 1}`,
           description: payload?.description?.toString() || null,
           fov: typeof payload?.fov === "number" ? payload.fov : null,
+          fovScale: typeof payload?.fovScale === "number" ? payload.fovScale : null,
+          altitudeScale: typeof payload?.altitudeScale === "number" ? payload.altitudeScale : null,
+          yawOffsetDeg: typeof payload?.yawOffsetDeg === "number" ? payload.yawOffsetDeg : null,
           calibratedFocalLength:
             typeof payload?.calibratedFocalLength === "number" ? payload.calibratedFocalLength : null,
           opticalCenterX: typeof payload?.opticalCenterX === "number" ? payload.opticalCenterX : null,

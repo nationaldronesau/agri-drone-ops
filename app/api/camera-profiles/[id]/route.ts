@@ -45,6 +45,9 @@ export async function PATCH(
     const description = typeof body.description === "string" ? body.description.trim() : undefined;
 
     const fov = toOptionalNumber(body.fov);
+    const fovScale = toOptionalNumber(body.fovScale);
+    const altitudeScale = toOptionalNumber(body.altitudeScale);
+    const yawOffsetDeg = toOptionalNumber(body.yawOffsetDeg);
     const calibratedFocalLength = toOptionalNumber(body.calibratedFocalLength);
     const opticalCenterX = toOptionalNumber(body.opticalCenterX);
     const opticalCenterY = toOptionalNumber(body.opticalCenterY);
@@ -55,6 +58,9 @@ export async function PATCH(
         ...(name ? { name } : {}),
         ...(description !== undefined ? { description: description || null } : {}),
         ...(fov !== null ? { fov } : {}),
+        ...(fovScale !== null ? { fovScale } : {}),
+        ...(altitudeScale !== null ? { altitudeScale } : {}),
+        ...(yawOffsetDeg !== null ? { yawOffsetDeg } : {}),
         ...(calibratedFocalLength !== null ? { calibratedFocalLength } : {}),
         ...(opticalCenterX !== null ? { opticalCenterX } : {}),
         ...(opticalCenterY !== null ? { opticalCenterY } : {}),

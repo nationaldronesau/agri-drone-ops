@@ -200,6 +200,9 @@ export async function POST(request: NextRequest) {
       id: string;
       name: string;
       fov: number | null;
+      fovScale: number | null;
+      altitudeScale: number | null;
+      yawOffsetDeg: number | null;
       calibratedFocalLength: number | null;
       opticalCenterX: number | null;
       opticalCenterY: number | null;
@@ -215,6 +218,9 @@ export async function POST(request: NextRequest) {
           id: true,
           name: true,
           fov: true,
+          fovScale: true,
+          altitudeScale: true,
+          yawOffsetDeg: true,
           calibratedFocalLength: true,
           opticalCenterX: true,
           opticalCenterY: true,
@@ -491,6 +497,15 @@ export async function POST(request: NextRequest) {
             }
             if (cameraProfile.opticalCenterY != null) {
               geoOverrides.CalibratedOpticalCenterY = cameraProfile.opticalCenterY;
+            }
+            if (cameraProfile.fovScale != null) {
+              geoOverrides.GeoFovScale = cameraProfile.fovScale;
+            }
+            if (cameraProfile.altitudeScale != null) {
+              geoOverrides.GeoAltitudeScale = cameraProfile.altitudeScale;
+            }
+            if (cameraProfile.yawOffsetDeg != null) {
+              geoOverrides.GeoYawOffsetDeg = cameraProfile.yawOffsetDeg;
             }
 
             if (cameraProfile.fov != null && cameraFov == null) {

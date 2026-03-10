@@ -38,6 +38,9 @@ interface CameraProfile {
   name: string;
   description?: string | null;
   fov?: number | null;
+  fovScale?: number | null;
+  altitudeScale?: number | null;
+  yawOffsetDeg?: number | null;
   calibratedFocalLength?: number | null;
   opticalCenterX?: number | null;
   opticalCenterY?: number | null;

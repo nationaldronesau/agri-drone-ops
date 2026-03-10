@@ -14,6 +14,9 @@ interface CameraProfile {
   name: string;
   description?: string | null;
   fov?: number | null;
+  fovScale?: number | null;
+  altitudeScale?: number | null;
+  yawOffsetDeg?: number | null;
   calibratedFocalLength?: number | null;
   opticalCenterX?: number | null;
   opticalCenterY?: number | null;
@@ -32,6 +35,9 @@ export default function CameraProfilesPage() {
     name: "",
     description: "",
     fov: "",
+    fovScale: "",
+    altitudeScale: "",
+    yawOffsetDeg: "",
     calibratedFocalLength: "",
     opticalCenterX: "",
     opticalCenterY: "",
@@ -69,6 +75,9 @@ export default function CameraProfilesPage() {
           name: form.name.trim(),
           description: form.description.trim(),
           fov: form.fov ? Number(form.fov) : undefined,
+          fovScale: form.fovScale ? Number(form.fovScale) : undefined,
+          altitudeScale: form.altitudeScale ? Number(form.altitudeScale) : undefined,
+          yawOffsetDeg: form.yawOffsetDeg ? Number(form.yawOffsetDeg) : undefined,
           calibratedFocalLength: form.calibratedFocalLength
             ? Number(form.calibratedFocalLength)
             : undefined,
@@ -84,6 +93,9 @@ export default function CameraProfilesPage() {
         name: "",
         description: "",
         fov: "",
+        fovScale: "",
+        altitudeScale: "",
+        yawOffsetDeg: "",
         calibratedFocalLength: "",
         opticalCenterX: "",
         opticalCenterY: "",
@@ -177,6 +189,47 @@ export default function CameraProfilesPage() {
                       />
                     </div>
                     <div>
+                      <Label htmlFor="profile-fov-scale">FOV Scale</Label>
+                      <Input
+                        id="profile-fov-scale"
+                        type="number"
+                        step="0.001"
+                        value={form.fovScale}
+                        onChange={(event) => setForm({ ...form, fovScale: event.target.value })}
+                        placeholder="1.0"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div>
+                      <Label htmlFor="profile-alt-scale">Altitude Scale</Label>
+                      <Input
+                        id="profile-alt-scale"
+                        type="number"
+                        step="0.001"
+                        value={form.altitudeScale}
+                        onChange={(event) =>
+                          setForm({ ...form, altitudeScale: event.target.value })
+                        }
+                        placeholder="1.0"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="profile-yaw-offset">Yaw Offset (deg)</Label>
+                      <Input
+                        id="profile-yaw-offset"
+                        type="number"
+                        step="0.01"
+                        value={form.yawOffsetDeg}
+                        onChange={(event) =>
+                          setForm({ ...form, yawOffsetDeg: event.target.value })
+                        }
+                        placeholder="0.0"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div>
                       <Label htmlFor="profile-focal">Calibrated Focal Length (px)</Label>
                       <Input
                         id="profile-focal"
@@ -188,8 +241,6 @@ export default function CameraProfilesPage() {
                         }
                       />
                     </div>
-                  </div>
-                  <div className="grid gap-4 md:grid-cols-2">
                     <div>
                       <Label htmlFor="profile-ocx">Optical Center X (px)</Label>
                       <Input
@@ -202,6 +253,8 @@ export default function CameraProfilesPage() {
                         }
                       />
                     </div>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-1">
                     <div>
                       <Label htmlFor="profile-ocy">Optical Center Y (px)</Label>
                       <Input
@@ -271,6 +324,18 @@ export default function CameraProfilesPage() {
                     <div>
                       <span className="text-xs text-gray-500">FOV</span>
                       <p>{profile.fov ?? "—"}</p>
+                    </div>
+                    <div>
+                      <span className="text-xs text-gray-500">FOV Scale</span>
+                      <p>{profile.fovScale ?? "—"}</p>
+                    </div>
+                    <div>
+                      <span className="text-xs text-gray-500">Altitude Scale</span>
+                      <p>{profile.altitudeScale ?? "—"}</p>
+                    </div>
+                    <div>
+                      <span className="text-xs text-gray-500">Yaw Offset</span>
+                      <p>{profile.yawOffsetDeg ?? "—"}</p>
                     </div>
                     <div>
                       <span className="text-xs text-gray-500">Focal Length</span>

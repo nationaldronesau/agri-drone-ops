@@ -74,6 +74,9 @@ export async function POST(request: NextRequest) {
     }
 
     const fov = toOptionalNumber(body.fov);
+    const fovScale = toOptionalNumber(body.fovScale);
+    const altitudeScale = toOptionalNumber(body.altitudeScale);
+    const yawOffsetDeg = toOptionalNumber(body.yawOffsetDeg);
     const calibratedFocalLength = toOptionalNumber(body.calibratedFocalLength);
     const opticalCenterX = toOptionalNumber(body.opticalCenterX);
     const opticalCenterY = toOptionalNumber(body.opticalCenterY);
@@ -107,6 +110,9 @@ export async function POST(request: NextRequest) {
         name,
         description,
         fov,
+        fovScale,
+        altitudeScale,
+        yawOffsetDeg,
         calibratedFocalLength,
         opticalCenterX,
         opticalCenterY,
