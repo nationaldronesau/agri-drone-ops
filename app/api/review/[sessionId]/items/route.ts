@@ -8,9 +8,16 @@ import {
   rescaleToOriginalWithMeta,
   validateGeoParams,
 } from '@/lib/utils/georeferencing';
+import {
+  applySessionBiasCorrection,
+  solveSessionAssetBias,
+} from '@/lib/utils/session-bias';
 import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
 
 type ReviewStatus = 'pending' | 'accepted' | 'rejected';
+const DEFAULT_SESSION_BIAS_RADIUS_M = 2.5;
+const MIN_SESSION_BIAS_RADIUS_M = 0.8;
+const MAX_SESSION_BIAS_RADIUS_M = 6;
 
 function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -104,6 +111,29 @@ function manualConfidenceToScore(confidence: string | null): number {
   if (confidence === 'CERTAIN') return 0.95;
   if (confidence === 'LIKELY') return 0.75;
   return 0.5;
+}
+
+function parseBooleanParam(value: string | null, defaultValue: boolean): boolean {
+  if (value == null) return defaultValue;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1') return true;
+  if (normalized === 'false' || normalized === '0') return false;
+  return defaultValue;
+}
+
+function parsePositiveNumberParam(
+  value: string | null,
+  defaultValue: number,
+  minValue?: number,
+  maxValue?: number
+): number {
+  if (!value) return defaultValue;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return defaultValue;
+  let normalized = parsed;
+  if (minValue != null) normalized = Math.max(minValue, normalized);
+  if (maxValue != null) normalized = Math.min(maxValue, normalized);
+  return normalized;
 }
 
 function isFiniteGeoCoordinate(lat: unknown, lon: unknown): lat is number {
@@ -224,6 +254,13 @@ export async function GET(
     const needsReview = searchParams.get('needsReview') === 'true';
     const minConfidenceParam = searchParams.get('minConfidence');
     const minConfidence = minConfidenceParam ? Number(minConfidenceParam) : null;
+    const sessionBiasEnabled = parseBooleanParam(searchParams.get('sessionBias'), true);
+    const sessionBiasRadiusM = parsePositiveNumberParam(
+      searchParams.get('sessionBiasRadiusM'),
+      DEFAULT_SESSION_BIAS_RADIUS_M,
+      MIN_SESSION_BIAS_RADIUS_M,
+      MAX_SESSION_BIAS_RADIUS_M
+    );
 
     const assetIds = toStringArray(session.assetIds);
     const inferenceJobIds = toStringArray(session.inferenceJobIds);
@@ -556,6 +593,43 @@ export async function GET(
         };
       }));
     const items = [...manualItems, ...aiItems, ...yoloItems, ...pendingItems];
+
+    if (sessionBiasEnabled && items.length >= 8) {
+      const biasCorrections = solveSessionAssetBias(
+        items
+          .filter((item) => isFiniteGeoCoordinate(item.centerLat, item.centerLon))
+          .map((item) => ({
+            id: item.id,
+            assetId: item.assetId,
+            className: item.className,
+            confidence: item.confidence ?? 0,
+            lat: item.centerLat as number,
+            lon: item.centerLon as number,
+          })),
+        {
+          radiusMeters: sessionBiasRadiusM,
+          minAnchorsPerAsset: 3,
+          maxCorrectionMeters: 1.6,
+          byClass: true,
+        }
+      );
+
+      if (biasCorrections.size > 0) {
+        for (const item of items) {
+          if (!isFiniteGeoCoordinate(item.centerLat, item.centerLon)) continue;
+          const correction = biasCorrections.get(item.assetId);
+          if (!correction) continue;
+          const corrected = applySessionBiasCorrection(
+            item.centerLat as number,
+            item.centerLon as number,
+            correction
+          );
+          item.centerLat = corrected.lat;
+          item.centerLon = corrected.lon;
+          item.hasGeoData = true;
+        }
+      }
+    }
 
     const filteredItems = items.filter((item) => {
       if (needsReview && item.status !== 'pending') return false;

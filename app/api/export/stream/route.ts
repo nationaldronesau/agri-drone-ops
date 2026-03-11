@@ -8,6 +8,10 @@ import {
   rescaleToOriginalWithMeta,
   validateGeoParams,
 } from '@/lib/utils/georeferencing';
+import {
+  applySessionBiasCorrection,
+  solveSessionAssetBias,
+} from '@/lib/utils/session-bias';
 import { generateShapefileExport, type DetectionRecord, type AnnotationRecord } from '@/lib/services/shapefile';
 import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
 
@@ -15,8 +19,15 @@ const EXPORT_ITEM_LIMIT = 5000;
 const DEFAULT_DEDUPE_RADIUS_M = 1.8;
 const MIN_DEDUPE_RADIUS_M = 0.2;
 const MAX_DEDUPE_RADIUS_M = 6;
+const DEFAULT_SESSION_BIAS_RADIUS_M = 2.5;
+const MIN_SESSION_BIAS_RADIUS_M = 0.8;
+const MAX_SESSION_BIAS_RADIUS_M = 6;
 
 interface ExportDetectionRecord extends DetectionRecord {
+  sourceAssetId: string;
+}
+
+interface ExportAnnotationRecord extends AnnotationRecord {
   sourceAssetId: string;
 }
 
@@ -173,11 +184,16 @@ function parseBooleanParam(value: string | null, defaultValue: boolean): boolean
   return defaultValue;
 }
 
-function parseRadiusParam(value: string | null, defaultValue: number): number {
+function parseRadiusParam(
+  value: string | null,
+  defaultValue: number,
+  minValue = MIN_DEDUPE_RADIUS_M,
+  maxValue = MAX_DEDUPE_RADIUS_M
+): number {
   if (!value) return defaultValue;
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return defaultValue;
-  return Math.min(MAX_DEDUPE_RADIUS_M, Math.max(MIN_DEDUPE_RADIUS_M, parsed));
+  return Math.min(maxValue, Math.max(minValue, parsed));
 }
 
 function haversineDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -394,9 +410,24 @@ export async function GET(request: NextRequest) {
     const includePending =
       includePendingParam === 'true' || (Boolean(sessionId) && includeAI && includePendingParam !== 'false');
     const dedupeEnabled = parseBooleanParam(searchParams.get('dedupe'), false);
-    const dedupeRadiusM = parseRadiusParam(searchParams.get('dedupeRadiusM'), DEFAULT_DEDUPE_RADIUS_M);
+    const dedupeRadiusM = parseRadiusParam(
+      searchParams.get('dedupeRadiusM'),
+      DEFAULT_DEDUPE_RADIUS_M,
+      MIN_DEDUPE_RADIUS_M,
+      MAX_DEDUPE_RADIUS_M
+    );
     const dedupeByClass = parseBooleanParam(searchParams.get('dedupeByClass'), true);
     const dedupeCrossAssetOnly = parseBooleanParam(searchParams.get('dedupeCrossAssetOnly'), true);
+    const sessionBiasEnabled = parseBooleanParam(
+      searchParams.get('sessionBias'),
+      Boolean(sessionId)
+    );
+    const sessionBiasRadiusM = parseRadiusParam(
+      searchParams.get('sessionBiasRadiusM'),
+      DEFAULT_SESSION_BIAS_RADIUS_M,
+      MIN_SESSION_BIAS_RADIUS_M,
+      MAX_SESSION_BIAS_RADIUS_M
+    );
     const classFilter = searchParams.get('classes')?.split(',').filter(Boolean) || [];
     // GEO_DEBUG=1 logs a single JSON payload per request; optional GEO_DEBUG_ASSET_ID/GEO_DEBUG_ITEM_ID filter it.
     const geoDebugEnabled = process.env.GEO_DEBUG === '1';
@@ -669,7 +700,7 @@ export async function GET(request: NextRequest) {
 
     const skippedItems: ExportManifest['skippedItems'] = [];
     const exportableDetections: ExportDetectionRecord[] = [];
-    const exportableAnnotations: AnnotationRecord[] = [];
+    const exportableAnnotations: ExportAnnotationRecord[] = [];
 
     for (const detection of detections) {
       const asset = detection.asset;
@@ -825,6 +856,7 @@ export async function GET(request: NextRequest) {
         confidence: annotation.confidence,
         centerLat: finalGeo.lat,
         centerLon: finalGeo.lon,
+        sourceAssetId: asset.id,
         coordinates: annotation.coordinates,
         notes: annotation.notes,
         createdAt: annotation.createdAt,
@@ -913,6 +945,84 @@ export async function GET(request: NextRequest) {
       });
     }
 
+    let sessionBiasStats:
+      | {
+          enabled: boolean;
+          radiusMeters: number;
+          correctedAssets: number;
+          correctedDetections: number;
+          correctedAnnotations: number;
+          avgCorrectionMeters: number;
+        }
+      | undefined;
+
+    if (sessionBiasEnabled && exportableDetections.length >= 8) {
+      const biasCorrections = solveSessionAssetBias(
+        exportableDetections.map((detection) => ({
+          id: detection.id,
+          assetId: detection.sourceAssetId,
+          className: detection.className,
+          confidence: detection.confidence ?? 0,
+          lat: detection.centerLat,
+          lon: detection.centerLon,
+        })),
+        {
+          radiusMeters: sessionBiasRadiusM,
+          minAnchorsPerAsset: 3,
+          maxCorrectionMeters: 1.6,
+          byClass: true,
+        }
+      );
+
+      if (biasCorrections.size > 0) {
+        let correctedDetections = 0;
+        let correctedAnnotations = 0;
+        let correctionMagnitudeSum = 0;
+
+        for (const correction of biasCorrections.values()) {
+          correctionMagnitudeSum += correction.magnitudeMeters;
+        }
+
+        for (const detection of exportableDetections) {
+          const correction = biasCorrections.get(detection.sourceAssetId);
+          if (!correction) continue;
+          const corrected = applySessionBiasCorrection(
+            detection.centerLat,
+            detection.centerLon,
+            correction
+          );
+          detection.centerLat = corrected.lat;
+          detection.centerLon = corrected.lon;
+          correctedDetections += 1;
+        }
+
+        for (const annotation of exportableAnnotations) {
+          const correction = biasCorrections.get(annotation.sourceAssetId);
+          if (!correction) continue;
+          const corrected = applySessionBiasCorrection(
+            annotation.centerLat,
+            annotation.centerLon,
+            correction
+          );
+          annotation.centerLat = corrected.lat;
+          annotation.centerLon = corrected.lon;
+          correctedAnnotations += 1;
+        }
+
+        sessionBiasStats = {
+          enabled: true,
+          radiusMeters: sessionBiasRadiusM,
+          correctedAssets: biasCorrections.size,
+          correctedDetections,
+          correctedAnnotations,
+          avgCorrectionMeters:
+            biasCorrections.size > 0
+              ? correctionMagnitudeSum / biasCorrections.size
+              : 0,
+        };
+      }
+    }
+
     const dedupedDetections = dedupeDetections(exportableDetections, {
       enabled: dedupeEnabled,
       radiusMeters: dedupeRadiusM,
@@ -969,6 +1079,11 @@ export async function GET(request: NextRequest) {
       warnings: [
         ...(skippedItems.length > 0
           ? [`${skippedItems.length} items skipped - see skippedItems for details`]
+          : []),
+        ...(sessionBiasStats
+          ? [
+              `Applied session overlap bias correction to ${sessionBiasStats.correctedAssets} assets (avg shift ${sessionBiasStats.avgCorrectionMeters.toFixed(2)}m, radius ${sessionBiasStats.radiusMeters.toFixed(2)}m)`,
+            ]
           : []),
         ...(dedupedDetections.stats.enabled && dedupedDetections.stats.mergedDetections > 0
           ? [`Deduped ${dedupedDetections.stats.mergedDetections} overlapping AI detections into ${dedupedDetections.stats.outputDetections} export points (${dedupedDetections.stats.radiusMeters.toFixed(2)}m radius)`]
