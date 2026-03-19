@@ -7,7 +7,7 @@
  * Supports both point prompts (click-to-segment) and box exemplars (find-all-similar).
  *
  * Security:
- * - Uses Authorization header (not query param) for API key
+ * - Uses request-body auth for Roboflow fallback (per Roboflow serverless requirements)
  * - Basic rate limiting per IP
  * - SSRF protection for image URL fetching
  * - Sanitized error responses

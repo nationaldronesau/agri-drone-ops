@@ -515,9 +515,10 @@ class SAM3Orchestrator {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${ROBOFLOW_API_KEY}`,
         },
         body: JSON.stringify({
+          // Roboflow's serverless SAM3 endpoint expects api_key in the payload.
+          api_key: ROBOFLOW_API_KEY,
           image: { type: 'base64', value: resizedBuffer.toString('base64') },
           prompts,
         }),
@@ -525,7 +526,10 @@ class SAM3Orchestrator {
       });
 
       if (!response.ok) {
-        throw new Error(`Roboflow API error: ${response.status}`);
+        const errorText = await response.text().catch(() => '');
+        throw new Error(
+          `Roboflow API error: ${response.status}${errorText ? ` - ${errorText.substring(0, 200)}` : ''}`
+        );
       }
 
       const result = await response.json();
