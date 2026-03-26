@@ -14,8 +14,9 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
+import { sam3Orchestrator, type PredictionResult } from '@/lib/services/sam3-orchestrator';
 import { S3Service } from '@/lib/services/s3';
+import { buildExemplarCrops, normalizeExemplarCrops } from '@/lib/utils/exemplar-crops';
 
 // Rate limiting (simple in-memory, resets on server restart)
 // NOTE: This is per-instance only. For horizontal scaling, use Redis-based
@@ -87,6 +88,8 @@ interface PredictRequest {
   points?: ClickPoint[];
   boxes?: BoxExemplar[];
   textPrompt?: string;
+  exemplarCrops?: string[];
+  useVisualCrops?: boolean;
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -125,11 +128,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     const hasPoints = body.points && Array.isArray(body.points) && body.points.length > 0;
     const hasBoxes = body.boxes && Array.isArray(body.boxes) && body.boxes.length > 0;
+    const hasExemplarCrops = Array.isArray(body.exemplarCrops) && body.exemplarCrops.length > 0;
     const hasTextPrompt =
       body.textPrompt && typeof body.textPrompt === 'string' && body.textPrompt.trim().length > 0;
+    const visualCropsRequested = body.useVisualCrops === true || hasExemplarCrops;
+
+    console.log('[Predict] Request received:', {
+      assetId: body.assetId,
+      pointCount: body.points?.length ?? 0,
+      boxCount: body.boxes?.length ?? 0,
+      exemplarCropCount: body.exemplarCrops?.length ?? 0,
+      useVisualCrops: body.useVisualCrops === true,
+    });
 
     if (!hasPoints && !hasBoxes && !hasTextPrompt) {
       return NextResponse.json({ error: 'At least one prompt required', success: false }, { status: 400 });
+    }
+
+    if (body.useVisualCrops !== undefined && typeof body.useVisualCrops !== 'boolean') {
+      return NextResponse.json({ error: 'useVisualCrops must be a boolean', success: false }, { status: 400 });
     }
 
     // Validate point values
@@ -162,6 +179,42 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           box.y2 < 0
         ) {
           return NextResponse.json({ error: 'Invalid box coordinates', success: false }, { status: 400 });
+        }
+      }
+    }
+
+    if (body.exemplarCrops !== undefined && !Array.isArray(body.exemplarCrops)) {
+      return NextResponse.json(
+        { error: 'exemplarCrops must be an array', success: false },
+        { status: 400 }
+      );
+    }
+
+    const exemplarCrops = Array.isArray(body.exemplarCrops) ? body.exemplarCrops : [];
+
+    if (hasExemplarCrops) {
+      if (exemplarCrops.length > 10) {
+        return NextResponse.json(
+          { error: 'Maximum 10 exemplar crops allowed', success: false },
+          { status: 400 }
+        );
+      }
+
+      for (const crop of exemplarCrops) {
+        const isDataUrl = typeof crop === 'string' && crop.startsWith('data:image/');
+        const isBase64 = typeof crop === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(crop);
+        if (!isDataUrl && !isBase64) {
+          return NextResponse.json(
+            { error: 'Exemplar crops must be base64 encoded images', success: false },
+            { status: 400 }
+          );
+        }
+
+        if (crop.length > 5 * 1024 * 1024 * 1.37) {
+          return NextResponse.json(
+            { error: 'Exemplar crop too large (max 5MB each)', success: false },
+            { status: 400 }
+          );
         }
       }
     }
@@ -248,16 +301,51 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       ? body.textPrompt!.trim().substring(0, 100).replace(/[^\w\s-]/g, '')
       : undefined;
 
-    // Call orchestrator for prediction (handles AWS/Roboflow fallback)
-    const result = await sam3Orchestrator.predict({
-      imageBuffer,
-      imageUrl, // For AWS point-based predictions (avoids double fetch)
-      assetId: body.assetId, // For AWS image caching
-      boxes: hasBoxes ? body.boxes!.slice(0, 10) : undefined, // Max 10 boxes
-      points: hasPoints ? body.points!.slice(0, 20) : undefined, // Max 20 points
-      textPrompt: sanitizedPrompt,
-      className: sanitizedPrompt,
-    });
+    let result: PredictionResult;
+
+    if (visualCropsRequested) {
+      console.log('[Predict] Visual crops requested - using exemplar crops');
+      let resolvedExemplarCrops = normalizeExemplarCrops(exemplarCrops);
+
+      if (resolvedExemplarCrops.length === 0 && hasBoxes) {
+        resolvedExemplarCrops = await buildExemplarCrops({
+          imageBuffer,
+          boxes: body.boxes!.slice(0, 10),
+        });
+
+        console.log('[Predict] Built exemplar crops on server:', {
+          cropCount: resolvedExemplarCrops.length,
+          boxCount: body.boxes!.length,
+        });
+      }
+
+      if (resolvedExemplarCrops.length === 0) {
+        return NextResponse.json(
+          {
+            error: 'Visual crops requested but exemplar crops were unavailable for prediction',
+            success: false,
+          },
+          { status: 400 }
+        );
+      }
+
+      result = await sam3Orchestrator.predictWithExemplars({
+        imageBuffer,
+        exemplarCrops: resolvedExemplarCrops,
+        className: sanitizedPrompt,
+      });
+    } else {
+      // Call orchestrator for prediction (handles AWS/Roboflow fallback)
+      result = await sam3Orchestrator.predict({
+        imageBuffer,
+        imageUrl, // For AWS point-based predictions (avoids double fetch)
+        assetId: body.assetId, // For AWS image caching
+        boxes: hasBoxes ? body.boxes!.slice(0, 10) : undefined, // Max 10 boxes
+        points: hasPoints ? body.points!.slice(0, 20) : undefined, // Max 20 points
+        textPrompt: sanitizedPrompt,
+        className: sanitizedPrompt,
+      });
+    }
 
     // Return response
     if (hasPoints && !hasBoxes && !hasTextPrompt && result.detections.length > 0) {

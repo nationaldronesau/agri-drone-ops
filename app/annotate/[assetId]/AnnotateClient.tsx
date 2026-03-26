@@ -1239,89 +1239,6 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     }
   }, [isUndoProcessing, popRedo, session, setUndoProcessing]);
 
-  // Apply exemplars to current image using SAM3 (direct, no Redis needed)
-  const applyToCurrentImage = useCallback(async () => {
-    if (!session?.asset?.id || boxExemplars.length === 0) return;
-
-    const exemplarAssetIds = Array.from(new Set(boxExemplars.map(e => e.assetId)));
-    if (exemplarAssetIds.length !== 1) {
-      setSam3Error('Exemplars must come from a single image before applying.');
-      setTimeout(() => setSam3Error(null), 3000);
-      return;
-    }
-
-    if (exemplarAssetIds[0] !== session.asset.id) {
-      setSam3Error('Exemplars were drawn on a different image. Return to that image or clear exemplars.');
-      setTimeout(() => setSam3Error(null), 4000);
-      return;
-    }
-
-    const exemplarsToProcess = [...boxExemplars];
-
-    setBatchProcessing(true);
-    setBatchSummary(null);
-    setSam3Error(null);
-    try {
-      // Use direct SAM3 predict endpoint with box prompts
-      const response = await fetch('/api/sam3/predict', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          assetId: session.asset.id,
-          boxes: exemplarsToProcess.map(e => e.box),
-          textPrompt: selectedClass,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.backend) setSam3Backend(data.backend);
-
-        if (data.success && data.detections && data.detections.length > 0) {
-          // Save each detection as an annotation
-          const newAnnotations = [];
-          for (const detection of data.detections) {
-            if (detection.polygon && detection.polygon.length >= 3) {
-              const annotationResponse = await fetch('/api/annotations', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  sessionId: session.id,
-                  weedType: selectedClass,
-                  confidence: 'LIKELY',
-                  coordinates: detection.polygon,
-                }),
-              });
-
-              if (annotationResponse.ok) {
-                const newAnnotation = await annotationResponse.json();
-                newAnnotations.push(newAnnotation);
-              }
-            }
-          }
-
-          if (newAnnotations.length > 0) {
-            setAnnotations(prev => [...prev, ...newAnnotations]);
-            clearBoxExemplars();
-            setSam3Error(null);
-          } else {
-            setSam3Error(`Found ${data.detections.length} detections but none had valid polygons`);
-          }
-        } else {
-          setSam3Error(data.error || 'No similar objects found in image');
-        }
-      } else {
-        const errorData = await response.json();
-        setSam3Error(errorData.error || 'Failed to process image');
-      }
-    } catch (err) {
-      console.error('Failed to apply to current image:', err);
-      setSam3Error('Failed to process image');
-    } finally {
-      setBatchProcessing(false);
-    }
-  }, [session, boxExemplars, selectedClass, clearBoxExemplars]);
-
   const buildVisualExemplarCrops = useCallback((): string[] => {
     const image = imageRef.current;
     if (!image || !image.complete || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
@@ -1381,6 +1298,110 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
 
     return crops;
   }, [boxExemplars]);
+
+  // Apply exemplars to current image using SAM3 (direct, no Redis needed)
+  const applyToCurrentImage = useCallback(async () => {
+    if (!session?.asset?.id || boxExemplars.length === 0) return;
+
+    const exemplarAssetIds = Array.from(new Set(boxExemplars.map(e => e.assetId)));
+    if (exemplarAssetIds.length !== 1) {
+      setSam3Error('Exemplars must come from a single image before applying.');
+      setTimeout(() => setSam3Error(null), 3000);
+      return;
+    }
+
+    if (exemplarAssetIds[0] !== session.asset.id) {
+      setSam3Error('Exemplars were drawn on a different image. Return to that image or clear exemplars.');
+      setTimeout(() => setSam3Error(null), 4000);
+      return;
+    }
+
+    const exemplarsToProcess = [...boxExemplars];
+    let visualExemplarCrops: string[] | undefined;
+
+    setBatchProcessing(true);
+    setBatchSummary(null);
+    setSam3Error(null);
+    try {
+      try {
+        visualExemplarCrops = buildVisualExemplarCrops();
+      } catch (cropBuildError) {
+        console.warn(
+          '[Predict] Client-side visual crop extraction failed; using server-side crop build fallback',
+          cropBuildError
+        );
+        visualExemplarCrops = undefined;
+      }
+
+      if (!visualExemplarCrops || visualExemplarCrops.length === 0) {
+        console.warn('[Predict] No client-side exemplar crops available; using server-side crop build fallback');
+      } else {
+        console.log('[Predict] Built visual exemplar crops on client', {
+          exemplarCount: exemplarsToProcess.length,
+          cropCount: visualExemplarCrops.length,
+        });
+      }
+
+      const response = await fetch('/api/sam3/predict', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assetId: session.asset.id,
+          boxes: exemplarsToProcess.map(e => e.box),
+          textPrompt: selectedClass,
+          useVisualCrops: true,
+          exemplarCrops: visualExemplarCrops,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.backend) setSam3Backend(data.backend);
+
+        if (data.success && data.detections && data.detections.length > 0) {
+          // Save each detection as an annotation
+          const newAnnotations = [];
+          for (const detection of data.detections) {
+            if (detection.polygon && detection.polygon.length >= 3) {
+              const annotationResponse = await fetch('/api/annotations', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  sessionId: session.id,
+                  weedType: selectedClass,
+                  confidence: 'LIKELY',
+                  coordinates: detection.polygon,
+                }),
+              });
+
+              if (annotationResponse.ok) {
+                const newAnnotation = await annotationResponse.json();
+                newAnnotations.push(newAnnotation);
+              }
+            }
+          }
+
+          if (newAnnotations.length > 0) {
+            setAnnotations(prev => [...prev, ...newAnnotations]);
+            clearBoxExemplars();
+            setSam3Error(null);
+          } else {
+            setSam3Error(`Found ${data.detections.length} detections but none had valid polygons`);
+          }
+        } else {
+          setSam3Error(data.error || 'No similar objects found in image');
+        }
+      } else {
+        const errorData = await response.json();
+        setSam3Error(errorData.error || 'Failed to process image');
+      }
+    } catch (err) {
+      console.error('Failed to apply to current image:', err);
+      setSam3Error('Failed to process image');
+    } finally {
+      setBatchProcessing(false);
+    }
+  }, [session, boxExemplars, selectedClass, clearBoxExemplars, buildVisualExemplarCrops]);
 
   // Apply exemplars to all project images (requires Redis for batch queue)
   const applyToAllImages = useCallback(async () => {
