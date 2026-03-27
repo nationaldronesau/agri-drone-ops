@@ -301,39 +301,81 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       ? body.textPrompt!.trim().substring(0, 100).replace(/[^\w\s-]/g, '')
       : undefined;
 
-    let result: PredictionResult;
+    let result: PredictionResult | null = null;
 
     if (visualCropsRequested) {
-      console.log('[Predict] Visual crops requested - using exemplar crops');
-      let resolvedExemplarCrops = normalizeExemplarCrops(exemplarCrops);
+      let boxMatcherResult: PredictionResult | null = null;
 
-      if (resolvedExemplarCrops.length === 0 && hasBoxes) {
-        resolvedExemplarCrops = await buildExemplarCrops({
-          imageBuffer,
-          boxes: body.boxes!.slice(0, 10),
-        });
-
-        console.log('[Predict] Built exemplar crops on server:', {
-          cropCount: resolvedExemplarCrops.length,
-          boxCount: body.boxes!.length,
-        });
-      }
-
-      if (resolvedExemplarCrops.length === 0) {
-        return NextResponse.json(
+      if (hasBoxes) {
+        console.log('[Predict] Visual crops requested - trying AWS box matcher first');
+        boxMatcherResult = await sam3Orchestrator.predict(
           {
-            error: 'Visual crops requested but exemplar crops were unavailable for prediction',
-            success: false,
+            imageBuffer,
+            imageUrl,
+            assetId: body.assetId,
+            boxes: body.boxes!.slice(0, 10),
+            textPrompt: sanitizedPrompt,
+            className: sanitizedPrompt,
           },
-          { status: 400 }
+          { allowRoboflowFallback: false }
         );
+
+        if (boxMatcherResult.success && boxMatcherResult.count > 0) {
+          console.log('[Predict] AWS box matcher succeeded for current-image apply');
+          result = boxMatcherResult;
+        } else if (!boxMatcherResult.success) {
+          console.warn(
+            `[Predict] AWS box matcher failed (${boxMatcherResult.error || boxMatcherResult.errorCode || 'unknown'}); falling back to exemplar crops`
+          );
+        } else {
+          console.log('[Predict] AWS box matcher returned no detections; falling back to exemplar crops');
+        }
       }
 
-      result = await sam3Orchestrator.predictWithExemplars({
-        imageBuffer,
-        exemplarCrops: resolvedExemplarCrops,
-        className: sanitizedPrompt,
-      });
+      if (!result) {
+        console.log('[Predict] Visual crops requested - using exemplar crops');
+        let resolvedExemplarCrops = normalizeExemplarCrops(exemplarCrops);
+
+        if (resolvedExemplarCrops.length === 0 && hasBoxes) {
+          resolvedExemplarCrops = await buildExemplarCrops({
+            imageBuffer,
+            boxes: body.boxes!.slice(0, 10),
+          });
+
+          console.log('[Predict] Built exemplar crops on server:', {
+            cropCount: resolvedExemplarCrops.length,
+            boxCount: body.boxes!.length,
+          });
+        }
+
+        if (resolvedExemplarCrops.length === 0) {
+          if (boxMatcherResult) {
+            result = boxMatcherResult;
+          } else {
+            return NextResponse.json(
+              {
+                error: 'Visual crops requested but exemplar crops were unavailable for prediction',
+                success: false,
+              },
+              { status: 400 }
+            );
+          }
+        } else {
+          const exemplarResult = await sam3Orchestrator.predictWithExemplars({
+            imageBuffer,
+            exemplarCrops: resolvedExemplarCrops,
+            className: sanitizedPrompt,
+          });
+
+          if (exemplarResult.success && exemplarResult.count > 0) {
+            result = exemplarResult;
+          } else if (boxMatcherResult) {
+            result = boxMatcherResult;
+          } else {
+            result = exemplarResult;
+          }
+        }
+      }
     } else {
       // Call orchestrator for prediction (handles AWS/Roboflow fallback)
       result = await sam3Orchestrator.predict({
@@ -345,6 +387,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         textPrompt: sanitizedPrompt,
         className: sanitizedPrompt,
       });
+    }
+
+    if (!result) {
+      return NextResponse.json({ error: 'Prediction did not return a result', success: false }, { status: 500 });
     }
 
     // Return response

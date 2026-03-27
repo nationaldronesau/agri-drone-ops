@@ -25,6 +25,10 @@ export interface PredictionRequest {
   className?: string;
 }
 
+export interface PredictionOptions {
+  allowRoboflowFallback?: boolean;
+}
+
 // Request for prediction with visual exemplar crops (cross-image detection)
 export interface ExemplarPredictionRequest {
   imageBuffer: Buffer;
@@ -150,12 +154,13 @@ class SAM3Orchestrator {
   /**
    * Main prediction method - tries AWS first, falls back to Roboflow
    */
-  async predict(request: PredictionRequest): Promise<PredictionResult> {
+  async predict(request: PredictionRequest, options: PredictionOptions = {}): Promise<PredictionResult> {
     const startTime = Date.now();
+    const allowRoboflowFallback = options.allowRoboflowFallback !== false;
 
     if (await isGpuLocked()) {
       console.log('[Orchestrator] GPU lock active');
-      if (!ROBOFLOW_API_KEY) {
+      if (!allowRoboflowFallback || !ROBOFLOW_API_KEY) {
         return this.buildAwsOnlyFailure(
           startTime,
           'AWS SAM3 is temporarily busy (GPU lock active). Please retry in a moment.',
@@ -179,7 +184,7 @@ class SAM3Orchestrator {
             console.log('[Orchestrator] AWS starting, waiting for it to be ready...');
             const awsReady = await this.waitForAWSReady(180000); // Wait up to 3 minutes
             if (!awsReady) {
-              if (!ROBOFLOW_API_KEY) {
+              if (!allowRoboflowFallback || !ROBOFLOW_API_KEY) {
                 return this.buildAwsOnlyFailure(
                   startTime,
                   'AWS SAM3 failed to become ready. Please retry shortly.',
@@ -194,7 +199,7 @@ class SAM3Orchestrator {
             // Continue to prediction below
           } else {
             // Not starting, not ready
-            if (!ROBOFLOW_API_KEY) {
+            if (!allowRoboflowFallback || !ROBOFLOW_API_KEY) {
               return this.buildAwsOnlyFailure(
                 startTime,
                 'AWS SAM3 is not ready yet. Please retry shortly.',
@@ -212,7 +217,7 @@ class SAM3Orchestrator {
       const awsResult = await this.predictWithAWS(request);
 
       if (awsResult === null) {
-        if (!ROBOFLOW_API_KEY) {
+        if (!allowRoboflowFallback || !ROBOFLOW_API_KEY) {
           return this.buildAwsOnlyFailure(
             startTime,
             'AWS SAM3 request was missing required image context (imageUrl/assetId for point prediction).',
@@ -222,7 +227,7 @@ class SAM3Orchestrator {
         }
         console.log('[Orchestrator] AWS returned null (likely missing imageUrl/assetId for point prediction), falling back to Roboflow');
       } else if (!awsResult.success) {
-        if (!ROBOFLOW_API_KEY) {
+        if (!allowRoboflowFallback || !ROBOFLOW_API_KEY) {
           return this.buildAwsOnlyFailure(
             startTime,
             awsResult.error || 'AWS SAM3 prediction failed',
@@ -241,14 +246,17 @@ class SAM3Orchestrator {
       }
     }
 
-    if (!ROBOFLOW_API_KEY) {
+    if (!allowRoboflowFallback || !ROBOFLOW_API_KEY) {
+      const awsConfigured = awsSam3Service.isConfigured();
+      const errorMessage = awsConfigured
+        ? 'AWS SAM3 prediction failed and no fallback backend is configured.'
+        : 'AWS SAM3 is not configured for this prediction path.';
+      const errorCode = awsConfigured ? 'AWS_PREDICTION_FAILED' : 'AWS_NOT_CONFIGURED';
       return this.buildAwsOnlyFailure(
         startTime,
-        awsSam3Service.isConfigured()
-          ? 'AWS SAM3 prediction failed and no fallback backend is configured.'
-          : 'No SAM3 backend configured (AWS not configured, Roboflow disabled).',
+        errorMessage,
         undefined,
-        awsSam3Service.isConfigured() ? 'AWS_PREDICTION_FAILED' : 'NO_BACKEND_CONFIGURED'
+        errorCode
       );
     }
 
