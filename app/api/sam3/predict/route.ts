@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { sam3Orchestrator, type PredictionResult } from '@/lib/services/sam3-orchestrator';
+import { sam3ConceptService } from '@/lib/services/sam3-concept';
 import { S3Service } from '@/lib/services/s3';
 import { buildExemplarCrops, normalizeExemplarCrops } from '@/lib/utils/exemplar-crops';
 
@@ -369,10 +370,63 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
           if (exemplarResult.success && exemplarResult.count > 0) {
             result = exemplarResult;
-          } else if (boxMatcherResult) {
-            result = boxMatcherResult;
           } else {
-            result = exemplarResult;
+            if (hasBoxes && sam3ConceptService.isConfigured()) {
+              console.log('[Predict] Exemplar crops returned no detections; trying concept service fallback');
+              const conceptClassName = sanitizedPrompt || 'detection';
+              const createResult = await sam3ConceptService.createExemplar({
+                imageBuffer,
+                boxes: body.boxes!.slice(0, 10),
+                className: conceptClassName,
+                imageId: body.assetId,
+              });
+
+              if (createResult.success && createResult.data) {
+                const warmupResult = await sam3ConceptService.warmup();
+                if (!warmupResult.success) {
+                  console.warn(`[Predict] Concept warmup failed: ${warmupResult.error}`);
+                }
+
+                const conceptResult = await sam3ConceptService.applyExemplar({
+                  exemplarId: createResult.data.exemplar_id,
+                  imageBuffer,
+                  imageId: body.assetId,
+                  options: { returnPolygons: true },
+                });
+
+                if (conceptResult.success && conceptResult.data && conceptResult.data.detections.length > 0) {
+                  console.log(
+                    `[Predict] Concept service fallback succeeded with ${conceptResult.data.detections.length} detections`
+                  );
+                  result = {
+                    success: true,
+                    backend: 'aws',
+                    detections: conceptResult.data.detections.map((det) => ({
+                      polygon: det.polygon || [],
+                      bbox: det.bbox,
+                      score: typeof det.similarity === 'number' ? det.similarity : det.confidence,
+                      className: det.class_name,
+                    })),
+                    count: conceptResult.data.detections.length,
+                    processingTimeMs: conceptResult.data.processingTimeMs,
+                  };
+                } else if (!conceptResult.success) {
+                  console.warn(`[Predict] Concept service fallback failed: ${conceptResult.error}`);
+                } else {
+                  console.log('[Predict] Concept service fallback returned 0 detections');
+                }
+              } else {
+                console.warn(`[Predict] Concept exemplar creation failed: ${createResult.error}`);
+              }
+            }
+
+            if (!result && boxMatcherResult) {
+              result = boxMatcherResult;
+            }
+
+            if (!result) {
+              result = exemplarResult;
+            }
           }
         }
       }
