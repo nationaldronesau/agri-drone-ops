@@ -1,11 +1,18 @@
 import { awsSam3Service, type ScalingInfo } from './aws-sam3';
 
-const SAM3_SERVICE_URL = process.env.SAM3_SERVICE_URL || process.env.SAM3_API_URL;
+const SAM3_SERVICE_URL =
+  process.env.SAM3_SERVICE_URL ||
+  process.env.SAM3_API_URL ||
+  process.env.NDSD_SAM3_SERVICE;
 const SAM3_CONCEPT_API_URL =
-  process.env.SAM3_CONCEPT_API_URL || process.env.SAM3_CONCEPT_URL;
+  process.env.SAM3_CONCEPT_API_URL ||
+  process.env.SAM3_CONCEPT_URL ||
+  process.env.NDSD_SAM3_SERVICE;
 const SAM3_CONCEPT_PORT = process.env.SAM3_CONCEPT_PORT || '8002';
 const SAM3_CONCEPT_API_KEY =
-  process.env.SAM3_CONCEPT_API_KEY || process.env.SAM3_API_KEY;
+  process.env.SAM3_CONCEPT_API_KEY ||
+  process.env.SAM3_API_KEY ||
+  process.env.NDSD_SAM3_SERVICE_API_KEY;
 const REQUEST_TIMEOUT_MS = 180000;
 
 const parseOptionalNumber = (value: string | undefined): number | undefined => {
@@ -88,6 +95,29 @@ export interface ConceptServiceResult<T> {
 class SAM3ConceptService {
   isConfigured(): boolean {
     return Boolean(SAM3_CONCEPT_BASE_URL) || awsSam3Service.isConfigured();
+  }
+
+  private async ensureGpuCapacity(): Promise<void> {
+    if (!awsSam3Service.isConfigured()) {
+      return;
+    }
+
+    try {
+      const status = await awsSam3Service.refreshStatus();
+      if (status.instanceState === 'stopped' || !status.modelLoaded) {
+        return;
+      }
+
+      console.log('[SAM3 Concept] Unloading AWS SAM3 model on :8000 before concept operation');
+      const unloadResult = await awsSam3Service.unloadModel(30000);
+      if (!unloadResult.success) {
+        console.warn(`[SAM3 Concept] Failed to unload AWS SAM3 model: ${unloadResult.message}`);
+      } else {
+        console.log('[SAM3 Concept] AWS SAM3 model unloaded to free GPU for concept service');
+      }
+    } catch (error) {
+      console.warn('[SAM3 Concept] Failed to prepare GPU capacity:', error);
+    }
   }
 
   private buildHeaders(): Record<string, string> {
@@ -256,6 +286,7 @@ class SAM3ConceptService {
   }
 
   async warmup(): Promise<ConceptServiceResult<{ sam3Loaded: boolean; dinoLoaded: boolean }>> {
+    await this.ensureGpuCapacity();
     const baseUrl = await this.resolveBaseUrl(true);
     if (!baseUrl) {
       return { success: false, data: null, error: 'Concept service not configured' };
@@ -310,6 +341,7 @@ class SAM3ConceptService {
     className: string;
     imageId?: string;
   }): Promise<ConceptServiceResult<ConceptExemplarResponse>> {
+    await this.ensureGpuCapacity();
     const baseUrl = await this.resolveBaseUrl(true);
     if (!baseUrl) {
       return { success: false, data: null, error: 'Concept service not configured' };
@@ -371,6 +403,7 @@ class SAM3ConceptService {
     imageId?: string;
     options?: ConceptApplyOptions;
   }): Promise<ConceptServiceResult<ConceptApplyResult>> {
+    await this.ensureGpuCapacity();
     const baseUrl = await this.resolveBaseUrl(true);
     if (!baseUrl) {
       return { success: false, data: null, error: 'Concept service not configured' };
