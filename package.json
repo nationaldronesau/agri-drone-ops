@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test:unit": "vitest run",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
@@ -14,6 +15,8 @@
     "worker:dev": "tsx -r tsconfig-paths/register --env-file=.env workers/batch-worker.ts",
     "worker": "tsx -r tsconfig-paths/register workers/batch-worker.ts",
     "worker:watch": "tsx --watch --env-file=.env workers/batch-worker.ts",
+    "worker:v2": "tsx -r tsconfig-paths/register workers/batch-worker-v2.ts",
+    "worker:v2:dev": "tsx -r tsconfig-paths/register --env-file=.env workers/batch-worker-v2.ts",
     "worker:inference": "tsx -r tsconfig-paths/register workers/inference-worker.ts",
     "worker:inference:dev": "tsx -r tsconfig-paths/register --env-file=.env workers/inference-worker.ts",
     "worker:yolo-inference": "tsx -r tsconfig-paths/register workers/yolo-inference-worker.ts",
@@ -107,6 +110,7 @@
     "eslint-config-next": "^15.4.11",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^3.2.4"
   }
 }

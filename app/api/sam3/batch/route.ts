@@ -236,6 +236,7 @@ async function processSynchronously(
   const useConceptService = conceptConfigured && !useVisualCropsOnly;
   let useSegmentCrops = useVisualCropsOnly;
   let useConcept = false;
+  let conceptFallbackReady = false;
   let sourceImageBuffer: Buffer | null = null;
 
   if (!resolvedSourceAssetId && assets.length > 0) {
@@ -267,7 +268,7 @@ async function processSynchronously(
   }
 
   if (useConceptService && !conceptExemplarId && !sourceImageBuffer) {
-    const message = 'Visual crops requested but the source image could not be loaded to create exemplars.';
+    const message = 'Concept service requested but the source image could not be loaded to create exemplars.';
     await prisma.batchJob.update({
       where: { id: batchJobId },
       data: {
@@ -292,7 +293,7 @@ async function processSynchronously(
     console.log(`[Sync] Job ${batchJobId}: Using concept service`);
   }
 
-  if (useConceptService) {
+  if (conceptConfigured && !useVisualCropsOnly) {
     if (!conceptExemplarId && resolvedSourceAssetId && sourceImageBuffer) {
       const createResult = await sam3ConceptService.createExemplar({
         imageBuffer: sourceImageBuffer,
@@ -322,7 +323,8 @@ async function processSynchronously(
         conceptExemplarId = null;
       }
     }
-    useConcept = Boolean(conceptExemplarId);
+    conceptFallbackReady = Boolean(conceptExemplarId);
+    useConcept = useConceptService && conceptFallbackReady;
   }
 
   if (useSegmentCrops && !resolvedExemplarCrops.length && sourceImageBuffer) {
@@ -388,7 +390,7 @@ async function processSynchronously(
   }
 
   if (useSegmentCrops && resolvedExemplarCrops.length === 0) {
-    const message = 'Visual crops requested but exemplar crops were unavailable from the source image. Continuing with box prompts for this run. Reopen the source image and redraw exemplars to restore visual crop matching.';
+    const message = 'Visual crops requested but exemplar crops were unavailable from the source image.';
     console.warn(`[Sync] Job ${batchJobId}: ${message}`);
     logStructured('warn', 'sam3_batch.sync_visual_crops_fallback', {
       batchJobId,
@@ -398,8 +400,29 @@ async function processSynchronously(
       sourceImageAvailable: Boolean(sourceImageBuffer),
       action: 'retry_from_source_image_with_visual_crops',
     });
-    errors.push(message);
-    useSegmentCrops = false;
+    if (conceptFallbackReady) {
+      const fallbackMessage = `${message} Falling back to concept propagation for this run.`;
+      errors.push(fallbackMessage);
+      useSegmentCrops = false;
+      useConcept = true;
+    } else {
+      await prisma.batchJob.update({
+        where: { id: batchJobId },
+        data: {
+          status: 'FAILED',
+          processedImages: 0,
+          detectionsFound: 0,
+          completedAt: new Date(),
+          errorMessage: message,
+        },
+      });
+      return {
+        processedImages: 0,
+        detectionsFound: 0,
+        errors: [message],
+        status: 'FAILED',
+      };
+    }
   }
 
   for (let i = 0; i < assets.length; i++) {
@@ -484,7 +507,43 @@ async function processSynchronously(
         // Call SAM3 via orchestrator with appropriate method
         let result;
 
-        if (isSourceImage) {
+        if (useSegmentCrops && resolvedExemplarCrops.length > 0) {
+          const imageRole = isSourceImage ? 'SOURCE' : 'TARGET';
+          console.log(`[Sync] Job ${batchJobId}, Asset ${asset.id}: Processing as ${imageRole} image with ${resolvedExemplarCrops.length} visual exemplar crops`);
+          result = await sam3Orchestrator.predictWithExemplars({
+            imageBuffer: imageData.buffer,
+            exemplarCrops: resolvedExemplarCrops,
+            className: weedType,
+          });
+          if (!result.success) {
+            if (conceptFallbackReady && conceptExemplarId) {
+              console.warn(`[Sync] Job ${batchJobId}, Asset ${asset.id}: Exemplar prediction failed (${result.error}), trying concept service fallback`);
+              const conceptResult = await sam3ConceptService.applyExemplar({
+                exemplarId: conceptExemplarId,
+                imageBuffer: imageData.buffer,
+                imageId: asset.id,
+                options: { returnPolygons: true },
+              });
+
+              if (conceptResult.success && conceptResult.data) {
+                conceptApplied = true;
+                detections = conceptResult.data.detections.map((det: ConceptDetection) => ({
+                  bbox: det.bbox,
+                  polygon: det.polygon || [],
+                  confidence: det.confidence,
+                  similarity: det.similarity,
+                }));
+              } else {
+                console.warn(`[Sync] Job ${batchJobId}, Asset ${asset.id}: Concept fallback failed (${conceptResult.error})`);
+              }
+            }
+
+            if (!conceptApplied) {
+              errors.push(`Asset ${asset.id}: ${result.error || 'Visual exemplar prediction failed'}`);
+              continue;
+            }
+          }
+        } else if (isSourceImage) {
           // Source image: use box-based detection (boxes point to actual content)
           console.log(`[Sync] Job ${batchJobId}, Asset ${asset.id}: Processing as SOURCE image with ${boxes.length} boxes`);
           result = await sam3Orchestrator.predict({
@@ -493,36 +552,6 @@ async function processSynchronously(
             textPrompt: sanitizedPrompt,
             className: weedType,
           });
-        } else if (useSegmentCrops && resolvedExemplarCrops.length > 0) {
-          // Target image with visual crops: use crop-based detection
-          console.log(`[Sync] Job ${batchJobId}, Asset ${asset.id}: Processing as TARGET image with ${resolvedExemplarCrops.length} visual exemplar crops`);
-          result = await sam3Orchestrator.predictWithExemplars({
-            imageBuffer: imageData.buffer,
-            exemplarCrops: resolvedExemplarCrops,
-            className: weedType,
-          });
-          if (!result.success) {
-            console.warn(`[Sync] Job ${batchJobId}, Asset ${asset.id}: Exemplar prediction failed (${result.error}), falling back`);
-            const shouldTryBoxFallback =
-              boxes.length > 0 &&
-              (
-                !useVisualCrops ||
-                result.errorCode === 'UNSUPPORTED_EXEMPLAR_CROPS' ||
-                /extractor cues|source mask|exemplar/i.test(result.error || '')
-              );
-
-            if (!shouldTryBoxFallback && useVisualCrops) {
-              errors.push(`Asset ${asset.id}: ${result.error || 'Visual exemplar prediction failed'}`);
-              continue;
-            }
-
-            result = await sam3Orchestrator.predict({
-              imageBuffer: imageData.buffer,
-              boxes: boxes.length > 0 ? boxes : undefined,
-              textPrompt: sanitizedPrompt,
-              className: weedType,
-            });
-          }
         } else {
           // Fallback: text-only or box-based (may not work well for domain-specific objects)
           console.log(`[Sync] Job ${batchJobId}, Asset ${asset.id}: Processing as TARGET image with fallback (text/boxes)`);
@@ -534,16 +563,18 @@ async function processSynchronously(
           });
         }
 
-        if (!result.success) {
-          errors.push(`Asset ${asset.id}: SAM3 error - ${result.error || 'Unknown error'}`);
-          continue;
-        }
+        if (!conceptApplied) {
+          if (!result.success) {
+            errors.push(`Asset ${asset.id}: SAM3 error - ${result.error || 'Unknown error'}`);
+            continue;
+          }
 
-        detections = result.detections.map((det) => ({
-          bbox: det.bbox,
-          polygon: det.polygon,
-          confidence: det.score,
-        }));
+          detections = result.detections.map((det) => ({
+            bbox: det.bbox,
+            polygon: det.polygon,
+            confidence: det.score,
+          }));
+        }
       }
 
       // Create pending annotations from detections

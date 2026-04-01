@@ -9,6 +9,11 @@ function isDatasetVersionsEnabled(features: unknown): boolean {
   return Boolean((features as Record<string, unknown>).datasetVersions);
 }
 
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry) => typeof entry === 'string') as string[];
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -37,15 +42,38 @@ export async function POST(
     }
 
     const body = await request.json();
-    const { splits, filters, classes } = body || {};
+    const { splits, filters, classes, reviewSessionId } = body || {};
     const selectedClasses = Array.isArray(classes) && classes.length > 0
       ? classes
       : Array.isArray(filters?.weedTypes) && filters.weedTypes.length > 0
         ? filters.weedTypes
         : undefined;
 
+    let scopedAssetIds: string[] | undefined;
+    if (typeof reviewSessionId === 'string' && reviewSessionId) {
+      const reviewSession = await prisma.reviewSession.findFirst({
+        where: {
+          id: reviewSessionId,
+          projectId,
+        },
+        select: {
+          assetIds: true,
+        },
+      });
+
+      if (!reviewSession) {
+        return NextResponse.json({ error: 'Review session not found for project' }, { status: 400 });
+      }
+
+      scopedAssetIds = toStringArray(reviewSession.assetIds);
+      if (scopedAssetIds.length === 0) {
+        return NextResponse.json({ error: 'Review session has no assets' }, { status: 400 });
+      }
+    }
+
     const preview = await datasetPreparation.previewDataset({
       projectId,
+      assetIds: scopedAssetIds,
       classes: selectedClasses,
       splitRatio: splits,
       includeAIDetections: filters?.includeAIDetections ?? true,

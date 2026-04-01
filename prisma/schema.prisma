@@ -473,6 +473,9 @@ model BatchJob {
   exemplarSourceHeight Int? // Height of image where exemplars were drawn
   exemplarId           String? // Concept propagation exemplar ID
   sourceAssetId        String? // Asset ID used to create exemplar
+  version              Int?
+  mode                 String?
+  stageLog             Json?
 
   // Processing status
   status          BatchJobStatus @default(QUEUED)

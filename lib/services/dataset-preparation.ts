@@ -122,6 +122,11 @@ export function sanitizeClassName(name: string): string {
     .replace(/[^a-z0-9_]/g, '');
 }
 
+interface NormalizedAssetAnnotation {
+  className: string;
+  bbox: BoundingBox;
+}
+
 class DatasetPreparationService {
   private bucket = S3Service.bucketName;
 
@@ -269,36 +274,20 @@ class DatasetPreparationService {
 
     const availableCounts = new Map<string, number>();
     const incrementAvailable = (className: string) => {
-      const sanitized = sanitizeClassName(className);
-      if (!sanitized) return;
-      const next = (availableCounts.get(sanitized) || 0) + 1;
-      availableCounts.set(sanitized, next);
+      const next = (availableCounts.get(className) || 0) + 1;
+      availableCounts.set(className, next);
     };
 
     for (const asset of assets) {
-      if (includeAI && asset.detections) {
-        for (const detection of asset.detections) {
-          const confidence = typeof detection.confidence === 'number' ? detection.confidence : 0;
-          if (confidence < minConfidence) continue;
-          incrementAvailable(detection.className);
-        }
-      }
-
-      if (includeManual && asset.annotationSessions) {
-        for (const session of asset.annotationSessions) {
-          for (const annotation of session.annotations) {
-            incrementAvailable(annotation.roboflowClassName || annotation.weedType);
-          }
-        }
-      }
-
-      if (includeSAM3 && asset.pendingAnnotations) {
-        for (const pending of asset.pendingAnnotations) {
-          if (typeof pending.confidence === 'number' && pending.confidence < minConfidence) {
-            continue;
-          }
-          incrementAvailable(pending.weedType);
-        }
+      const annotations = this.collectAssetAnnotations(
+        asset,
+        includeAI,
+        includeManual,
+        minConfidence,
+        includeSAM3
+      );
+      for (const annotation of annotations) {
+        incrementAvailable(annotation.className);
       }
     }
 
@@ -369,36 +358,20 @@ class DatasetPreparationService {
 
     const availableCounts = new Map<string, number>();
     const incrementAvailable = (className: string) => {
-      const sanitized = sanitizeClassName(className);
-      if (!sanitized) return;
-      const next = (availableCounts.get(sanitized) || 0) + 1;
-      availableCounts.set(sanitized, next);
+      const next = (availableCounts.get(className) || 0) + 1;
+      availableCounts.set(className, next);
     };
 
     for (const asset of assets) {
-      if (includeAI && asset.detections) {
-        for (const detection of asset.detections) {
-          const confidence = typeof detection.confidence === 'number' ? detection.confidence : 0;
-          if (confidence < minConfidence) continue;
-          incrementAvailable(detection.className);
-        }
-      }
-
-      if (includeManual && asset.annotationSessions) {
-        for (const session of asset.annotationSessions) {
-          for (const annotation of session.annotations) {
-            incrementAvailable(annotation.roboflowClassName || annotation.weedType);
-          }
-        }
-      }
-
-      if (includeSAM3 && asset.pendingAnnotations) {
-        for (const pending of asset.pendingAnnotations) {
-          if (typeof pending.confidence === 'number' && pending.confidence < minConfidence) {
-            continue;
-          }
-          incrementAvailable(pending.weedType);
-        }
+      const annotations = this.collectAssetAnnotations(
+        asset,
+        includeAI,
+        includeManual,
+        minConfidence,
+        includeSAM3
+      );
+      for (const annotation of annotations) {
+        incrementAvailable(annotation.className);
       }
     }
 
@@ -430,7 +403,11 @@ class DatasetPreparationService {
     if (config.projectId) {
       where.projectId = config.projectId;
     }
-    if (config.assetIds && config.assetIds.length > 0) {
+    if (config.assetIds !== undefined) {
+      if (config.assetIds.length === 0) {
+        // Explicitly scoped to no assets — return empty rather than widening to whole project
+        return [];
+      }
       where.id = { in: config.assetIds };
     }
     if (config.createdBefore) {
@@ -519,41 +496,67 @@ class DatasetPreparationService {
     minConfidence: number,
     includeSAM3: boolean
   ): YOLOAnnotation[] {
-    const annotations: YOLOAnnotation[] = [];
+    return this.collectAssetAnnotations(
+      asset,
+      includeAI,
+      includeManual,
+      minConfidence,
+      includeSAM3
+    )
+      .map((annotation) => {
+        const classId = classMap.get(annotation.className);
+        if (classId === undefined) return null;
+        return { classId, bbox: annotation.bbox };
+      })
+      .filter((annotation): annotation is YOLOAnnotation => annotation !== null);
+  }
 
+  private collectAssetAnnotations(
+    asset: DatasetAsset,
+    includeAI: boolean,
+    includeManual: boolean,
+    minConfidence: number,
+    includeSAM3: boolean
+  ): NormalizedAssetAnnotation[] {
+    const annotations: NormalizedAssetAnnotation[] = [];
+    const seen = new Set<string>();
     const imageWidth = asset.imageWidth || 4000;
     const imageHeight = asset.imageHeight || 3000;
+
+    const addAnnotation = (rawClassName: string, bbox: BoundingBox | null) => {
+      if (!bbox) return;
+      const className = sanitizeClassName(rawClassName);
+      if (!className) return;
+
+      const key = this.buildNormalizedAnnotationKey(className, bbox);
+      if (seen.has(key)) return;
+      seen.add(key);
+
+      annotations.push({ className, bbox });
+    };
 
     if (includeAI && asset.detections) {
       for (const detection of asset.detections) {
         const confidence = typeof detection.confidence === 'number' ? detection.confidence : 0;
         if (confidence < minConfidence) continue;
 
-        const className = sanitizeClassName(detection.className);
-        const classId = classMap.get(className);
-        if (classId === undefined) continue;
-
-        const bbox = this.parseDetectionBBox(detection, imageWidth, imageHeight);
-        if (!bbox) continue;
-
-        annotations.push({ classId, bbox });
+        addAnnotation(
+          detection.className,
+          this.parseDetectionBBox(detection, imageWidth, imageHeight)
+        );
       }
     }
 
     if (includeManual && asset.annotationSessions) {
       for (const session of asset.annotationSessions) {
         for (const annotation of session.annotations) {
-          const className = sanitizeClassName(
-            annotation.roboflowClassName || annotation.weedType
-          );
-          const classId = classMap.get(className);
-          if (classId === undefined) continue;
-
           const points = this.parsePolygonPoints(annotation.coordinates);
           if (!points || points.length < 3) continue;
 
-          const bbox = this.polygonToBBox(points, imageWidth, imageHeight);
-          annotations.push({ classId, bbox });
+          addAnnotation(
+            annotation.roboflowClassName || annotation.weedType,
+            this.polygonToBBox(points, imageWidth, imageHeight)
+          );
         }
       }
     }
@@ -563,13 +566,11 @@ class DatasetPreparationService {
         if (typeof pending.confidence === 'number' && pending.confidence < minConfidence) {
           continue;
         }
-        const className = sanitizeClassName(pending.weedType);
-        const classId = classMap.get(className);
-        if (classId === undefined) continue;
 
-        const bbox = this.parsePendingBBox(pending, imageWidth, imageHeight);
-        if (!bbox) continue;
-        annotations.push({ classId, bbox });
+        addAnnotation(
+          pending.weedType,
+          this.parsePendingBBox(pending, imageWidth, imageHeight)
+        );
       }
     }
 
@@ -706,6 +707,22 @@ class DatasetPreparationService {
       width: Math.max(0, Math.min(1, bbox.width)),
       height: Math.max(0, Math.min(1, bbox.height)),
     };
+  }
+
+  private buildNormalizedAnnotationKey(className: string, bbox: BoundingBox): string {
+    const x1 = bbox.x - bbox.width / 2;
+    const y1 = bbox.y - bbox.height / 2;
+    const x2 = bbox.x + bbox.width / 2;
+    const y2 = bbox.y + bbox.height / 2;
+    const round = (value: number) => value.toFixed(4);
+
+    return [
+      className,
+      round(Math.max(0, Math.min(1, x1))),
+      round(Math.max(0, Math.min(1, y1))),
+      round(Math.max(0, Math.min(1, x2))),
+      round(Math.max(0, Math.min(1, y2))),
+    ].join(':');
   }
 
   private generateDataYaml(

@@ -60,8 +60,9 @@ interface SAM3Point {
   label: 0 | 1;
 }
 
-const MAX_VISUAL_EXEMPLAR_CROPS = 10;
-const MAX_VISUAL_EXEMPLAR_DIMENSION = 512;
+const MAX_VISUAL_EXEMPLAR_CROPS = 4;
+const MAX_BATCH_EXEMPLARS = 10;
+const MAX_VISUAL_EXEMPLAR_DIMENSION = 256;
 const VISUAL_EXEMPLAR_JPEG_QUALITY = 0.85;
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -262,7 +263,8 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const [boxExemplars, setBoxExemplars] = useState<BoxExemplar[]>([]);
   const [currentBox, setCurrentBox] = useState<DrawingBox | null>(null);
   const [isDrawingBox, setIsDrawingBox] = useState(false);
-  const [useVisualCrops, setUseVisualCrops] = useState(true);
+  const [useVisualCrops, setUseVisualCrops] = useState(false);
+  const [useBatchPipelineV2, setUseBatchPipelineV2] = useState(false);
 
   // Annotation form state
   const [selectedClass, setSelectedClass] = useState(DEFAULT_WEED_CLASSES[0].name);
@@ -332,11 +334,23 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     totalImages: number;
   } | null>(null);
   const [batchJobError, setBatchJobError] = useState<string | null>(null);
+  const [batchPollUrl, setBatchPollUrl] = useState<string | null>(null);
   const [batchSummary, setBatchSummary] = useState<{
     total: number;
     pending: number;
     accepted: number;
     rejected: number;
+  } | null>(null);
+  const [batchStageInfo, setBatchStageInfo] = useState<{
+    latestStage: string | null;
+    terminalState: string | null;
+    assetSummary: {
+      success: number;
+      zero_detections: number;
+      oom: number;
+      inference_error: number;
+      prepare_error: number;
+    } | null;
   } | null>(null);
 
   // Undo/Redo stack
@@ -956,7 +970,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     // Box exemplar (Few-Shot) mode - save all exemplars as annotations
     if (annotationMode === 'box-exemplar' && boxExemplars.length > 0) {
       try {
-        const newAnnotations = [];
+        const newAnnotations: ManualAnnotation[] = [];
         for (const exemplar of boxExemplars) {
           const { x1, y1, x2, y2 } = exemplar.box;
           const coordinates: [number, number][] = [
@@ -1323,23 +1337,25 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     setBatchSummary(null);
     setSam3Error(null);
     try {
-      try {
-        visualExemplarCrops = buildVisualExemplarCrops();
-      } catch (cropBuildError) {
-        console.warn(
-          '[Predict] Client-side visual crop extraction failed; using server-side crop build fallback',
-          cropBuildError
-        );
-        visualExemplarCrops = undefined;
-      }
+      if (useVisualCrops) {
+        try {
+          visualExemplarCrops = buildVisualExemplarCrops();
+        } catch (cropBuildError) {
+          console.warn(
+            '[Predict] Client-side visual crop extraction failed; using server-side crop build fallback',
+            cropBuildError
+          );
+          visualExemplarCrops = undefined;
+        }
 
-      if (!visualExemplarCrops || visualExemplarCrops.length === 0) {
-        console.warn('[Predict] No client-side exemplar crops available; using server-side crop build fallback');
-      } else {
-        console.log('[Predict] Built visual exemplar crops on client', {
-          exemplarCount: exemplarsToProcess.length,
-          cropCount: visualExemplarCrops.length,
-        });
+        if (!visualExemplarCrops || visualExemplarCrops.length === 0) {
+          console.warn('[Predict] No client-side exemplar crops available; using server-side crop build fallback');
+        } else {
+          console.log('[Predict] Built visual exemplar crops on client', {
+            exemplarCount: exemplarsToProcess.length,
+            cropCount: visualExemplarCrops.length,
+          });
+        }
       }
 
       const response = await fetch('/api/sam3/predict', {
@@ -1349,8 +1365,8 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
           assetId: session.asset.id,
           boxes: exemplarsToProcess.map(e => e.box),
           textPrompt: selectedClass,
-          useVisualCrops: true,
-          exemplarCrops: visualExemplarCrops,
+          useVisualCrops,
+          exemplarCrops: useVisualCrops ? visualExemplarCrops : undefined,
         }),
       });
 
@@ -1360,7 +1376,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
 
         if (data.success && data.detections && data.detections.length > 0) {
           // Save each detection as an annotation
-          const newAnnotations = [];
+          const newAnnotations: ManualAnnotation[] = [];
           for (const detection of data.detections) {
             if (detection.polygon && detection.polygon.length >= 3) {
               const annotationResponse = await fetch('/api/annotations', {
@@ -1401,7 +1417,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     } finally {
       setBatchProcessing(false);
     }
-  }, [session, boxExemplars, selectedClass, clearBoxExemplars, buildVisualExemplarCrops]);
+  }, [session, boxExemplars, selectedClass, clearBoxExemplars, buildVisualExemplarCrops, useVisualCrops]);
 
   // Apply exemplars to all project images (requires Redis for batch queue)
   const applyToAllImages = useCallback(async () => {
@@ -1470,32 +1486,47 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
 
       const exemplarBoxesForBatch = useVisualCrops
         ? boxExemplars.slice(0, MAX_VISUAL_EXEMPLAR_CROPS).map(e => e.box)
-        : boxExemplars.map(e => e.box);
+        : boxExemplars.slice(0, MAX_BATCH_EXEMPLARS).map(e => e.box);
+      const batchEndpoint = useBatchPipelineV2 ? '/api/sam3/v2/batch' : '/api/sam3/batch';
+      const batchPayload = {
+        projectId: session.asset.project.id,
+        weedType: selectedClass,
+        exemplars: exemplarBoxesForBatch,
+        ...sourceDimensions,
+        sourceAssetId,
+        // No assetIds = process all images in project
+        textPrompt: selectedClass,
+        ...(useBatchPipelineV2
+          ? {
+              mode: useVisualCrops ? 'visual_crop_match' : 'concept_propagation',
+              exemplarCrops: useVisualCrops ? visualExemplarCrops : undefined,
+            }
+          : {
+              useVisualCrops,
+              exemplarCrops: useVisualCrops ? visualExemplarCrops : undefined,
+            }),
+      };
 
-      const response = await fetch('/api/sam3/batch', {
+      const response = await fetch(batchEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectId: session.asset.project.id,
-          weedType: selectedClass,
-          exemplars: exemplarBoxesForBatch,
-          ...sourceDimensions,
-          sourceAssetId,
-          // No assetIds = process all images in project
-          textPrompt: selectedClass,
-          useVisualCrops,
-          exemplarCrops: visualExemplarCrops,
-        }),
+        body: JSON.stringify(batchPayload),
       });
 
       if (response.ok) {
         const data = await response.json();
         setBatchJobId(data.batchJobId);
+        setBatchPollUrl(
+          data.pollUrl || `${useBatchPipelineV2 ? '/api/sam3/v2/batch' : '/api/sam3/batch'}/${data.batchJobId}`
+        );
         setBatchJobStatus({
           status: data.status || 'QUEUED',
           processedImages: data.processedImages || 0,
           totalImages: data.totalImages || 0,
         });
+        setBatchJobError(null);
+        setBatchSummary(null);
+        setBatchStageInfo(null);
       } else {
         let backendMessage = '';
         try {
@@ -1509,7 +1540,10 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
           }
         }
 
-        if (backendMessage.includes('Queue service unavailable')) {
+        if (
+          backendMessage.includes('Queue service unavailable') ||
+          backendMessage.includes('Queue unavailable')
+        ) {
           setSam3Error('Batch processing requires Redis. Use "Apply to This Image" for single-image processing, or contact support to enable batch processing.');
         } else if (backendMessage) {
           setSam3Error(`Failed to start batch processing (${response.status}): ${backendMessage}`);
@@ -1523,10 +1557,10 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     } finally {
       setBatchProcessing(false);
     }
-  }, [session, boxExemplars, selectedClass, useVisualCrops, buildVisualExemplarCrops]);
+  }, [session, boxExemplars, selectedClass, useVisualCrops, useBatchPipelineV2, buildVisualExemplarCrops]);
 
   useEffect(() => {
-    if (!batchJobId) return;
+    if (!batchJobId || !batchPollUrl) return;
 
     const MAX_STATUS_ERRORS = 5;
     let cancelled = false;
@@ -1542,7 +1576,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
 
     const fetchStatus = async () => {
       try {
-        const response = await fetch(`/api/sam3/batch/${batchJobId}?includeAnnotations=false`);
+        const response = await fetch(`${batchPollUrl}?includeAnnotations=false`);
         if (!response.ok) {
           failureCount += 1;
           if (failureCount >= MAX_STATUS_ERRORS) {
@@ -1561,6 +1595,15 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         });
         setBatchJobError(data.batchJob.errorMessage || null);
         setBatchSummary(data.summary || null);
+        setBatchStageInfo(
+          data?.batchJob
+            ? {
+                latestStage: data.batchJob.latestStage || null,
+                terminalState: data.batchJob.terminalState || null,
+                assetSummary: data.batchJob.assetSummary || null,
+              }
+            : null
+        );
 
         if (["COMPLETED", "FAILED", "CANCELLED"].includes(data.batchJob.status)) {
           if (intervalIdRef.current) clearInterval(intervalIdRef.current);
@@ -1581,7 +1624,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       cancelled = true;
       if (intervalIdRef.current) clearInterval(intervalIdRef.current);
     };
-  }, [batchJobId]);
+  }, [batchJobId, batchPollUrl]);
 
   const handleReviewBatch = useCallback(async () => {
     if (!batchJobId || !session?.asset?.project?.id) return;
@@ -2486,6 +2529,18 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
                   {batchSummary.rejected} rejected
                 </div>
               )}
+              {batchStageInfo && (
+                <div className="mt-2 text-xs text-gray-500">
+                  {batchStageInfo.latestStage ? `Stage: ${batchStageInfo.latestStage}` : 'Stage tracking active'}
+                  {batchStageInfo.terminalState ? ` · ${batchStageInfo.terminalState.replace(/_/g, ' ')}` : ''}
+                  {batchStageInfo.assetSummary && (
+                    <div className="mt-1">
+                      {batchStageInfo.assetSummary.success} success · {batchStageInfo.assetSummary.zero_detections} zero detections ·{" "}
+                      {batchStageInfo.assetSummary.oom + batchStageInfo.assetSummary.inference_error + batchStageInfo.assetSummary.prepare_error} failed
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -2533,11 +2588,26 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
                     Use visual crops only (skip concept propagation)
                   </label>
                 </div>
+                <div className="flex items-center gap-2 text-[11px] text-purple-700">
+                  <Checkbox
+                    id="use-batch-pipeline-v2"
+                    checked={useBatchPipelineV2}
+                    onCheckedChange={(checked) => setUseBatchPipelineV2(checked === true)}
+                  />
+                  <label htmlFor="use-batch-pipeline-v2" className="cursor-pointer">
+                    Use cleared SAM3 Pipeline v2
+                  </label>
+                </div>
               </div>
               <p className="text-[10px] text-purple-600 mt-2">
                 {useVisualCrops
-                  ? 'Visual crop matching only (skips concept propagation)'
-                  : 'SAM3 will find similar objects in your images'}
+                  ? 'Visual crop matching only. Faster, but less class-specific.'
+                  : 'Concept propagation enabled. Better for class-specific matching.'}
+              </p>
+              <p className="text-[10px] text-purple-600 mt-1">
+                {useBatchPipelineV2
+                  ? 'V2 uses the queue-only batch worker with explicit stage tracking.'
+                  : 'V1 remains the default path until you opt into v2.'}
               </p>
             </div>
           )}

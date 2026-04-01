@@ -22,10 +22,16 @@ import sharp from 'sharp';
 const AWS_REGION = process.env.SAM3_EC2_REGION || process.env.AWS_REGION || 'ap-southeast-2';
 const SAM3_INSTANCE_ID = process.env.SAM3_EC2_INSTANCE_ID || process.env.SAM3_INSTANCE_ID;
 const SAM3_PORT = process.env.SAM3_EC2_PORT || process.env.SAM3_PORT || '8000';
+const SAM3_CONCEPT_PORT = process.env.SAM3_CONCEPT_PORT || '8002';
+const SAM3_CONCEPT_API_KEY =
+  process.env.SAM3_CONCEPT_API_KEY ||
+  process.env.SAM3_API_KEY ||
+  process.env.NDSD_SAM3_SERVICE_API_KEY;
 const IDLE_TIMEOUT_MS = parseInt(process.env.SAM3_IDLE_TIMEOUT_MS || '3600000'); // 1 hour default
 const MAX_IMAGE_SIZE = 2048;
 const STARTUP_TIMEOUT_MS = 180000; // 3 minutes to start and warm up
 const HEALTH_CHECK_INTERVAL_MS = 5000; // Check every 5 seconds during startup
+const CONCEPT_REQUEST_TIMEOUT_MS = 180000;
 
 // Fun loading messages for the UI
 export const FUN_LOADING_MESSAGES = [
@@ -130,6 +136,54 @@ export interface SAM3PointPredictResponse {
 export interface SAM3PointPredictResult {
   success: boolean;
   response: SAM3PointPredictResponse | null;
+  error?: string;
+  errorCode?: 'NOT_CONFIGURED' | 'NOT_READY' | 'API_ERROR' | 'TIMEOUT' | 'NETWORK_ERROR';
+}
+
+export interface SAM3ConceptBox {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+export interface SAM3ConceptDetection {
+  bbox: [number, number, number, number];
+  confidence: number;
+  similarity: number;
+  polygon?: [number, number][];
+  class_name: string;
+}
+
+export interface SAM3ConceptWarmupResponse {
+  sam3Loaded: boolean;
+  dinoLoaded: boolean;
+}
+
+export interface SAM3ConceptExemplarResponse {
+  exemplarId: string;
+  className: string;
+  numCrops: number;
+  createdAt?: string;
+}
+
+export interface SAM3ConceptApplyOptions {
+  similarityThreshold?: number;
+  topK?: number;
+  minBoxSize?: number;
+  maxBoxSize?: number;
+  nmsThreshold?: number;
+  returnPolygons?: boolean;
+}
+
+export interface SAM3ConceptApplyResponse {
+  detections: SAM3ConceptDetection[];
+  processingTimeMs: number;
+}
+
+export interface SAM3ConceptResult<T> {
+  success: boolean;
+  data: T | null;
   error?: string;
   errorCode?: 'NOT_CONFIGURED' | 'NOT_READY' | 'API_ERROR' | 'TIMEOUT' | 'NETWORK_ERROR';
 }
@@ -1001,6 +1055,324 @@ class AWSSAM3Service {
         success: false,
         response: null,
         error: errorMessage,
+        errorCode: isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR',
+      };
+    }
+  }
+
+  private buildConceptHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (SAM3_CONCEPT_API_KEY) {
+      headers['X-API-Key'] = SAM3_CONCEPT_API_KEY;
+    }
+    return headers;
+  }
+
+  private async getConceptBaseUrl(): Promise<string | null> {
+    if (!this.configured) {
+      return null;
+    }
+
+    if (!this.instanceIp) {
+      await this.discoverInstanceIp();
+    }
+
+    if (!this.instanceIp || this.instanceState === 'stopped' || this.instanceState === 'error') {
+      const started = await this.startInstance();
+      if (!started) {
+        return null;
+      }
+    }
+
+    if (!this.instanceIp) {
+      await this.discoverInstanceIp();
+    }
+
+    return this.instanceIp ? `http://${this.instanceIp}:${SAM3_CONCEPT_PORT}` : null;
+  }
+
+  private async prepareConceptCapacity(): Promise<string | null> {
+    const baseUrl = await this.getConceptBaseUrl();
+    if (!baseUrl) {
+      return null;
+    }
+
+    if (this.modelLoaded) {
+      const unloadResult = await this.unloadModel(30000);
+      if (!unloadResult.success) {
+        console.warn(`[AWS-SAM3] Failed to unload primary model before concept work: ${unloadResult.message}`);
+      }
+    }
+
+    return baseUrl;
+  }
+
+  private scaleConceptBoxesToResized(
+    boxes: SAM3ConceptBox[],
+    scaling: ScalingInfo
+  ): SAM3ConceptBox[] {
+    return boxes.map((box) => ({
+      x1: Math.round(box.x1 * scaling.scaleFactor),
+      y1: Math.round(box.y1 * scaling.scaleFactor),
+      x2: Math.round(box.x2 * scaling.scaleFactor),
+      y2: Math.round(box.y2 * scaling.scaleFactor),
+    }));
+  }
+
+  private scaleConceptDetectionsToOriginal(
+    detections: SAM3ConceptDetection[],
+    scaling: ScalingInfo
+  ): SAM3ConceptDetection[] {
+    if (scaling.scaleFactor === 1) {
+      return detections;
+    }
+
+    const inverseScale = 1 / scaling.scaleFactor;
+    return detections.map((detection) => {
+      const bbox: [number, number, number, number] = [
+        Math.round(detection.bbox[0] * inverseScale),
+        Math.round(detection.bbox[1] * inverseScale),
+        Math.round(detection.bbox[2] * inverseScale),
+        Math.round(detection.bbox[3] * inverseScale),
+      ];
+
+      const polygon = Array.isArray(detection.polygon)
+        ? detection.polygon.map((point) => [
+            Math.round(point[0] * inverseScale),
+            Math.round(point[1] * inverseScale),
+          ]) as [number, number][]
+        : undefined;
+
+      return {
+        ...detection,
+        bbox,
+        polygon,
+      };
+    });
+  }
+
+  async warmupConceptService(): Promise<SAM3ConceptResult<SAM3ConceptWarmupResponse>> {
+    if (!this.configured) {
+      return {
+        success: false,
+        data: null,
+        error: this.configError || 'AWS SAM3 not configured',
+        errorCode: 'NOT_CONFIGURED',
+      };
+    }
+
+    const baseUrl = await this.prepareConceptCapacity();
+    if (!baseUrl) {
+      return {
+        success: false,
+        data: null,
+        error: 'Concept service not ready',
+        errorCode: 'NOT_READY',
+      };
+    }
+
+    try {
+      const response = await fetch(`${baseUrl}/warmup`, {
+        method: 'POST',
+        headers: this.buildConceptHeaders(),
+        signal: AbortSignal.timeout(CONCEPT_REQUEST_TIMEOUT_MS),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error');
+        return {
+          success: false,
+          data: null,
+          error: `Concept warmup failed: ${response.status} ${errorText}`.trim(),
+          errorCode: 'API_ERROR',
+        };
+      }
+
+      const result = await response.json();
+      this.updateActivity();
+      return {
+        success: true,
+        data: {
+          sam3Loaded: Boolean(result.sam3_loaded),
+          dinoLoaded: Boolean(result.dino_loaded),
+        },
+      };
+    } catch (error) {
+      const isTimeout = error instanceof Error && error.name === 'TimeoutError';
+      return {
+        success: false,
+        data: null,
+        error: error instanceof Error ? error.message : 'Concept warmup failed',
+        errorCode: isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR',
+      };
+    }
+  }
+
+  async createConceptExemplar(request: {
+    imageBuffer: Buffer;
+    boxes: SAM3ConceptBox[];
+    className: string;
+    imageId?: string;
+  }): Promise<SAM3ConceptResult<SAM3ConceptExemplarResponse>> {
+    if (!this.configured) {
+      return {
+        success: false,
+        data: null,
+        error: this.configError || 'AWS SAM3 not configured',
+        errorCode: 'NOT_CONFIGURED',
+      };
+    }
+
+    const baseUrl = await this.getConceptBaseUrl();
+    if (!baseUrl) {
+      return {
+        success: false,
+        data: null,
+        error: 'Concept service not ready',
+        errorCode: 'NOT_READY',
+      };
+    }
+
+    try {
+      const { buffer, scaling } = await this.resizeImage(request.imageBuffer);
+      const scaledBoxes = this.scaleConceptBoxesToResized(request.boxes, scaling);
+
+      const response = await fetch(`${baseUrl}/api/v1/exemplars/create`, {
+        method: 'POST',
+        headers: this.buildConceptHeaders(),
+        body: JSON.stringify({
+          image: buffer.toString('base64'),
+          boxes: scaledBoxes,
+          class_name: request.className,
+          image_id: request.imageId,
+        }),
+        signal: AbortSignal.timeout(CONCEPT_REQUEST_TIMEOUT_MS),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error');
+        return {
+          success: false,
+          data: null,
+          error: `Create exemplar failed: ${response.status} ${errorText}`.trim(),
+          errorCode: 'API_ERROR',
+        };
+      }
+
+      const result = await response.json();
+      this.updateActivity();
+      return {
+        success: true,
+        data: {
+          exemplarId: String(result.exemplar_id),
+          className: String(result.class_name || request.className),
+          numCrops: Number(result.num_crops || request.boxes.length),
+          createdAt: typeof result.created_at === 'string' ? result.created_at : undefined,
+        },
+      };
+    } catch (error) {
+      const isTimeout = error instanceof Error && error.name === 'TimeoutError';
+      return {
+        success: false,
+        data: null,
+        error: error instanceof Error ? error.message : 'Create exemplar failed',
+        errorCode: isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR',
+      };
+    }
+  }
+
+  async applyConceptExemplar(request: {
+    exemplarId: string;
+    imageBuffer: Buffer;
+    imageId?: string;
+    options?: SAM3ConceptApplyOptions;
+  }): Promise<SAM3ConceptResult<SAM3ConceptApplyResponse>> {
+    if (!this.configured) {
+      return {
+        success: false,
+        data: null,
+        error: this.configError || 'AWS SAM3 not configured',
+        errorCode: 'NOT_CONFIGURED',
+      };
+    }
+
+    const baseUrl = await this.getConceptBaseUrl();
+    if (!baseUrl) {
+      return {
+        success: false,
+        data: null,
+        error: 'Concept service not ready',
+        errorCode: 'NOT_READY',
+      };
+    }
+
+    try {
+      const { buffer, scaling } = await this.resizeImage(request.imageBuffer);
+      const payload: Record<string, unknown> = {
+        exemplar_id: request.exemplarId,
+        images: [buffer.toString('base64')],
+        return_polygons: request.options?.returnPolygons ?? true,
+      };
+
+      if (request.imageId) {
+        payload.image_ids = [request.imageId];
+      }
+      if (request.options?.similarityThreshold != null) {
+        payload.similarity_threshold = request.options.similarityThreshold;
+      }
+      if (request.options?.topK != null) {
+        payload.top_k = request.options.topK;
+      }
+      if (request.options?.minBoxSize != null) {
+        payload.min_box_size = request.options.minBoxSize;
+      }
+      if (request.options?.maxBoxSize != null) {
+        payload.max_box_size = request.options.maxBoxSize;
+      }
+      if (request.options?.nmsThreshold != null) {
+        payload.nms_threshold = request.options.nmsThreshold;
+      }
+
+      const response = await fetch(`${baseUrl}/api/v1/exemplars/apply`, {
+        method: 'POST',
+        headers: this.buildConceptHeaders(),
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(CONCEPT_REQUEST_TIMEOUT_MS),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error');
+        return {
+          success: false,
+          data: null,
+          error: `Apply exemplar failed: ${response.status} ${errorText}`.trim(),
+          errorCode: 'API_ERROR',
+        };
+      }
+
+      const result = await response.json();
+      const resultItem = Array.isArray(result.results) ? result.results[0] : null;
+      const detections = Array.isArray(resultItem?.detections)
+        ? this.scaleConceptDetectionsToOriginal(
+            resultItem.detections as SAM3ConceptDetection[],
+            scaling
+          )
+        : [];
+
+      this.updateActivity();
+      return {
+        success: true,
+        data: {
+          detections,
+          processingTimeMs: Number(result.processing_time_ms || 0),
+        },
+      };
+    } catch (error) {
+      const isTimeout = error instanceof Error && error.name === 'TimeoutError';
+      return {
+        success: false,
+        data: null,
+        error: error instanceof Error ? error.message : 'Apply exemplar failed',
         errorCode: isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR',
       };
     }

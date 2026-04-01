@@ -1,0 +1,4 @@
+ALTER TABLE `BatchJob`
+  ADD COLUMN `version` INTEGER NULL,
+  ADD COLUMN `mode` VARCHAR(191) NULL,
+  ADD COLUMN `stageLog` JSON NULL;

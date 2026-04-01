@@ -18,6 +18,14 @@ module.exports = {
       },
     },
     {
+      name: "worker-v2",
+      script: "npm",
+      args: "run worker:v2",
+      env: {
+        NODE_ENV: "production",
+      },
+    },
+    {
       name: "inference-worker",
       script: "npm",
       args: "run worker:inference",

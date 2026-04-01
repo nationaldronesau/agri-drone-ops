@@ -1,5 +1,19 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const playwrightPort = process.env.PLAYWRIGHT_PORT || process.env.PORT || '3000';
+const playwrightBaseUrl =
+  process.env.PLAYWRIGHT_BASE_URL || `http://localhost:${playwrightPort}`;
+const disablePlaywrightWebServer = process.env.PLAYWRIGHT_NO_WEBSERVER === 'true';
+const webServerEnv = [
+  'DISABLE_AUTH=true',
+  `NEXTAUTH_SECRET=${process.env.NEXTAUTH_SECRET || 'playwright-test-secret'}`,
+  `PORT=${playwrightPort}`,
+];
+
+if (process.env.WATCHPACK_POLLING) {
+  webServerEnv.push(`WATCHPACK_POLLING=${process.env.WATCHPACK_POLLING}`);
+}
+
 /**
  * Playwright E2E Test Configuration for AgriDrone Ops
  *
@@ -31,7 +45,7 @@ export default defineConfig({
   // Shared settings for all projects
   use: {
     // Base URL for the application
-    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000',
+    baseURL: playwrightBaseUrl,
 
     // Collect trace when retrying the failed test
     trace: 'on-first-retry',
@@ -61,12 +75,14 @@ export default defineConfig({
   ],
 
   // Run local dev server before starting the tests
-  webServer: {
-    command: 'DISABLE_AUTH=true npm run dev',
-    url: 'http://localhost:3000',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120 * 1000, // 2 minutes to start
-  },
+  webServer: disablePlaywrightWebServer
+    ? undefined
+    : {
+        command: `${webServerEnv.join(' ')} npm run dev`,
+        url: playwrightBaseUrl,
+        reuseExistingServer: !process.env.CI,
+        timeout: 120 * 1000, // 2 minutes to start
+      },
 
   // Global timeout for each test
   timeout: 60 * 1000, // 60 seconds

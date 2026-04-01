@@ -28,6 +28,11 @@ function parseJsonObject(value: string | null | undefined) {
   }
 }
 
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry) => typeof entry === 'string') as string[];
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -69,7 +74,31 @@ export async function POST(
       splits,
       filters,
       classes,
+      reviewSessionId,
     } = body || {};
+
+    let scopedAssetIds: string[] | undefined;
+    if (typeof reviewSessionId === 'string' && reviewSessionId) {
+      const reviewSession = await prisma.reviewSession.findFirst({
+        where: {
+          id: reviewSessionId,
+          projectId,
+          teamId: project.teamId,
+        },
+        select: {
+          assetIds: true,
+        },
+      });
+
+      if (!reviewSession) {
+        return NextResponse.json({ error: 'Review session not found for project' }, { status: 400 });
+      }
+
+      scopedAssetIds = toStringArray(reviewSession.assetIds);
+      if (scopedAssetIds.length === 0) {
+        return NextResponse.json({ error: 'Review session has no assets' }, { status: 400 });
+      }
+    }
 
     if (splits) {
       const total = (splits.train ?? 0) + (splits.val ?? 0) + (splits.test ?? 0);
@@ -89,7 +118,12 @@ export async function POST(
       preprocessing,
       augmentation,
       splits,
-      filters,
+      filters: {
+        ...(filters || {}),
+        ...(typeof reviewSessionId === 'string' && reviewSessionId ? { reviewSessionId } : {}),
+      },
+      assetIds: scopedAssetIds,
+      reviewSessionId: typeof reviewSessionId === 'string' ? reviewSessionId : undefined,
     });
 
     const dataset = result.dataset;

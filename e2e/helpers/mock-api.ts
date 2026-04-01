@@ -1211,6 +1211,71 @@ export async function setupMockApi(page: Page, options: MockApiOptions = {}) {
     // SAM3
     // -------------------------------
     if (path === "/api/sam3/batch/all") return json(route, { batchJobs: [] });
+    if (path === "/api/sam3/v2/batch" && method === "POST") {
+      const payload = safeReadJson<{
+        mode?: "visual_crop_match" | "concept_propagation";
+      }>(request);
+      return json(route, {
+        success: true,
+        batchJobId: "batch-v2-1",
+        version: 2,
+        mode: payload?.mode || "visual_crop_match",
+        status: "QUEUED",
+        totalImages: state.assets.length,
+        pollUrl: "/api/sam3/v2/batch/batch-v2-1",
+      });
+    }
+    if (path === "/api/sam3/v2/batch/batch-v2-1") {
+      return json(route, {
+        success: true,
+        batchJob: {
+          id: "batch-v2-1",
+          projectId: "proj-1",
+          projectName: "North Farm Survey",
+          weedType: "Lantana",
+          version: 2,
+          mode: "visual_crop_match",
+          status: "COMPLETED",
+          totalImages: 2,
+          processedImages: 2,
+          detectionsFound: 3,
+          errorMessage: "1 oom",
+          stageLog: [
+            {
+              stage: "prepare",
+              status: "completed",
+              timestamp: "2026-03-31T00:00:00.000Z",
+            },
+            {
+              stage: "terminal",
+              status: "completed",
+              terminalState: "completed_partial",
+              timestamp: "2026-03-31T00:00:01.000Z",
+            },
+          ],
+          latestStage: "terminal",
+          terminalState: "completed_partial",
+          assetSummary: {
+            success: 1,
+            zero_detections: 0,
+            oom: 1,
+            inference_error: 0,
+            prepare_error: 0,
+          },
+          createdAt: "2026-03-31T00:00:00.000Z",
+          startedAt: "2026-03-31T00:00:00.000Z",
+          completedAt: "2026-03-31T00:00:01.000Z",
+          completedWithWarnings: true,
+        },
+        summary: {
+          total: 3,
+          pending: 3,
+          accepted: 0,
+          rejected: 0,
+        },
+        annotations: [],
+      });
+    }
     if (path === "/api/sam3/start") return json(route, { success: true, ready: true, starting: false });
     if (path === "/api/sam3/status") {
       return json(route, {
