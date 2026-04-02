@@ -160,6 +160,25 @@ interface AwsSam3Like {
     error?: string;
     errorCode?: string;
   }>;
+  segment(request: {
+    image: string;
+    boxes: Array<{ x1: number; y1: number; x2: number; y2: number }>;
+    className: string;
+    minSize?: number;
+    maxSize?: number | null;
+  }): Promise<{
+    success: boolean;
+    response: {
+      detections: Array<{
+        bbox: [number, number, number, number];
+        confidence: number;
+        polygon?: [number, number][];
+      }>;
+      count: number;
+    } | null;
+    error?: string;
+    errorCode?: string;
+  }>;
   warmupConceptService(): Promise<{ success: boolean; data: { sam3Loaded: boolean; dinoLoaded: boolean } | null; error?: string }>;
   createConceptExemplar(request: {
     imageBuffer: Buffer;
@@ -202,6 +221,8 @@ interface PreparedBatchContext {
   sourceAssetId: string;
   sourceImageBuffer: Buffer;
   exemplars: BoxCoordinate[];
+  exemplarSourceWidth?: number;
+  exemplarSourceHeight?: number;
   exemplarCrops: string[];
   assets: AssetRecord[];
   missingAssetIds: string[];
@@ -425,6 +446,43 @@ function normalizePolygon(
     [bbox[2], bbox[3]],
     [bbox[0], bbox[3]],
   ];
+}
+
+function scaleBboxToOriginal(
+  bbox: [number, number, number, number],
+  scaleFactor: number
+): [number, number, number, number] {
+  if (scaleFactor === 1) {
+    return bbox;
+  }
+
+  const inverseScale = 1 / scaleFactor;
+  return [
+    Math.round(bbox[0] * inverseScale),
+    Math.round(bbox[1] * inverseScale),
+    Math.round(bbox[2] * inverseScale),
+    Math.round(bbox[3] * inverseScale),
+  ];
+}
+
+function scalePolygonToOriginal(
+  polygon: [number, number][] | undefined,
+  bbox: [number, number, number, number],
+  scaleFactor: number
+): [number, number][] {
+  if (!Array.isArray(polygon) || polygon.length < 3) {
+    return normalizePolygon(undefined, bbox);
+  }
+
+  if (scaleFactor === 1) {
+    return normalizePolygon(polygon, bbox);
+  }
+
+  const inverseScale = 1 / scaleFactor;
+  return polygon.map((point) => [
+    Math.round(point[0] * inverseScale),
+    Math.round(point[1] * inverseScale),
+  ] as [number, number]);
 }
 
 export class Sam3BatchV2Service {
@@ -753,6 +811,8 @@ export class Sam3BatchV2Service {
       sourceAssetId,
       sourceImageBuffer,
       exemplars: data.exemplars,
+      exemplarSourceWidth: data.exemplarSourceWidth,
+      exemplarSourceHeight: data.exemplarSourceHeight,
       exemplarCrops,
       assets: orderedAssets,
       missingAssetIds,
@@ -995,6 +1055,8 @@ export class Sam3BatchV2Service {
     });
 
     let conceptExemplarId: string | null = null;
+    let visualMatchExemplarId: string | null = null;
+    let visualMatchInitialized = false;
     if (prepared.mode === 'concept_propagation') {
       const warmup = await this.awsSam3Service.warmupConceptService();
       if (!warmup.success) {
@@ -1028,6 +1090,12 @@ export class Sam3BatchV2Service {
       });
     }
 
+    const assetsToProcess = [...prepared.assets].sort((left, right) => {
+      if (left.id === prepared.sourceAssetId) return -1;
+      if (right.id === prepared.sourceAssetId) return 1;
+      return 0;
+    });
+
     for (const missingAssetId of prepared.missingAssetIds) {
       const result: AssetInferenceResult = {
         assetId: missingAssetId,
@@ -1052,15 +1120,29 @@ export class Sam3BatchV2Service {
       );
     }
 
-    for (const asset of prepared.assets) {
+    for (const asset of assetsToProcess) {
       const runStartedAt = this.now().getTime();
       let result: AssetInferenceResult;
 
       try {
         const imageBuffer = await fetchAssetImage(asset);
+        const isSourceAsset = asset.id === prepared.sourceAssetId;
 
         if (prepared.mode === 'visual_crop_match') {
-          result = await this.runVisualCropMatch(asset, imageBuffer, prepared);
+          if (isSourceAsset) {
+            result = await this.runSourceBoxMatch(asset, imageBuffer, prepared);
+          } else {
+            if (!visualMatchInitialized) {
+              visualMatchExemplarId = await this.initializeVisualMatchExemplar(prepared);
+              visualMatchInitialized = true;
+            }
+
+            if (visualMatchExemplarId) {
+              result = await this.runVisualConceptMatch(asset, imageBuffer, visualMatchExemplarId);
+            } else {
+              result = await this.runVisualCropMatch(asset, imageBuffer, prepared);
+            }
+          }
         } else {
           result = await this.runConceptPropagation(asset, imageBuffer, conceptExemplarId, prepared.weedType);
         }
@@ -1127,6 +1209,91 @@ export class Sam3BatchV2Service {
     return results;
   }
 
+  private async initializeVisualMatchExemplar(
+    prepared: PreparedBatchContext
+  ): Promise<string | null> {
+    const warmup = await this.awsSam3Service.warmupConceptService();
+    if (!warmup.success) {
+      return null;
+    }
+
+    const exemplarResult = await this.awsSam3Service.createConceptExemplar({
+      imageBuffer: prepared.sourceImageBuffer,
+      boxes: prepared.exemplars,
+      className: prepared.textPrompt,
+      imageId: prepared.sourceAssetId,
+    });
+
+    if (!exemplarResult.success || !exemplarResult.data?.exemplarId) {
+      return null;
+    }
+
+    return exemplarResult.data.exemplarId;
+  }
+
+  private async runSourceBoxMatch(
+    asset: AssetRecord,
+    imageBuffer: Buffer,
+    prepared: PreparedBatchContext
+  ): Promise<AssetInferenceResult> {
+    const scaledBoxes = scaleExemplarBoxes({
+      exemplars: prepared.exemplars,
+      sourceWidth: prepared.exemplarSourceWidth,
+      sourceHeight: prepared.exemplarSourceHeight,
+      targetWidth: asset.imageWidth || prepared.exemplarSourceWidth || 0,
+      targetHeight: asset.imageHeight || prepared.exemplarSourceHeight || 0,
+      jobId: prepared.batchJobId,
+      assetId: asset.id,
+    });
+
+    if (scaledBoxes.boxes.length === 0) {
+      return {
+        assetId: asset.id,
+        detections: [],
+        outcome: 'prepare_error',
+        errorCode: 'INVALID_EXEMPLAR_BOXES',
+        errorMessage: 'Source exemplar boxes could not be scaled for the source asset.',
+      };
+    }
+
+    const resized = await this.awsSam3Service.resizeImage(imageBuffer);
+    const result = await this.awsSam3Service.segment({
+      image: resized.buffer.toString('base64'),
+      boxes: scaledBoxes.boxes.map((box) => ({
+        x1: Math.round(box.x1 * resized.scaling.scaleFactor),
+        y1: Math.round(box.y1 * resized.scaling.scaleFactor),
+        x2: Math.round(box.x2 * resized.scaling.scaleFactor),
+        y2: Math.round(box.y2 * resized.scaling.scaleFactor),
+      })),
+      className: prepared.textPrompt,
+    });
+
+    if (!result.success || !result.response) {
+      return {
+        assetId: asset.id,
+        detections: [],
+        outcome: classifyInferenceFailure(result.errorCode, result.error),
+        errorCode: result.errorCode || 'SAM3_SOURCE_MATCH_FAILED',
+        errorMessage: result.error || 'SAM3 source-image box matching failed.',
+      };
+    }
+
+    const detections = result.response.detections.map((detection) => {
+      const bbox = scaleBboxToOriginal(detection.bbox, resized.scaling.scaleFactor);
+      return {
+        bbox,
+        polygon: scalePolygonToOriginal(detection.polygon, bbox, resized.scaling.scaleFactor),
+        confidence: detection.confidence,
+      };
+    });
+
+    return {
+      assetId: asset.id,
+      detections,
+      outcome: detections.length > 0 ? 'success' : 'zero_detections',
+    };
+  }
+
   private async runVisualCropMatch(
     asset: AssetRecord,
     imageBuffer: Buffer,
@@ -1149,10 +1316,49 @@ export class Sam3BatchV2Service {
       };
     }
 
-    const detections = result.response.detections.map((detection) => ({
+    const detections = result.response.detections.map((detection) => {
+      const bbox = scaleBboxToOriginal(detection.bbox, resized.scaling.scaleFactor);
+      return {
+        bbox,
+        polygon: scalePolygonToOriginal(detection.polygon, bbox, resized.scaling.scaleFactor),
+        confidence: detection.confidence,
+      };
+    });
+
+    return {
+      assetId: asset.id,
+      detections,
+      outcome: detections.length > 0 ? 'success' : 'zero_detections',
+    };
+  }
+
+  private async runVisualConceptMatch(
+    asset: AssetRecord,
+    imageBuffer: Buffer,
+    exemplarId: string
+  ): Promise<AssetInferenceResult> {
+    const result = await this.awsSam3Service.applyConceptExemplar({
+      exemplarId,
+      imageBuffer,
+      imageId: asset.id,
+      options: { returnPolygons: true },
+    });
+
+    if (!result.success || !result.data) {
+      return {
+        assetId: asset.id,
+        detections: [],
+        outcome: classifyInferenceFailure(result.errorCode, result.error),
+        errorCode: result.errorCode || 'VISUAL_MATCH_EXEMPLAR_FAILED',
+        errorMessage: result.error || 'Visual example matching failed.',
+      };
+    }
+
+    const detections = result.data.detections.map((detection) => ({
       bbox: detection.bbox,
       polygon: normalizePolygon(detection.polygon, detection.bbox),
       confidence: detection.confidence,
+      similarity: detection.similarity,
     }));
 
     return {
