@@ -47,19 +47,25 @@ export function InteractiveDetectionOverlay({
   const currentPanOffset = panOffset ?? internalPanOffset;
   const setPanOffset = onPanOffsetChange ?? setInternalPanOffset;
 
-  // Update container size on resize
+  // Update container size on resize or when image dimensions change
   useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
     const updateSize = () => {
-      if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
-        setContainerSize({ width: rect.width, height: rect.height });
-      }
+      const rect = el.getBoundingClientRect();
+      setContainerSize({ width: rect.width, height: rect.height });
     };
 
     updateSize();
-    window.addEventListener('resize', updateSize);
-    return () => window.removeEventListener('resize', updateSize);
-  }, [imageLoaded]);
+
+    // Use ResizeObserver to catch all container size changes
+    // (aspect ratio changes, parent layout shifts, sidebar toggles)
+    const observer = new ResizeObserver(() => updateSize());
+    observer.observe(el);
+
+    return () => observer.disconnect();
+  }, [imageLoaded, actualImageSize.width, actualImageSize.height]);
 
   // Handle keyboard shortcuts
   useEffect(() => {
@@ -182,9 +188,10 @@ export function InteractiveDetectionOverlay({
         {/* SVG Overlay for Detections */}
         {imageLoaded && containerSize.width > 0 && (
           <svg
-            className={`absolute inset-0 w-full h-full ${isPanning ? 'pointer-events-none' : 'pointer-events-auto'}`}
-            viewBox={`0 0 ${scaledWidth} ${scaledHeight}`}
-            preserveAspectRatio="xMidYMid meet"
+            className={`absolute top-0 left-0 ${isPanning ? 'pointer-events-none' : 'pointer-events-auto'}`}
+            width={renderWidth}
+            height={renderHeight}
+            viewBox={`0 0 ${renderWidth} ${renderHeight}`}
           >
             {detections.map((detection) => {
               const box = scaleBox(detection.bbox);
