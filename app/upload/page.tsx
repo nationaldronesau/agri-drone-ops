@@ -396,6 +396,29 @@ function UploadPageContent() {
                     </div>
                   </div>
 
+                  {uploadResponse.roboflowDetection?.started && (
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+                      Background AI detection has been queued for{" "}
+                      {uploadResponse.roboflowDetection.totalImages?.toLocaleString() || 0}{" "}
+                      images.
+                      {uploadResponse.roboflowDetection.skippedImages
+                        ? ` ${uploadResponse.roboflowDetection.skippedImages.toLocaleString()} images were skipped because they are missing GPS coordinates or image dimensions.`
+                        : ""}
+                      {uploadResponse.roboflowDetection.jobId
+                        ? ` Job ID: ${uploadResponse.roboflowDetection.jobId}.`
+                        : ""}
+                    </div>
+                  )}
+
+                  {uploadResponse.roboflowDetection &&
+                    !uploadResponse.roboflowDetection.started &&
+                    uploadResponse.roboflowDetection.error && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                        Uploads completed, but background AI detection did not start:{" "}
+                        {uploadResponse.roboflowDetection.error}
+                      </div>
+                    )}
+
                   {/* Next Steps */}
                   <section className="rounded-lg border-2 border-green-300 bg-gradient-to-r from-green-50 to-blue-50 p-6">
                     <h3 className="mb-4 text-lg font-semibold text-gray-800">
