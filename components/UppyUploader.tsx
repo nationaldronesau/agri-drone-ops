@@ -22,12 +22,31 @@ export interface ProcessedUploadFile {
   detections?: Array<Record<string, unknown>>;
   success?: boolean;
   warning?: string | null;
+  warnings?: string[];
   error?: string;
+}
+
+export interface QueuedDetectionSummary {
+  started: boolean;
+  status?: string;
+  jobId?: string;
+  totalImages?: number;
+  skippedImages?: number;
+  error?: string;
+  source?: string;
 }
 
 export interface UploadApiResponse {
   message: string;
   files: ProcessedUploadFile[];
+  summary?: {
+    successful: number;
+    failed: number;
+    withWarnings: number;
+    warningTypes: string[];
+  };
+  autoInference?: Record<string, unknown>;
+  roboflowDetection?: QueuedDetectionSummary;
 }
 
 type CreateMultipartResponse = {
@@ -45,6 +64,54 @@ interface DynamicModel {
   version: number;
   endpoint: string;
   classes: string[];
+}
+
+interface UploadFinalizeFile {
+  url: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  key?: string;
+  bucket?: string;
+}
+
+const FINALIZATION_CHUNK_SIZE = 50;
+const BULK_DETECTION_FILE_COUNT_THRESHOLD = 75;
+const BULK_DETECTION_TOTAL_BYTES_THRESHOLD = 1 * 1024 * 1024 * 1024;
+const MAX_TOTAL_UPLOAD_SIZE = 250 * 1024 * 1024 * 1024;
+
+function chunkArray<T>(items: T[], chunkSize: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
+  }
+  return chunks;
+}
+
+function buildUploadSummary(files: ProcessedUploadFile[]) {
+  const successful = files.filter((file) => file.success !== false).length;
+  const failed = files.filter((file) => file.success === false).length;
+  const withWarnings = files.filter(
+    (file) =>
+      file.success !== false &&
+      ((file.warnings && file.warnings.length > 0) || file.warning)
+  ).length;
+  const warningTypes = [
+    ...new Set(
+      files.flatMap((file) => {
+        const warnings = [...(file.warnings || [])];
+        if (file.warning) warnings.push(file.warning);
+        return warnings;
+      })
+    ),
+  ];
+
+  return {
+    successful,
+    failed,
+    withWarnings,
+    warningTypes,
+  };
 }
 
 interface UppyUploaderProps {
@@ -127,7 +194,7 @@ export function UppyUploader({
       allowMultipleUploadBatches: true,
       restrictions: {
         allowedFileTypes: ["image/*"],
-        maxTotalFileSize: 5 * 1024 * 1024 * 1024, // 5GB bucketed limit
+        maxTotalFileSize: MAX_TOTAL_UPLOAD_SIZE,
       },
       locale: {
         strings: {
@@ -143,7 +210,7 @@ export function UppyUploader({
       showProgressDetails: true,
       proudlyDisplayPoweredByUppy: false,
       hideProgressAfterFinish: true,
-      note: "Images up to 500MB each. GPS metadata recommended for detections.",
+      note: "Large upload batches are supported. Background detection is used automatically for big runs.",
     });
 
     uppy.use(AwsS3, {
@@ -265,6 +332,9 @@ export function UppyUploader({
     });
 
     uppy.on("upload-progress", (file, progress) => {
+      if (!file) {
+        return;
+      }
       console.debug(
         `[Uppy] upload-progress ${file.name}: ${progress.bytesUploaded}/${progress.bytesTotal}`,
       );
@@ -282,7 +352,8 @@ export function UppyUploader({
         return;
       }
 
-      if (result.successful.length === 0) {
+      const successfulFiles = result.successful ?? [];
+      if (successfulFiles.length === 0) {
         return;
       }
 
@@ -293,7 +364,7 @@ export function UppyUploader({
         return;
       }
 
-      const filesPayload = result.successful
+      const filesPayload = successfulFiles
         .map((file) => {
           const awsMeta = (file.meta?.awsMultipart || {}) as {
             key?: string;
@@ -321,7 +392,7 @@ export function UppyUploader({
           return {
             url: uploadUrl,
             name: file.name,
-            size: file.size,
+            size: typeof file.size === "number" ? file.size : 0,
             mimeType:
               file.type ||
               (file.data instanceof File ? file.data.type : undefined) ||
@@ -330,7 +401,7 @@ export function UppyUploader({
             bucket: responseBody?.bucket || awsMeta.bucket,
           };
         })
-        .filter((file): file is NonNullable<typeof file> => Boolean(file));
+        .filter((file): file is NonNullable<typeof file> => Boolean(file)) as UploadFinalizeFile[];
 
       if (filesPayload.length === 0) {
         uppy.info("No files with valid upload URLs to process.", "error", 5000);
@@ -341,31 +412,120 @@ export function UppyUploader({
       callbacksRef.current.onProcessingStart?.();
 
       try {
-        const response = await fetch("/api/upload", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            files: filesPayload,
-            projectId: settings.projectId,
-            runDetection: settings.runDetection,
-            detectionModels: settings.detectionModels?.join(",") || "",
-            dynamicModels: settings.dynamicModels || [],
-            flightSession: settings.flightSession || undefined,
-            cameraFov: settings.cameraFov,
-            cameraProfileId: settings.cameraProfileId,
-          }),
-        });
+        const totalBytes = filesPayload.reduce(
+          (sum, file) => sum + (file.size || 0),
+          0
+        );
+        const useQueuedRoboflowDetection =
+          settings.runDetection &&
+          (filesPayload.length >= BULK_DETECTION_FILE_COUNT_THRESHOLD ||
+            totalBytes >= BULK_DETECTION_TOTAL_BYTES_THRESHOLD);
 
-        if (!response.ok) {
-          const errorBody = await response.json().catch(() => ({}));
-          const message =
-            errorBody?.error ||
-            errorBody?.details ||
-            "Failed to process uploaded files.";
-          throw new Error(message);
+        const chunkedFiles = chunkArray(filesPayload, FINALIZATION_CHUNK_SIZE);
+        const chunkResponses: UploadApiResponse[] = [];
+
+        for (const [index, chunk] of chunkedFiles.entries()) {
+          uppy.info(
+            `Processing upload batch ${index + 1} of ${chunkedFiles.length}...`,
+            "info",
+            2000
+          );
+
+          const response = await fetch("/api/upload", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              files: chunk,
+              projectId: settings.projectId,
+              runDetection: useQueuedRoboflowDetection ? false : settings.runDetection,
+              detectionModels: settings.detectionModels?.join(",") || "",
+              dynamicModels: settings.dynamicModels || [],
+              flightSession: settings.flightSession || undefined,
+              cameraFov: settings.cameraFov,
+              cameraProfileId: settings.cameraProfileId,
+              disableAutoInference: useQueuedRoboflowDetection,
+            }),
+          });
+
+          if (!response.ok) {
+            const errorBody = await response.json().catch(() => ({}));
+            const message =
+              errorBody?.error ||
+              errorBody?.details ||
+              "Failed to process uploaded files.";
+            throw new Error(message);
+          }
+
+          chunkResponses.push((await response.json()) as UploadApiResponse);
         }
 
-        const payload = (await response.json()) as UploadApiResponse;
+        const aggregatedFiles = chunkResponses.flatMap(
+          (chunkResponse) => chunkResponse.files || []
+        );
+        const payload: UploadApiResponse = {
+          message: `Processed ${aggregatedFiles.filter((file) => file.success !== false).length} of ${aggregatedFiles.length} files`,
+          files: aggregatedFiles,
+          summary: buildUploadSummary(aggregatedFiles),
+          autoInference:
+            chunkResponses.find((chunkResponse) => chunkResponse.autoInference)
+              ?.autoInference || undefined,
+        };
+
+        if (useQueuedRoboflowDetection) {
+          const successfulAssetIds = [
+            ...new Set(
+              aggregatedFiles
+                .filter(
+                  (file): file is ProcessedUploadFile & { id: string } =>
+                    file.success !== false && Boolean(file.id)
+                )
+                .map((file) => file.id)
+            ),
+          ];
+
+          if (successfulAssetIds.length > 0) {
+            const detectionResponse = await fetch("/api/roboflow/detection/run", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                projectId: settings.projectId,
+                assetIds: successfulAssetIds,
+                detectionModels: settings.detectionModels || [],
+                dynamicModels: settings.dynamicModels || [],
+              }),
+            });
+
+            if (!detectionResponse.ok) {
+              const errorBody = await detectionResponse.json().catch(() => ({}));
+              payload.roboflowDetection = {
+                started: false,
+                error:
+                  errorBody?.error ||
+                  "Uploads completed, but background Roboflow detection could not be started.",
+                totalImages: successfulAssetIds.length,
+                source: "roboflow_batch_detection",
+              };
+            } else {
+              const detectionPayload = (await detectionResponse.json()) as {
+                jobId: string;
+                totalImages: number;
+                skippedImages: number;
+                status: string;
+                source: string;
+              };
+
+              payload.roboflowDetection = {
+                started: true,
+                status: detectionPayload.status,
+                jobId: detectionPayload.jobId,
+                totalImages: detectionPayload.totalImages,
+                skippedImages: detectionPayload.skippedImages,
+                source: detectionPayload.source,
+              };
+            }
+          }
+        }
+
         callbacksRef.current.onProcessingComplete?.(payload);
         uppy.clear();
       } catch (error) {

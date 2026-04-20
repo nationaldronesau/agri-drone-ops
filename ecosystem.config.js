@@ -33,5 +33,13 @@ module.exports = {
         NODE_ENV: "production",
       },
     },
+    {
+      name: "roboflow-detection-worker",
+      script: "npm",
+      args: "run worker:roboflow-detection",
+      env: {
+        NODE_ENV: "production",
+      },
+    },
   ],
 };

@@ -50,6 +50,7 @@ const requestSchema = z.object({
   flightSession: z.string().optional(),
   cameraFov: z.number().min(1).max(180).optional(),
   cameraProfileId: z.string().optional(),
+  disableAutoInference: z.boolean().optional().default(false),
 });
 
 const AUTO_INFERENCE_CONFIDENCE = 0.25;
@@ -92,7 +93,6 @@ interface UploadResult {
   id?: string;
   bucket?: string | null;
   s3Key?: string | null;
-  metadata?: unknown;
   gpsLatitude?: number | null;
   gpsLongitude?: number | null;
   altitude?: number | null;
@@ -161,6 +161,7 @@ export async function POST(request: NextRequest) {
       flightSession,
       cameraFov,
       cameraProfileId,
+      disableAutoInference,
     } = parsed.data;
 
     // Verify user is authenticated AND has access to the project
@@ -774,7 +775,6 @@ export async function POST(request: NextRequest) {
           bucket,
           s3Key: key,
           size: file.size,
-          metadata: fullMetadata,
           gpsLatitude: extractedData.gpsLatitude,
           gpsLongitude: extractedData.gpsLongitude,
           altitude: extractedData.altitude,
@@ -858,6 +858,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (
+      !disableAutoInference &&
       projectSettings.autoInferenceEnabled &&
       projectSettings.activeModelId &&
       autoInferenceAssetIds.length > 0
