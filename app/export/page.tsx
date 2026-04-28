@@ -86,8 +86,8 @@ export default function ExportPage() {
     if (includeAI) {
       try {
         const aiUrl = selectedProject !== "all"
-          ? `/api/detections?projectId=${selectedProject}&all=true`
-          : '/api/detections?all=true';
+          ? `/api/detections?projectId=${selectedProject}&all=true&reviewedOnly=true`
+          : '/api/detections?all=true&reviewedOnly=true';
         const aiResponse = await fetch(aiUrl);
         const aiData = await aiResponse.json().catch(() => ({}));
         if (!aiResponse.ok) {
@@ -237,8 +237,8 @@ export default function ExportPage() {
             <CardHeader>
               <CardTitle className="text-2xl">Export Detection Data</CardTitle>
               <CardDescription>
-                Export weed detection coordinates for spray drone operations. 
-                Choose your format and filter the data as needed.
+                Export approved weed detection coordinates for spray drone operations.
+                Pending and rejected review items are excluded from operational exports.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
@@ -403,7 +403,7 @@ export default function ExportPage() {
                       onCheckedChange={(checked) => setIncludeSam3(checked as boolean)}
                     />
                     <Label htmlFor="includeSam3" className="cursor-not-allowed text-gray-400">
-                      Include SAM3 Pending Annotations (disabled)
+                      Include unreviewed SAM3 annotations (disabled for spray safety)
                     </Label>
                   </div>
                 </div>
@@ -430,7 +430,7 @@ export default function ExportPage() {
               <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
                 <h4 className="font-semibold text-blue-900 mb-2">Export Summary</h4>
                 <div className="space-y-1 text-sm text-blue-800">
-                  <p>• {filteredDetections.length} detections will be exported</p>
+                  <p>• {filteredDetections.length} approved detections will be exported</p>
                   <p>• AI Detections: {filteredDetections.filter(d => d.type === 'ai').length}</p>
                   <p>• Manual Annotations: {filteredDetections.filter(d => d.type === 'manual').length}</p>
                   {sam3Count > 0 && <p>• SAM3 Pending: {sam3Count}</p>}

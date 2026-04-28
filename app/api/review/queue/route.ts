@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { getAuthenticatedUser, getUserTeamIds } from "@/lib/auth/api-auth";
+import { getReviewItemSummaries } from "@/lib/services/review-summary";
 
 export async function GET(request: NextRequest) {
   try {
@@ -46,7 +47,24 @@ export async function GET(request: NextRequest) {
       take: limit,
     });
 
-    return NextResponse.json({ sessions });
+    const summaries = await getReviewItemSummaries(prisma, sessions);
+    const sessionsWithCounts = sessions.map((session) => ({
+      ...session,
+      summary: summaries.get(session.id) || {
+        pendingCount: 0,
+        acceptedCount: 0,
+        rejectedCount: 0,
+        exportReadyCount: 0,
+        totalItemCount: 0,
+      },
+      pendingCount: summaries.get(session.id)?.pendingCount ?? 0,
+      acceptedCount: summaries.get(session.id)?.acceptedCount ?? 0,
+      rejectedCount: summaries.get(session.id)?.rejectedCount ?? 0,
+      exportReadyCount: summaries.get(session.id)?.exportReadyCount ?? 0,
+      totalItemCount: summaries.get(session.id)?.totalItemCount ?? 0,
+    }));
+
+    return NextResponse.json({ sessions: sessionsWithCounts });
   } catch (error) {
     console.error("Failed to load review queue:", error);
     return NextResponse.json({ error: "Failed to load review queue" }, { status: 500 });
