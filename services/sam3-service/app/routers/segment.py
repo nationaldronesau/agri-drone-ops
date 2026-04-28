@@ -1,12 +1,14 @@
-"""Segment router for SAM3 concept-based segmentation.
+"""Segment router for SAM3 concept-style segmentation.
 
-This endpoint provides true few-shot detection using visual exemplar crops
-extracted from a source image to find similar objects in target images.
+This endpoint supports same-image box prompting and a best-effort
+cross-image exemplar-crop fallback. The exemplar-crop path currently
+uses the crop set as context for text-assisted matching; it is not a
+fully crop-conditioned few-shot detector.
 
 Supports three modes:
-1. Exemplar crops mode: Use visual crops as concept reference (cross-image detection)
-2. Box mode: Use boxes on same image as exemplars (same-image detection)
-3. Text mode: Use class_name as text prompt (fallback for known concepts)
+1. Exemplar crops mode: best-effort cross-image matching with crop context
+2. Box mode: use boxes on the same image as prompts
+3. Text mode: use class_name as a text prompt fallback
 """
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -211,9 +213,9 @@ async def segment(request: SegmentRequest):
     Supports three detection modes:
 
     1. **Exemplar crops mode** (`exemplar_crops` provided):
-       Uses visual crops extracted from a source image to find similar
-       objects in the target image. Best for domain-specific objects
-       that SAM3 may not recognize by text.
+       Uses a best-effort exemplar-crop fallback for cross-image matching.
+       In the current implementation this is still text-assisted, so it
+       should be treated as weaker than the dedicated exemplar service.
 
     2. **Box mode** (`boxes` provided):
        Uses bounding boxes on the same image as visual exemplars.
@@ -250,19 +252,10 @@ async def segment(request: SegmentRequest):
                 crop_image = decode_base64_image(crop_b64)
                 crop_w, crop_h = crop_image.size
 
-                # For cross-image detection with crops, we use the crop
-                # as a visual reference. The approach is to:
-                # 1. Create a composite where the crop establishes the concept
-                # 2. Use SAM3 to find similar objects in the target
-
-                # Since SAM3's box prompts work by extracting features from
-                # the box region, we need a different approach for cross-image:
-                # We'll use text-assisted detection with the crop as context
-                # This is a simplification - full implementation may need
-                # custom feature extraction
-
-                # For now, use boxes as approximate locations if available
-                # and let SAM3 find similar objects
+                # This is a compatibility fallback, not a fully crop-conditioned
+                # exemplar matcher. We decode the crop so callers can pass real
+                # example imagery, but the current model invocation still uses
+                # text-assisted target-image segmentation.
                 inputs = processor(
                     images=target_image,
                     text=request.class_name or "object",
