@@ -11,7 +11,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Slider } from '@/components/ui/slider';
 import { ReviewViewer, type ReviewItem } from '@/components/review/ReviewViewer';
 import { YOLOConfigModal, type YOLOTrainingConfig } from '@/components/review/YOLOConfigModal';
-import { Brain, Download, ExternalLink, Sparkles } from 'lucide-react';
+import { AlertTriangle, Brain, Download, ExternalLink, ShieldCheck, Sparkles } from 'lucide-react';
+
+interface ReviewSummary {
+  pendingCount: number;
+  acceptedCount: number;
+  rejectedCount: number;
+  exportReadyCount: number;
+  totalItemCount: number;
+}
 
 interface ReviewSession {
   id: string;
@@ -31,6 +39,7 @@ interface ReviewSession {
     email?: string | null;
     image?: string | null;
   } | null;
+  summary?: ReviewSummary;
 }
 
 function ReviewPageContent() {
@@ -51,8 +60,10 @@ function ReviewPageContent() {
   const [exportFormat, setExportFormat] = useState<'csv' | 'kml' | 'shapefile'>('csv');
   const [exportIncludeAI, setExportIncludeAI] = useState(true);
   const [exportIncludeManual, setExportIncludeManual] = useState(true);
+  const [exportPendingForQa, setExportPendingForQa] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
   const [exportDefaultsInitialized, setExportDefaultsInitialized] = useState(false);
+  const [summary, setSummary] = useState<ReviewSummary | null>(null);
 
   const [showYoloModal, setShowYoloModal] = useState(false);
   const [pushMessage, setPushMessage] = useState<string | null>(null);
@@ -69,6 +80,7 @@ function ReviewPageContent() {
     }
     const data = await response.json();
     setSession(data);
+    setSummary(data.summary || null);
   }, [sessionId]);
 
   const loadItems = useCallback(async () => {
@@ -79,6 +91,7 @@ function ReviewPageContent() {
     }
     const data = await response.json();
     setItems(data.items || []);
+    if (data.summary) setSummary(data.summary);
   }, [sessionId]);
 
   const refresh = useCallback(async () => {
@@ -152,6 +165,11 @@ function ReviewPageContent() {
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   }, [items]);
+
+  const visibleGeoWarningCount = useMemo(
+    () => filteredItems.filter((item) => item.status === 'accepted' && !item.hasGeoData).length,
+    [filteredItems]
+  );
 
   const handleAction = useCallback(
     async (item: ReviewItem, action: 'accept' | 'reject' | 'correct', correctedClass?: string) => {
@@ -295,11 +313,11 @@ function ReviewPageContent() {
     const params = new URLSearchParams({ format: exportFormat, sessionId });
     if (!exportIncludeAI) params.set('includeAI', 'false');
     if (!exportIncludeManual) params.set('includeManual', 'false');
-    if (pendingOnly) params.set('needsReview', 'true');
-    if (minConfidence > 0) params.set('minConfidence', (minConfidence / 100).toFixed(4));
-    if (exportIncludeAI && (session?.batchJobIds?.length ?? 0) > 0) {
+    if (exportPendingForQa) {
       params.set('includePending', 'true');
+      params.set('needsReview', 'true');
     }
+    if (minConfidence > 0) params.set('minConfidence', (minConfidence / 100).toFixed(4));
     if (exportIncludeAI) {
       params.set('dedupe', 'true');
       params.set('dedupeRadiusM', '1.8');
@@ -333,7 +351,7 @@ function ReviewPageContent() {
     } finally {
       setExportLoading(false);
     }
-  }, [exportFormat, exportIncludeAI, exportIncludeManual, exportLoading, minConfidence, pendingOnly, session?.batchJobIds, sessionId]);
+  }, [exportFormat, exportIncludeAI, exportIncludeManual, exportLoading, exportPendingForQa, minConfidence, sessionId]);
 
   if (loading) {
     return (
@@ -386,8 +404,8 @@ function ReviewPageContent() {
               <div className="text-xs uppercase tracking-wide text-gray-500">Review Session</div>
               <div className="text-lg font-semibold text-gray-900">{session?.id}</div>
               <div className="text-sm text-gray-500">
-                {session?.itemsReviewed ?? 0} reviewed · {session?.itemsAccepted ?? 0} accepted ·{' '}
-                {session?.itemsRejected ?? 0} rejected
+                {summary?.pendingCount ?? 0} pending · {summary?.acceptedCount ?? 0} accepted ·{' '}
+                {summary?.rejectedCount ?? 0} rejected · {summary?.exportReadyCount ?? 0} export-ready
               </div>
             </div>
             <div className="flex flex-col gap-2 text-sm text-gray-600">
@@ -430,6 +448,44 @@ function ReviewPageContent() {
             </div>
           </CardContent>
         </Card>
+
+        <div className="grid gap-3 md:grid-cols-4">
+          {[
+            { label: 'Pending', value: summary?.pendingCount ?? 0, className: 'border-amber-200 bg-amber-50 text-amber-800' },
+            { label: 'Accepted', value: summary?.acceptedCount ?? 0, className: 'border-green-200 bg-green-50 text-green-800' },
+            { label: 'Rejected', value: summary?.rejectedCount ?? 0, className: 'border-gray-200 bg-gray-50 text-gray-800' },
+            { label: 'Export-ready', value: summary?.exportReadyCount ?? 0, className: 'border-blue-200 bg-blue-50 text-blue-800' },
+          ].map((stat) => (
+            <Card key={stat.label} className={stat.className}>
+              <CardContent className="py-4">
+                <div className="text-xs font-medium uppercase tracking-wide opacity-75">{stat.label}</div>
+                <div className="mt-1 text-2xl font-semibold">{stat.value}</div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        <Card className="border-green-200 bg-green-50">
+          <CardContent className="flex items-start gap-3 py-4 text-sm text-green-900">
+            <ShieldCheck className="mt-0.5 h-5 w-5 flex-shrink-0 text-green-700" />
+            <div>
+              <div className="font-medium">Spray-safe export is approved-only by default.</div>
+              <p className="text-green-800">
+                Operational exports include accepted or corrected detections and verified manual annotations.
+                Pending review items require the QA checkbox below.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        {session?.workflowType === 'batch_review' && (
+          <Card className="border-sky-200 bg-sky-50">
+            <CardContent className="py-4 text-sm text-sky-900">
+              Recommended flow: accept or correct the SAM3 labels, then export the approved set
+              for spray operations. Pending SAM3 detections are excluded from operational exports.
+            </CardContent>
+          </Card>
+        )}
 
         {(pushMessage || pushError || actionError) && (
           <div
@@ -529,15 +585,32 @@ function ReviewPageContent() {
             />
             Include AI
           </label>
+          <label className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-amber-800">
+            <Checkbox
+              checked={exportPendingForQa}
+              onCheckedChange={(value) => setExportPendingForQa(Boolean(value))}
+            />
+            Include pending QA items
+          </label>
           <Button variant="outline" size="sm" onClick={handleExport} disabled={exportLoading}>
-            {exportLoading ? 'Exporting...' : 'Export ZIP'}
+            {exportLoading ? 'Exporting...' : `Export approved ZIP (${summary?.exportReadyCount ?? 0})`}
           </Button>
         </div>
+
+        {visibleGeoWarningCount > 0 && (
+          <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+            <span>
+              {visibleGeoWarningCount} accepted item{visibleGeoWarningCount === 1 ? '' : 's'} in this view
+              still need export-time georeferencing. Review item warnings before using the spray file.
+            </span>
+          </div>
+        )}
 
         <ReviewViewer items={filteredItems} onAction={handleAction} onEdit={handleEdit} />
 
         {/* Next Steps Card - shown when there are accepted items */}
-        {(session?.itemsAccepted ?? 0) > 0 && (
+        {(summary?.acceptedCount ?? 0) > 0 && (
           <Card className="border-green-200 bg-gradient-to-r from-green-50 to-blue-50">
             <CardContent className="py-4">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -547,7 +620,7 @@ function ReviewPageContent() {
                     Ready for next steps
                   </div>
                   <p className="text-xs text-gray-600 mt-1">
-                    {session?.itemsAccepted} accepted annotations can be exported or used for training.
+                    {summary?.acceptedCount ?? 0} accepted annotations can be exported or used for training.
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">

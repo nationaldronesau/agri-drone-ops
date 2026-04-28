@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type { Prisma } from '@prisma/client';
 import prisma from '@/lib/db';
 import { pixelToGeoWithDSM, polygonToCenterBox, validateGeoParams } from '@/lib/utils/georeferencing';
 import { getAuthenticatedUser, getUserTeamIds, checkProjectAccess } from '@/lib/auth/api-auth';
@@ -60,6 +61,7 @@ export async function GET(request: NextRequest) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const where: any = {
       // Filter by user's teams through session -> asset -> project -> team
+      verified: true,
       session: {
         asset: {
           project: {
@@ -72,8 +74,8 @@ export async function GET(request: NextRequest) {
       where.session.asset.projectId = projectId;
     }
 
-    const pendingWhere = includePending ? {
-      status: 'PENDING',
+    const pendingWhere: Prisma.PendingAnnotationWhereInput | null = includePending ? {
+      status: 'ACCEPTED',
       asset: {
         project: {
           teamId: { in: userTeams.teamIds }
@@ -312,8 +314,8 @@ export async function GET(request: NextRequest) {
         metadata: {
           color: '#8B5CF6', // Purple for SAM3
           source: 'sam3',
-          notes: 'SAM3 pending annotation',
-          verified: false,
+          notes: 'Accepted SAM3 annotation',
+          verified: true,
           coordinateCount: coords.length,
           polygonCoordinates: polygonCoordinates,
         },

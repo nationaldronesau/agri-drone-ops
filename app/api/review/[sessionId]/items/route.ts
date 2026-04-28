@@ -13,6 +13,7 @@ import {
   solveSessionAssetBias,
 } from '@/lib/utils/session-bias';
 import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
+import { getReviewItemSummary } from '@/lib/services/review-summary';
 
 type ReviewStatus = 'pending' | 'accepted' | 'rejected';
 const DEFAULT_SESSION_BIAS_RADIUS_M = 2.5;
@@ -136,7 +137,7 @@ function parsePositiveNumberParam(
   return normalized;
 }
 
-function isFiniteGeoCoordinate(lat: unknown, lon: unknown): lat is number {
+function isFiniteGeoCoordinate(lat: unknown, lon: unknown): boolean {
   return (
     typeof lat === 'number' &&
     typeof lon === 'number' &&
@@ -198,7 +199,7 @@ async function resolveCenterGeo(
   storedLon: number | null | undefined
 ): Promise<{ lat: number | null; lon: number | null }> {
   if (isFiniteGeoCoordinate(storedLat, storedLon)) {
-    return { lat: storedLat, lon: storedLon };
+    return { lat: storedLat as number, lon: storedLon as number };
   }
 
   if (!bboxCenter) {
@@ -221,16 +222,17 @@ async function resolveCenterGeo(
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { sessionId: string } }
+  { params }: { params: Promise<{ sessionId: string }> }
 ) {
   try {
+    const { sessionId } = await params;
     const auth = await getAuthenticatedUser();
     if (!auth.authenticated || !auth.userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const session = await prisma.reviewSession.findUnique({
-      where: { id: params.sessionId },
+      where: { id: sessionId },
     });
 
     if (!session) {
@@ -637,7 +639,9 @@ export async function GET(
       return true;
     });
 
-    return NextResponse.json({ items: filteredItems });
+    const summary = await getReviewItemSummary(prisma, session);
+
+    return NextResponse.json({ items: filteredItems, summary });
   } catch (error) {
     console.error('Error fetching review items:', error);
     return NextResponse.json(

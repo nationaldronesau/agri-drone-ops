@@ -16,6 +16,11 @@ interface ReviewSession {
   itemsReviewed: number;
   itemsAccepted: number;
   itemsRejected: number;
+  pendingCount: number;
+  acceptedCount: number;
+  rejectedCount: number;
+  exportReadyCount: number;
+  totalItemCount: number;
   createdAt: string;
   status: string;
   project: { id: string; name: string };
@@ -149,15 +154,31 @@ export default function ReviewQueuePage() {
                   <CardTitle className="text-lg">{session.project.name}</CardTitle>
                   <CardDescription>
                     {session.workflowType} • {session.assetCount} assets •{" "}
-                    {session.itemsReviewed}/{session.assetCount} reviewed
+                    {session.pendingCount} pending • {session.exportReadyCount} export-ready
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="text-sm text-gray-600">
-                    Assigned to:{" "}
-                    <span className="font-medium">
-                      {session.assignedTo?.name || session.assignedTo?.email || "Unassigned"}
-                    </span>
+                  <div className="space-y-2">
+                    <div className="text-sm text-gray-600">
+                      Assigned to:{" "}
+                      <span className="font-medium">
+                        {session.assignedTo?.name || session.assignedTo?.email || "Unassigned"}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-amber-800">
+                        Pending {session.pendingCount}
+                      </span>
+                      <span className="rounded-md border border-green-200 bg-green-50 px-2 py-1 text-green-800">
+                        Accepted {session.acceptedCount}
+                      </span>
+                      <span className="rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-gray-700">
+                        Rejected {session.rejectedCount}
+                      </span>
+                      <span className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-blue-800">
+                        Export-ready {session.exportReadyCount}
+                      </span>
+                    </div>
                   </div>
                   <div className="flex gap-2">
                     {!session.assignedTo && (

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import JSZip from 'jszip';
+import type { Prisma } from '@prisma/client';
 import prisma from '@/lib/db';
 import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
 import {
@@ -13,6 +14,12 @@ import {
   solveSessionAssetBias,
 } from '@/lib/utils/session-bias';
 import { generateShapefileExport, type DetectionRecord, type AnnotationRecord } from '@/lib/services/shapefile';
+import {
+  buildDetectionReviewFilter,
+  buildManualAnnotationReviewFilter,
+  buildPendingAnnotationReviewFilter,
+  shouldIncludePendingAnnotations,
+} from '@/lib/utils/export-review-filters';
 import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
 
 const EXPORT_ITEM_LIMIT = 5000;
@@ -238,7 +245,9 @@ function createClusterRepresentative(cluster: ExportDetectionRecord[]): ExportDe
   };
 }
 
-function hasValidGeo(point: { centerLat: number | null; centerLon: number | null }): point is { centerLat: number; centerLon: number } {
+function hasValidGeo<T extends { centerLat: number | null; centerLon: number | null }>(
+  point: T
+): point is T & { centerLat: number; centerLon: number } {
   return (
     typeof point.centerLat === 'number' &&
     typeof point.centerLon === 'number' &&
@@ -406,9 +415,7 @@ export async function GET(request: NextRequest) {
         minConfidence = Math.max(0, Math.min(1, parsed > 1 ? parsed / 100 : parsed));
       }
     }
-    const includePendingParam = searchParams.get('includePending');
-    const includePending =
-      includePendingParam === 'true' || (Boolean(sessionId) && includeAI && includePendingParam !== 'false');
+    const includePending = shouldIncludePendingAnnotations(searchParams.get('includePending'));
     const dedupeEnabled = parseBooleanParam(searchParams.get('dedupe'), false);
     const dedupeRadiusM = parseRadiusParam(
       searchParams.get('dedupeRadiusM'),
@@ -513,10 +520,13 @@ export async function GET(request: NextRequest) {
         aiProcessingJobIds = processingJobs.map((job) => job.id);
       }
     }
+    const includePendingAnnotationTable =
+      includeManual && (includePending || (isBatchReviewSession && !needsReview));
 
     if (projectId && projectId !== 'all') {
       (baseWhere.asset as Record<string, unknown>).projectId = projectId;
     }
+    const assetWhere = baseWhere.asset as Prisma.AssetWhereInput;
 
     const [aiDetections, yoloDetections, annotations, pendingAnnotations] = await Promise.all([
       includeAI && !isBatchReviewSession
@@ -524,10 +534,7 @@ export async function GET(request: NextRequest) {
             where: {
               ...baseWhere,
               type: 'AI',
-              rejected: false,
-              ...(needsReview
-                ? { verified: false, userCorrected: false }
-                : { OR: [{ verified: true }, { userCorrected: true }] }),
+              ...buildDetectionReviewFilter(needsReview),
               ...(sessionId
                 ? aiProcessingJobIds.length > 0
                   ? { jobId: { in: aiProcessingJobIds } }
@@ -570,10 +577,7 @@ export async function GET(request: NextRequest) {
             where: {
               ...baseWhere,
               type: 'YOLO_LOCAL',
-              rejected: false,
-              ...(needsReview
-                ? { verified: false, userCorrected: false }
-                : { OR: [{ verified: true }, { userCorrected: true }] }),
+              ...buildDetectionReviewFilter(needsReview),
               ...(sessionId ? { inferenceJobId: { in: yoloInferenceJobIds } } : {}),
               ...(minConfidence != null ? { confidence: { gte: minConfidence } } : {}),
               ...(classFilter.length > 0 ? { className: { in: classFilter } } : {}),
@@ -610,9 +614,9 @@ export async function GET(request: NextRequest) {
       includeManual && !isBatchReviewSession
         ? prisma.manualAnnotation.findMany({
             where: {
-              ...(needsReview ? { verified: false, verifiedAt: null } : { verified: true }),
+              ...buildManualAnnotationReviewFilter(needsReview),
               session: {
-                asset: baseWhere.asset,
+                asset: assetWhere,
               },
               ...(createdAfter ? { createdAt: { gte: createdAfter } } : {}),
               ...(classFilter.length > 0 ? { weedType: { in: classFilter } } : {}),
@@ -650,11 +654,11 @@ export async function GET(request: NextRequest) {
             },
           })
         : Promise.resolve([]),
-      includePending && (!sessionId || (sessionBatchJobIds?.length ?? 0) > 0)
+      includePendingAnnotationTable && (!sessionId || (sessionBatchJobIds?.length ?? 0) > 0)
         ? prisma.pendingAnnotation.findMany({
             where: {
-              asset: baseWhere.asset,
-              ...(needsReview ? { status: 'PENDING' } : { status: { not: 'REJECTED' } }),
+              asset: assetWhere,
+              ...buildPendingAnnotationReviewFilter(needsReview),
               ...(sessionId && sessionBatchJobIds && sessionBatchJobIds.length > 0
                 ? { batchJobId: { in: sessionBatchJobIds } }
                 : {}),
@@ -958,14 +962,16 @@ export async function GET(request: NextRequest) {
 
     if (sessionBiasEnabled && exportableDetections.length >= 8) {
       const biasCorrections = solveSessionAssetBias(
-        exportableDetections.map((detection) => ({
-          id: detection.id,
-          assetId: detection.sourceAssetId,
-          className: detection.className,
-          confidence: detection.confidence ?? 0,
-          lat: detection.centerLat,
-          lon: detection.centerLon,
-        })),
+        exportableDetections
+          .filter(hasValidGeo)
+          .map((detection) => ({
+            id: detection.id,
+            assetId: detection.sourceAssetId,
+            className: detection.className,
+            confidence: detection.confidence ?? 0,
+            lat: detection.centerLat,
+            lon: detection.centerLon,
+          })),
         {
           radiusMeters: sessionBiasRadiusM,
           minAnchorsPerAsset: 3,
@@ -986,6 +992,7 @@ export async function GET(request: NextRequest) {
         for (const detection of exportableDetections) {
           const correction = biasCorrections.get(detection.sourceAssetId);
           if (!correction) continue;
+          if (!hasValidGeo(detection)) continue;
           const corrected = applySessionBiasCorrection(
             detection.centerLat,
             detection.centerLon,
@@ -999,6 +1006,12 @@ export async function GET(request: NextRequest) {
         for (const annotation of exportableAnnotations) {
           const correction = biasCorrections.get(annotation.sourceAssetId);
           if (!correction) continue;
+          if (
+            typeof annotation.centerLat !== 'number' ||
+            typeof annotation.centerLon !== 'number'
+          ) {
+            continue;
+          }
           const corrected = applySessionBiasCorrection(
             annotation.centerLat,
             annotation.centerLon,

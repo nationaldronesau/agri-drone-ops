@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Upload, Map, Download, Sparkles, ArrowRight, Images, Route, Activity } from "lucide-react";
+import { Upload, Map, Download, Sparkles, ArrowRight, Images, Route, Activity, ClipboardList } from "lucide-react";
 import Link from "next/link";
 
 export default function Dashboard() {
@@ -13,13 +13,14 @@ export default function Dashboard() {
       </div>
 
       {/* Quick Actions — compact row */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-8">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3 mb-8">
         {[
           { label: "Upload", href: "/upload", icon: Upload, color: "text-green-600" },
           { label: "Images", href: "/images", icon: Images, color: "text-blue-600" },
           { label: "Map", href: "/map", icon: Map, color: "text-blue-600" },
           { label: "Planner", href: "/mission-planner", icon: Route, color: "text-cyan-700" },
           { label: "Insights", href: "/insights", icon: Activity, color: "text-indigo-600" },
+          { label: "Review", href: "/review-queue", icon: ClipboardList, color: "text-amber-600" },
           { label: "Export", href: "/export", icon: Download, color: "text-orange-600" },
           { label: "Training Hub", href: "/training-hub", icon: Sparkles, color: "text-violet-600" },
         ].map((action) => (

@@ -21,6 +21,7 @@ export async function GET(request: NextRequest) {
     const projectId = searchParams.get('projectId');
     const assetId = searchParams.get('assetId');
     const needsReview = searchParams.get('needsReview');
+    const reviewedOnly = searchParams.get('reviewedOnly') === 'true';
     const maxConfidence = searchParams.get('maxConfidence');
     const customModelId = searchParams.get('customModelId');
     const geoOnly = searchParams.get('geoOnly') === 'true';
@@ -107,6 +108,9 @@ export async function GET(request: NextRequest) {
       where.confidence = {
         lt: maxConfidence ? parseFloat(maxConfidence) : 0.7
       };
+    } else if (reviewedOnly) {
+      where.rejected = false;
+      where.OR = [{ verified: true }, { userCorrected: true }];
     }
     if (geoOnly) {
       where.centerLat = { not: null };

@@ -1,24 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
-
-function toStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry) => typeof entry === 'string') as string[];
-}
+import { getReviewItemSummary, toStringArray } from '@/lib/services/review-summary';
 
 export async function GET(
   _request: NextRequest,
-  { params }: { params: { sessionId: string } }
+  { params }: { params: Promise<{ sessionId: string }> }
 ) {
   try {
+    const { sessionId } = await params;
     const auth = await getAuthenticatedUser();
     if (!auth.authenticated || !auth.userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const session = await prisma.reviewSession.findUnique({
-      where: { id: params.sessionId },
+      where: { id: sessionId },
       include: {
         assignedTo: {
           select: { id: true, name: true, email: true, image: true },
@@ -42,11 +39,14 @@ export async function GET(
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }
 
+    const summary = await getReviewItemSummary(prisma, session);
+
     return NextResponse.json({
       ...session,
       inferenceJobIds: toStringArray(session.inferenceJobIds),
       batchJobIds: toStringArray(session.batchJobIds),
       assetIds: toStringArray(session.assetIds),
+      summary,
     });
   } catch (error) {
     console.error('Error fetching review session:', error);
