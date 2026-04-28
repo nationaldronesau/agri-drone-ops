@@ -2585,7 +2585,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
                     onCheckedChange={(checked) => setUseVisualCrops(checked === true)}
                   />
                   <label htmlFor="use-visual-crops" className="cursor-pointer">
-                    Use visual crops only (skip concept propagation)
+                    Use example-based visual matching
                   </label>
                 </div>
                 <div className="flex items-center gap-2 text-[11px] text-purple-700">
@@ -2601,8 +2601,8 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
               </div>
               <p className="text-[10px] text-purple-600 mt-2">
                 {useVisualCrops
-                  ? 'Visual crop matching only. Faster, but less class-specific.'
-                  : 'Concept propagation enabled. Better for class-specific matching.'}
+                  ? 'Uses your drawn examples as visual references. Best for domain-specific objects.'
+                  : 'Class-aware matching enabled. Better when the selected class generalizes well.'}
               </p>
               <p className="text-[10px] text-purple-600 mt-1">
                 {useBatchPipelineV2
