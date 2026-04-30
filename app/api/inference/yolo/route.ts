@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { getAuthenticatedUser, checkProjectAccess } from '@/lib/auth/api-auth';
 import { enqueueYoloInferenceJob } from '@/lib/queue/yolo-inference-queue';
+import { resolveReviewSessionAssetIds } from '@/lib/services/review-session-assets';
 
 function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -53,7 +54,7 @@ export async function POST(request: NextRequest) {
 
       resolvedProjectId = session.projectId;
       teamId = session.teamId;
-      resolvedAssetIds = toStringArray(session.assetIds);
+      resolvedAssetIds = await resolveReviewSessionAssetIds(prisma, session);
     } else {
       if (!resolvedProjectId) {
         return NextResponse.json({ error: 'projectId is required' }, { status: 400 });

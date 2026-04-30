@@ -397,68 +397,90 @@ export default function TrainingHubPage() {
               </span>
             </div>
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {batchJobs.filter(j => j._count.pendingAnnotations > 0 || j.status === 'PROCESSING' || j.status === 'QUEUED' || j.status === 'FAILED').slice(0, 6).map((job) => (
-                <Card key={job.id} className="hover:shadow-md transition-shadow cursor-pointer relative group">
-                  <Link href={`/training-hub/review/${job.id}`} className="block">
-                    <CardContent className="py-4">
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex-1 min-w-0 pr-8">
-                          <p className="font-medium text-gray-900">{job.weedType}</p>
-                          <p className="text-xs text-gray-500">{job.project?.name || 'Unknown Project'}</p>
-                        </div>
-                        <span className={`px-2 py-1 text-xs rounded-full shrink-0 ${
-                          job.status === 'COMPLETED' ? 'bg-green-100 text-green-700' :
-                          job.status === 'PROCESSING' ? 'bg-blue-100 text-blue-700' :
-                          job.status === 'FAILED' ? 'bg-red-100 text-red-700' :
-                          'bg-gray-100 text-gray-700'
-                        }`}>
-                          {job.status}
-                        </span>
+              {batchJobs.filter(j => j._count.pendingAnnotations > 0 || j.status === 'PROCESSING' || j.status === 'QUEUED' || j.status === 'FAILED').slice(0, 6).map((job) => {
+                const canOpenReview =
+                  job._count.pendingAnnotations > 0 &&
+                  (job.status === 'COMPLETED' || job.status === 'FAILED' || job.status === 'CANCELLED');
+
+                const cardContent = (
+                  <CardContent className="py-4">
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex-1 min-w-0 pr-8">
+                        <p className="font-medium text-gray-900">{job.weedType}</p>
+                        <p className="text-xs text-gray-500">{job.project?.name || 'Unknown Project'}</p>
                       </div>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-600">
-                          {job.detectionsFound} detections
-                        </span>
-                        <span className="text-amber-600 font-medium flex items-center gap-1">
-                          <Eye className="w-4 h-4" />
-                          {job._count.pendingAnnotations} to review
-                        </span>
-                      </div>
-                      {(job.status === 'PROCESSING' || job.status === 'QUEUED') && (
-                        <div className="mt-2">
-                          <div className="text-xs text-gray-500 mb-1">
-                            {job.processedImages} / {job.totalImages} images
-                          </div>
-                          <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-blue-500 transition-all"
-                              style={{ width: `${(job.processedImages / job.totalImages) * 100}%` }}
-                            />
-                          </div>
+                      <span className={`px-2 py-1 text-xs rounded-full shrink-0 ${
+                        job.status === 'COMPLETED' ? 'bg-green-100 text-green-700' :
+                        job.status === 'PROCESSING' ? 'bg-blue-100 text-blue-700' :
+                        job.status === 'FAILED' ? 'bg-red-100 text-red-700' :
+                        'bg-gray-100 text-gray-700'
+                      }`}>
+                        {job.status}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-gray-600">
+                        {job.detectionsFound} detections
+                      </span>
+                      <span className="text-amber-600 font-medium flex items-center gap-1">
+                        <Eye className="w-4 h-4" />
+                        {job._count.pendingAnnotations} to review
+                      </span>
+                    </div>
+                    {(job.status === 'PROCESSING' || job.status === 'QUEUED') && (
+                      <div className="mt-2">
+                        <div className="text-xs text-gray-500 mb-1">
+                          {job.processedImages} / {job.totalImages} images
                         </div>
-                      )}
-                    </CardContent>
-                  </Link>
-                  {/* Delete button - positioned absolutely */}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="absolute top-2 right-2 h-7 w-7 text-gray-400 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setBatchToDelete(job);
-                    }}
-                    disabled={deletingBatchId === job.id}
-                  >
-                    {deletingBatchId === job.id ? (
-                      <RefreshCw className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Trash2 className="h-4 w-4" />
+                        <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-blue-500 transition-all"
+                            style={{ width: `${(job.processedImages / job.totalImages) * 100}%` }}
+                          />
+                        </div>
+                        <div className="mt-2 text-xs text-gray-500">
+                          Review becomes available after processing completes.
+                        </div>
+                      </div>
                     )}
-                  </Button>
-                </Card>
-              ))}
+                  </CardContent>
+                );
+
+                return (
+                  <Card
+                    key={job.id}
+                    className={`hover:shadow-md transition-shadow relative group ${canOpenReview ? 'cursor-pointer' : 'cursor-default'}`}
+                  >
+                    {canOpenReview ? (
+                      <Link href={`/training-hub/review/${job.id}`} className="block">
+                        {cardContent}
+                      </Link>
+                    ) : (
+                      <div className="block">
+                        {cardContent}
+                      </div>
+                    )}
+                    {/* Delete button - positioned absolutely */}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="absolute top-2 right-2 h-7 w-7 text-gray-400 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setBatchToDelete(job);
+                      }}
+                      disabled={deletingBatchId === job.id}
+                    >
+                      {deletingBatchId === job.id ? (
+                        <RefreshCw className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </Card>
+                );
+              })}
             </div>
           </div>
         )}

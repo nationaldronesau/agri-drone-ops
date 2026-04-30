@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { resolveReviewSessionAssetIds } from "@/lib/services/review-session-assets";
 
 type ReviewPrisma = Pick<
   PrismaClient,
@@ -62,7 +63,7 @@ export async function getReviewItemSummary(
   prisma: ReviewPrisma,
   session: ReviewSessionSummaryInput
 ): Promise<ReviewItemSummary> {
-  const assetIds = toStringArray(session.assetIds);
+  const assetIds = await resolveReviewSessionAssetIds(prisma, session);
   if (assetIds.length === 0) {
     return {
       pendingCount: 0,

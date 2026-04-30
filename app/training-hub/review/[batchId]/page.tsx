@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
+import { isBatchReviewReadyStatus } from '@/lib/utils/batch-review';
 
 export default function LegacyBatchReviewRedirect() {
   const params = useParams();
@@ -29,6 +30,13 @@ export default function LegacyBatchReviewRedirect() {
         const projectId = batchData.batchJob?.projectId;
         if (!projectId) {
           throw new Error('Batch job missing project info');
+        }
+
+        const batchStatus = batchData.batchJob?.status;
+        if (!isBatchReviewReadyStatus(batchStatus)) {
+          throw new Error(
+            `Batch review is only available after processing completes. Current status: ${String(batchStatus || 'unknown')}.`
+          );
         }
 
         const response = await fetch('/api/review', {

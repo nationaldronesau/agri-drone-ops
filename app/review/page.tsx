@@ -483,6 +483,9 @@ function ReviewPageContent() {
             <CardContent className="py-4 text-sm text-sky-900">
               Recommended flow: accept or correct the SAM3 labels, then export the approved set
               for spray operations. Pending SAM3 detections are excluded from operational exports.
+              Accepted items disappear from the list while &quot;Show pending only&quot; is enabled,
+              and QA exports of unaccepted items require the amber &quot;Include pending QA items&quot;
+              option below.
             </CardContent>
           </Card>
         )}
