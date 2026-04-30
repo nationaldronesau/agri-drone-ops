@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
 import { getReviewItemSummary, toStringArray } from '@/lib/services/review-summary';
+import { resolveReviewSessionAssetIds } from '@/lib/services/review-session-assets';
 
 export async function GET(
   _request: NextRequest,
@@ -39,13 +40,18 @@ export async function GET(
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }
 
-    const summary = await getReviewItemSummary(prisma, session);
+    const resolvedAssetIds = await resolveReviewSessionAssetIds(prisma, session);
+    const summary = await getReviewItemSummary(prisma, {
+      ...session,
+      assetIds: resolvedAssetIds,
+    });
 
     return NextResponse.json({
       ...session,
       inferenceJobIds: toStringArray(session.inferenceJobIds),
       batchJobIds: toStringArray(session.batchJobIds),
-      assetIds: toStringArray(session.assetIds),
+      assetIds: resolvedAssetIds,
+      assetCount: resolvedAssetIds.length,
       summary,
     });
   } catch (error) {

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { getAuthenticatedUser, checkProjectAccess } from '@/lib/auth/api-auth';
 import { Prisma } from '@prisma/client';
+import { SAM3_BATCH_JOB_KINDS } from '@/lib/utils/sam3-batch-jobs';
+import { isBatchReviewReadyStatus } from '@/lib/utils/batch-review';
 
 function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -64,6 +66,7 @@ export async function POST(request: NextRequest) {
     const requestedAssetIds = toStringArray(assetIds);
     const requestedInferenceJobIds = toStringArray(inferenceJobIds);
     const requestedBatchJobIds = toStringArray(batchJobIds);
+    let resolvedBatchJobIds = requestedBatchJobIds;
     let snapshotAssetIds: string[] = [];
 
     if (requestedAssetIds.length > 0) {
@@ -90,7 +93,18 @@ export async function POST(request: NextRequest) {
       if (requestedBatchJobIds.length > 0) {
         const batchJobs = await prisma.batchJob.findMany({
           where: { id: { in: requestedBatchJobIds }, projectId },
-          select: { id: true },
+          select: {
+            id: true,
+            kind: true,
+            status: true,
+            childBatchJobs: {
+              select: { id: true },
+              orderBy: [
+                { shardIndex: 'asc' },
+                { createdAt: 'asc' },
+              ],
+            },
+          },
         });
         if (batchJobs.length !== requestedBatchJobIds.length) {
           return NextResponse.json(
@@ -99,8 +113,31 @@ export async function POST(request: NextRequest) {
           );
         }
 
+        const activeBatchJob = batchJobs.find((batchJob) => !isBatchReviewReadyStatus(batchJob.status));
+        if (activeBatchJob) {
+          return NextResponse.json(
+            {
+              error: 'Batch review is only available after processing completes',
+              details: `Batch job ${activeBatchJob.id} is still ${activeBatchJob.status.toLowerCase()}.`,
+            },
+            { status: 409 }
+          );
+        }
+
+        resolvedBatchJobIds = Array.from(
+          new Set(
+            batchJobs.flatMap((batchJob) =>
+              batchJob.kind === SAM3_BATCH_JOB_KINDS.AGGREGATE
+                ? batchJob.childBatchJobs.map((childJob) => childJob.id)
+                : [batchJob.id]
+            )
+          )
+        );
+
         const pendingAssets = await prisma.pendingAnnotation.findMany({
-          where: { batchJobId: { in: requestedBatchJobIds } },
+          where: {
+            batchJobId: { in: resolvedBatchJobIds.length > 0 ? resolvedBatchJobIds : ['__none__'] },
+          },
           select: { assetId: true },
           distinct: ['assetId'],
         });
@@ -194,7 +231,7 @@ export async function POST(request: NextRequest) {
         assetIds: snapshotAssetIds,
         assetCount: snapshotAssetIds.length,
         inferenceJobIds: requestedInferenceJobIds,
-        batchJobIds: requestedBatchJobIds,
+        batchJobIds: resolvedBatchJobIds,
       },
     });
 

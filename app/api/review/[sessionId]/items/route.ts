@@ -14,6 +14,7 @@ import {
 } from '@/lib/utils/session-bias';
 import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
 import { getReviewItemSummary } from '@/lib/services/review-summary';
+import { resolveReviewSessionAssetIds } from '@/lib/services/review-session-assets';
 
 type ReviewStatus = 'pending' | 'accepted' | 'rejected';
 const DEFAULT_SESSION_BIAS_RADIUS_M = 2.5;
@@ -264,7 +265,7 @@ export async function GET(
       MAX_SESSION_BIAS_RADIUS_M
     );
 
-    const assetIds = toStringArray(session.assetIds);
+    const assetIds = await resolveReviewSessionAssetIds(prisma, session);
     const inferenceJobIds = toStringArray(session.inferenceJobIds);
     const batchJobIds = toStringArray(session.batchJobIds);
     const isBatchReview = session.workflowType === 'batch_review';
@@ -639,7 +640,10 @@ export async function GET(
       return true;
     });
 
-    const summary = await getReviewItemSummary(prisma, session);
+    const summary = await getReviewItemSummary(prisma, {
+      ...session,
+      assetIds,
+    });
 
     return NextResponse.json({ items: filteredItems, summary });
   } catch (error) {

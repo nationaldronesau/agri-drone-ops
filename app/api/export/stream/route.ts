@@ -21,6 +21,7 @@ import {
   shouldIncludePendingAnnotations,
 } from '@/lib/utils/export-review-filters';
 import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
+import { resolveReviewSessionAssetIds, toStringArray } from '@/lib/services/review-session-assets';
 
 const EXPORT_ITEM_LIMIT = 5000;
 const DEFAULT_DEDUPE_RADIUS_M = 1.8;
@@ -160,11 +161,6 @@ function manualConfidenceToScore(confidence: string | null): number {
   if (confidence === 'CERTAIN') return 0.95;
   if (confidence === 'LIKELY') return 0.75;
   return 0.5;
-}
-
-function toStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry) => typeof entry === 'string') as string[];
 }
 
 function normalizeGeoPoint(lat: unknown, lon: unknown): { lat: number; lon: number } | null {
@@ -490,7 +486,7 @@ export async function GET(request: NextRequest) {
       if (!membership.teamIds.includes(session.teamId)) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 });
       }
-      assetIds = toStringArray(session.assetIds);
+      assetIds = await resolveReviewSessionAssetIds(prisma, session);
       createdAfter = session.createdAt;
       sessionProjectId = session.projectId;
       sessionBatchJobIds = toStringArray(session.batchJobIds);

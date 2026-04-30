@@ -10,6 +10,7 @@ import { S3Service } from '@/lib/services/s3';
 import { fetchImageSafely, isUrlAllowed } from '@/lib/utils/security';
 import { rescaleToOriginalWithMeta } from '@/lib/utils/georeferencing';
 import { buildTrainingAugmentationFromInput } from '@/lib/services/training-augmentation';
+import { resolveReviewSessionAssetIds } from '@/lib/services/review-session-assets';
 import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
 import type { AnnotationBox } from '@/types/roboflow';
 
@@ -126,9 +127,7 @@ export async function POST(
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }
 
-    const assetIds = Array.isArray(session.assetIds)
-      ? (session.assetIds as string[]).filter((id) => typeof id === 'string')
-      : [];
+    const assetIds = await resolveReviewSessionAssetIds(prisma, session);
 
     if (assetIds.length === 0) {
       return NextResponse.json({ error: 'No assets available for this session' }, { status: 400 });
