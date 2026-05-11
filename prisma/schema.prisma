@@ -466,6 +466,7 @@ enum ProcessingStatus {
 model BatchJob {
   id                   String  @id @default(cuid())
   projectId            String
+  parentBatchJobId     String?
   weedType             String // Target weed type for detection
   exemplars            Json // Stored exemplar boxes [{x1,y1,x2,y2}, ...]
   textPrompt           String? // Optional text prompt for SAM3
@@ -474,8 +475,11 @@ model BatchJob {
   exemplarId           String? // Concept propagation exemplar ID
   sourceAssetId        String? // Asset ID used to create exemplar
   version              Int?
+  kind                 String  @default("SINGLE")
   mode                 String?
   stageLog             Json?
+  shardIndex           Int?
+  shardCount           Int?
 
   // Processing status
   status          BatchJobStatus @default(QUEUED)
@@ -491,9 +495,13 @@ model BatchJob {
 
   // Relations
   project            Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parentBatchJob     BatchJob?           @relation("BatchJobHierarchy", fields: [parentBatchJobId], references: [id], onDelete: SetNull)
+  childBatchJobs     BatchJob[]          @relation("BatchJobHierarchy")
   pendingAnnotations PendingAnnotation[]
 
   @@index([projectId])
+  @@index([parentBatchJobId])
+  @@index([kind])
   @@index([status])
 }
 

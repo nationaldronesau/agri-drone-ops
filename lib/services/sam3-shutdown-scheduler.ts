@@ -10,6 +10,7 @@ import { awsSam3Service } from './aws-sam3';
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // Check every 5 minutes
 let shutdownTimer: NodeJS.Timeout | null = null;
 let isSchedulerRunning = false;
+let canShutdownInstance: (() => Promise<boolean>) | null = null;
 const AUTO_SHUTDOWN_DISABLED =
   ['1', 'true', 'yes'].includes((process.env.SAM3_DISABLE_AUTO_SHUTDOWN || '').toLowerCase()) ||
   ['1', 'true', 'yes'].includes((process.env.SAM3_SHARED_INSTANCE || '').toLowerCase());
@@ -18,7 +19,9 @@ const AUTO_SHUTDOWN_DISABLED =
  * Start the auto-shutdown scheduler
  * Should be called when the worker starts
  */
-export function startShutdownScheduler(): void {
+export function startShutdownScheduler(options?: {
+  canShutdown?: () => Promise<boolean>;
+}): void {
   if (shutdownTimer || isSchedulerRunning) {
     console.log('[SAM3 Scheduler] Scheduler already running');
     return;
@@ -36,6 +39,7 @@ export function startShutdownScheduler(): void {
 
   console.log('[SAM3 Scheduler] Starting auto-shutdown scheduler');
   isSchedulerRunning = true;
+  canShutdownInstance = options?.canShutdown || null;
 
   shutdownTimer = setInterval(async () => {
     await checkAndShutdownIfIdle();
@@ -55,6 +59,7 @@ export function stopShutdownScheduler(): void {
     clearInterval(shutdownTimer);
     shutdownTimer = null;
     isSchedulerRunning = false;
+    canShutdownInstance = null;
   }
 }
 
@@ -80,6 +85,13 @@ export async function checkAndShutdownIfIdle(): Promise<boolean> {
     }
 
     if (awsSam3Service.isIdle()) {
+      if (canShutdownInstance) {
+        const shutdownAllowed = await canShutdownInstance();
+        if (!shutdownAllowed) {
+          return false;
+        }
+      }
+
       console.log('[SAM3 Scheduler] Instance idle, initiating shutdown...');
       await awsSam3Service.stopInstance();
       console.log('[SAM3 Scheduler] Shutdown initiated');

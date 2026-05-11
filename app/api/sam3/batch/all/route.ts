@@ -10,6 +10,7 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
+import { SAM3_BATCH_JOB_KINDS } from '@/lib/utils/sam3-batch-jobs';
 
 export async function GET(): Promise<NextResponse> {
   try {
@@ -55,6 +56,9 @@ export async function GET(): Promise<NextResponse> {
         project: {
           teamId: { in: teamIds },
         },
+        NOT: {
+          kind: SAM3_BATCH_JOB_KINDS.SHARD,
+        },
       },
       include: {
         project: {
@@ -71,9 +75,43 @@ export async function GET(): Promise<NextResponse> {
       take: 50,
     });
 
+    const aggregateParentIds = batchJobs
+      .filter((batchJob) => batchJob.kind === SAM3_BATCH_JOB_KINDS.AGGREGATE)
+      .map((batchJob) => batchJob.id);
+    const aggregateChildren = aggregateParentIds.length
+      ? await prisma.batchJob.findMany({
+          where: { parentBatchJobId: { in: aggregateParentIds } },
+          select: {
+            parentBatchJobId: true,
+            _count: {
+              select: { pendingAnnotations: true },
+            },
+          },
+        })
+      : [];
+    const pendingCountByParentId = aggregateChildren.reduce<Record<string, number>>(
+      (summary, childJob) => {
+        if (!childJob.parentBatchJobId) {
+          return summary;
+        }
+        summary[childJob.parentBatchJobId] =
+          (summary[childJob.parentBatchJobId] || 0) + childJob._count.pendingAnnotations;
+        return summary;
+      },
+      {}
+    );
+
     return NextResponse.json({
       success: true,
-      batchJobs,
+      batchJobs: batchJobs.map((batchJob) => ({
+        ...batchJob,
+        _count: {
+          pendingAnnotations:
+            batchJob.kind === SAM3_BATCH_JOB_KINDS.AGGREGATE
+              ? pendingCountByParentId[batchJob.id] || 0
+              : batchJob._count.pendingAnnotations,
+        },
+      })),
     });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';

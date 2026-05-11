@@ -118,6 +118,7 @@ describe('sam3-batch-v2', () => {
 
     await (service as any).persistAssetResult(
       'batch-1',
+      null,
       {
         assetId: 'asset-1',
         detections: [
@@ -209,6 +210,10 @@ describe('sam3-batch-v2', () => {
           buffer: imageBuffer,
           scaling: { scaleFactor: 1 },
         })),
+        segment: vi.fn().mockResolvedValue({
+          success: true,
+          response: { detections: [], count: 0 },
+        }),
         segmentWithExemplars: vi.fn().mockResolvedValue({
           success: true,
           response: {

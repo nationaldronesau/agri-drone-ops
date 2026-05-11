@@ -17,6 +17,7 @@ import sharp from 'sharp';
 import { createRedisConnection, QUEUE_PREFIX } from '../lib/queue/redis';
 import { BATCH_QUEUE_NAME, BatchJobData, BatchJobResult } from '../lib/queue/batch-queue';
 import { sam3Orchestrator } from '../lib/services/sam3-orchestrator';
+import { ensureVisualCropBatchAwsReady } from '../lib/services/sam3-batch-startup';
 import { sam3ConceptService, type ConceptDetection } from '../lib/services/sam3-concept';
 import { normalizeDetectionType } from '../lib/utils/detection-types';
 import { scaleExemplarBoxes } from '../lib/utils/exemplar-scaling';
@@ -389,6 +390,30 @@ async function processBatchJob(job: Job<BatchJobData>): Promise<BatchJobResult> 
         errors: [message],
       };
     }
+  }
+
+  const awsStartupCheck = await ensureVisualCropBatchAwsReady({
+    batchJobId,
+    useSegmentCrops,
+    waitForAwsReady: () => sam3Orchestrator.waitForAWSReady(180000),
+    logger: console,
+  });
+  if (!awsStartupCheck.ok) {
+    await prisma.batchJob.update({
+      where: { id: batchJobId },
+      data: {
+        status: 'FAILED',
+        processedImages: 0,
+        detectionsFound: 0,
+        completedAt: new Date(),
+        errorMessage: awsStartupCheck.errorMessage,
+      },
+    });
+    return {
+      processedImages: 0,
+      detectionsFound: 0,
+      errors: [awsStartupCheck.errorMessage],
+    };
   }
 
   for (let i = 0; i < assets.length; i++) {

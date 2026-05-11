@@ -70,6 +70,13 @@ export interface SAM3Status {
   funMessage: string;
 }
 
+export interface SAM3StartKickoffResult {
+  accepted: boolean;
+  ready: boolean;
+  state: SAM3InstanceState;
+  error?: string;
+}
+
 export interface ScalingInfo {
   originalWidth: number;
   originalHeight: number;
@@ -328,31 +335,104 @@ class AWSSAM3Service {
       return true;
     }
 
-    this.startupPromise = this._doStartInstance();
-    try {
-      return await this.startupPromise;
-    } finally {
-      this.startupPromise = null;
+    const kickoff = await this.kickoffStartInstance();
+    if (!kickoff.accepted) {
+      return false;
     }
+
+    if (kickoff.ready) {
+      return true;
+    }
+
+    return this.startupPromise ? await this.startupPromise : false;
   }
 
-  private async _doStartInstance(): Promise<boolean> {
-    try {
-      console.log('[AWS-SAM3] Starting EC2 instance...');
-      this.instanceState = 'starting';
+  async kickoffStartInstance(): Promise<SAM3StartKickoffResult> {
+    if (!SAM3_INSTANCE_ID || !this.ec2Client) {
+      return {
+        accepted: false,
+        ready: false,
+        state: this.instanceState,
+        error: 'AWS SAM3 not configured',
+      };
+    }
 
+    if (this.startupPromise) {
+      return {
+        accepted: true,
+        ready: false,
+        state: this.instanceState,
+      };
+    }
+
+    if (this.instanceState === 'ready') {
+      return {
+        accepted: true,
+        ready: true,
+        state: this.instanceState,
+      };
+    }
+
+    try {
+      const status = await this.refreshStatus();
+      if (status.instanceState === 'ready') {
+        return {
+          accepted: true,
+          ready: true,
+          state: this.instanceState,
+        };
+      }
+
+      if (this.startupPromise) {
+        return {
+          accepted: true,
+          ready: false,
+          state: this.instanceState,
+        };
+      }
+
+      if (status.instanceState === 'running' || status.instanceState === 'starting' || status.instanceState === 'warming') {
+        console.log('[AWS-SAM3] Instance already booting, waiting for readiness...');
+        this.trackStartupPromise(this.waitForReady());
+        return {
+          accepted: true,
+          ready: false,
+          state: this.instanceState,
+        };
+      }
+
+      console.log('[AWS-SAM3] Requesting EC2 instance start...');
+      this.instanceState = 'starting';
       const command = new StartInstancesCommand({
         InstanceIds: [SAM3_INSTANCE_ID!],
       });
       await this.ec2Client!.send(command);
 
-      // Wait for instance to be ready
-      return await this.waitForReady();
+      this.trackStartupPromise(this.waitForReady());
+      return {
+        accepted: true,
+        ready: false,
+        state: this.instanceState,
+      };
     } catch (error) {
-      console.error('[AWS-SAM3] Failed to start instance:', error);
+      console.error('[AWS-SAM3] Failed to request instance start:', error);
       this.instanceState = 'error';
-      return false;
+      return {
+        accepted: false,
+        ready: false,
+        state: this.instanceState,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
     }
+  }
+
+  private trackStartupPromise(promise: Promise<boolean>): void {
+    const trackedPromise = promise.finally(() => {
+      if (this.startupPromise === trackedPromise) {
+        this.startupPromise = null;
+      }
+    });
+    this.startupPromise = trackedPromise;
   }
 
   /**
@@ -1443,12 +1523,15 @@ class AWSSAM3Service {
       // Query EC2 to get current IP and state
       await this.discoverInstanceIp();
 
-      // If we have an IP and instance is running, check health
-      if (this.instanceIp && this.instanceState === 'running') {
+      // Refresh health whenever the instance is reachable, even if cached as ready.
+      // This keeps modelLoaded/gpuAvailable in sync after container recreates or host cutovers.
+      if (this.instanceIp && (this.instanceState === 'running' || this.instanceState === 'ready')) {
         const health = await this.checkHealth();
         if (health?.modelLoaded) {
           this.instanceState = 'ready';
           console.log('[AWS-SAM3] Instance already ready (discovered on refresh)');
+        } else if (this.instanceState === 'ready') {
+          this.instanceState = 'running';
         }
       }
     } catch (error) {

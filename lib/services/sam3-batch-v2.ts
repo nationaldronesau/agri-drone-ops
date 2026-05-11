@@ -14,6 +14,11 @@ import {
 import { S3Service } from '@/lib/services/s3';
 import { normalizeDetectionType } from '@/lib/utils/detection-types';
 import { buildExemplarCrops, normalizeExemplarCrops } from '@/lib/utils/exemplar-crops';
+import {
+  SAM3_BATCH_JOB_KINDS,
+  summarizeChildBatchJobs,
+  type Sam3BatchJobKind,
+} from '@/lib/utils/sam3-batch-jobs';
 import { scaleExemplarBoxes, type BoxCoordinate } from '@/lib/utils/exemplar-scaling';
 import { fetchImageSafely } from '@/lib/utils/security';
 
@@ -98,7 +103,23 @@ export interface Sam3BatchV2JobLike {
 }
 
 interface BatchJobRecord {
+  kind?: string | null;
+  parentBatchJobId?: string | null;
   sourceAssetId?: string | null;
+  stageLog?: unknown;
+}
+
+interface BatchJobRollupRecord {
+  id: string;
+  status: string;
+  processedImages: number;
+  totalImages: number;
+  detectionsFound: number;
+  errorMessage: string | null;
+  shardIndex: number | null;
+  shardCount: number | null;
+  startedAt: Date | null;
+  completedAt: Date | null;
   stageLog?: unknown;
 }
 
@@ -125,6 +146,7 @@ interface PrismaBatchTransaction {
 interface PrismaLike {
   batchJob: {
     findUnique(args: unknown): Promise<BatchJobRecord | null>;
+    findMany(args: unknown): Promise<BatchJobRollupRecord[]>;
     update(args: unknown): Promise<unknown>;
   };
   asset: {
@@ -214,6 +236,7 @@ interface Sam3BatchV2Dependencies {
 
 interface PreparedBatchContext {
   batchJobId: string;
+  parentBatchJobId: string | null;
   projectId: string;
   weedType: string;
   mode: Sam3BatchV2Mode;
@@ -507,7 +530,35 @@ export class Sam3BatchV2Service {
   async processJob(job: Sam3BatchV2JobLike): Promise<Sam3BatchV2JobResult> {
     const attemptsMade = job.attemptsMade ?? 0;
     const batchJobId = job.data.batchJobId;
-    const stageLog = await this.loadStageLog(batchJobId);
+    const batchJobRecord = await this.prisma.batchJob.findUnique({
+      where: { id: batchJobId },
+      select: {
+        kind: true,
+        parentBatchJobId: true,
+        stageLog: true,
+      },
+    });
+    const stageLog = parseStageLog(batchJobRecord?.stageLog);
+    const batchJobKind = (batchJobRecord?.kind || SAM3_BATCH_JOB_KINDS.SINGLE) as Sam3BatchJobKind;
+    const parentBatchJobId = batchJobRecord?.parentBatchJobId || null;
+
+    if (batchJobKind === SAM3_BATCH_JOB_KINDS.AGGREGATE) {
+      await this.prisma.batchJob.update({
+        where: { id: batchJobId },
+        data: {
+          status: 'FAILED',
+          completedAt: this.now(),
+          errorMessage: 'Aggregate batch jobs are coordination records and cannot be processed directly.',
+        },
+      });
+
+      return {
+        processedImages: 0,
+        detectionsFound: 0,
+        failedAssets: 0,
+        terminalState: 'failed_prepare',
+      };
+    }
 
     await this.prisma.batchJob.update({
       where: { id: batchJobId },
@@ -520,6 +571,9 @@ export class Sam3BatchV2Service {
         errorMessage: null,
       },
     });
+    if (parentBatchJobId) {
+      await this.rollupParentBatchJob(parentBatchJobId);
+    }
 
     let gpuLockToken: string | null = null;
     let gpuHeartbeat: ReturnType<typeof setInterval> | null = null;
@@ -532,6 +586,7 @@ export class Sam3BatchV2Service {
       if (!admission.acquired || !admission.token) {
         return this.rejectPreflight(
           batchJobId,
+          parentBatchJobId,
           attemptsMade,
           stageLog,
           admission.errorCode || 'GPU_BUSY',
@@ -567,6 +622,9 @@ export class Sam3BatchV2Service {
           errorMessage: terminal.errorMessage,
         },
       });
+      if (parentBatchJobId) {
+        await this.rollupParentBatchJob(parentBatchJobId);
+      }
 
       return {
         processedImages: assetResults.length,
@@ -607,6 +665,9 @@ export class Sam3BatchV2Service {
           errorMessage: message,
         },
       });
+      if (parentBatchJobId) {
+        await this.rollupParentBatchJob(parentBatchJobId);
+      }
 
       return {
         processedImages: 0,
@@ -622,17 +683,6 @@ export class Sam3BatchV2Service {
         await this.releaseGpuLock(gpuLockToken);
       }
     }
-  }
-
-  private async loadStageLog(batchJobId: string): Promise<Sam3BatchV2StageLogEntry[]> {
-    const batchJob = await this.prisma.batchJob.findUnique({
-      where: { id: batchJobId },
-      select: {
-        stageLog: true,
-      },
-    });
-
-    return parseStageLog(batchJob?.stageLog);
   }
 
   private async appendStageLog(
@@ -666,6 +716,7 @@ export class Sam3BatchV2Service {
     const batchJob = await this.prisma.batchJob.findUnique({
       where: { id: data.batchJobId },
       select: {
+        parentBatchJobId: true,
         sourceAssetId: true,
       },
     });
@@ -804,6 +855,7 @@ export class Sam3BatchV2Service {
 
     return {
       batchJobId: data.batchJobId,
+      parentBatchJobId: batchJob?.parentBatchJobId || null,
       projectId: data.projectId,
       weedType: data.weedType,
       mode: data.mode,
@@ -1001,6 +1053,7 @@ export class Sam3BatchV2Service {
 
   private async rejectPreflight(
     batchJobId: string,
+    parentBatchJobId: string | null,
     attemptsMade: number,
     stageLog: Sam3BatchV2StageLogEntry[],
     errorCode: string,
@@ -1023,6 +1076,9 @@ export class Sam3BatchV2Service {
         errorMessage,
       },
     });
+    if (parentBatchJobId) {
+      await this.rollupParentBatchJob(parentBatchJobId);
+    }
 
     return {
       processedImages: 0,
@@ -1114,7 +1170,13 @@ export class Sam3BatchV2Service {
         errorCode: result.errorCode,
         errorMessage: result.errorMessage,
       });
-      await this.persistAssetResult(batchJobId, result, prepared.weedType, attemptsMade);
+      await this.persistAssetResult(
+        batchJobId,
+        prepared.parentBatchJobId,
+        result,
+        prepared.weedType,
+        attemptsMade
+      );
       await job.updateProgress(
         Math.round((results.length / (prepared.assets.length + prepared.missingAssetIds.length)) * 100)
       );
@@ -1179,7 +1241,13 @@ export class Sam3BatchV2Service {
       }
 
       results.push(result);
-      await this.persistAssetResult(batchJobId, result, prepared.weedType, attemptsMade);
+      await this.persistAssetResult(
+        batchJobId,
+        prepared.parentBatchJobId,
+        result,
+        prepared.weedType,
+        attemptsMade
+      );
       await job.updateProgress(
         Math.round((results.length / (prepared.assets.length + prepared.missingAssetIds.length)) * 100)
       );
@@ -1417,6 +1485,7 @@ export class Sam3BatchV2Service {
 
   private async persistAssetResult(
     batchJobId: string,
+    parentBatchJobId: string | null,
     result: AssetInferenceResult,
     weedType: string,
     attemptsMade: number
@@ -1459,6 +1528,20 @@ export class Sam3BatchV2Service {
             },
           },
         });
+
+        if (parentBatchJobId) {
+          await tx.batchJob.update({
+            where: { id: parentBatchJobId },
+            data: {
+              processedImages: {
+                increment: 1,
+              },
+              detectionsFound: {
+                increment: result.detections.length,
+              },
+            },
+          });
+        }
       });
     } catch (error) {
       const persistError = new Error(
@@ -1485,6 +1568,80 @@ export class Sam3BatchV2Service {
       detectionCount: result.detections.length,
       errorCode: result.errorCode,
       errorMessage: result.errorMessage,
+    });
+  }
+
+  private async rollupParentBatchJob(parentBatchJobId: string): Promise<void> {
+    const childJobs = await this.prisma.batchJob.findMany({
+      where: { parentBatchJobId },
+      select: {
+        id: true,
+        status: true,
+        processedImages: true,
+        totalImages: true,
+        detectionsFound: true,
+        errorMessage: true,
+        shardIndex: true,
+        shardCount: true,
+        startedAt: true,
+        completedAt: true,
+        stageLog: true,
+      },
+    });
+
+    if (childJobs.length === 0) {
+      return;
+    }
+
+    const childSnapshots = childJobs.map((childJob) => {
+      const childStageLog = parseStageLog(childJob.stageLog);
+      const childStageSummary = summarizeStageLog(childStageLog);
+      const latestStageEntry = [...childStageLog]
+        .reverse()
+        .find((entry) => entry.stage !== 'terminal');
+
+      return {
+        id: childJob.id,
+        status: childJob.status,
+        processedImages: childJob.processedImages,
+        totalImages: childJob.totalImages,
+        detectionsFound: childJob.detectionsFound,
+        errorMessage: childJob.errorMessage,
+        shardIndex: childJob.shardIndex,
+        shardCount: childJob.shardCount,
+        latestStage: childStageSummary.latestStage,
+        latestStageTimestamp: latestStageEntry?.timestamp || null,
+        terminalState: childStageSummary.terminalState,
+      };
+    });
+
+    const rollup = summarizeChildBatchJobs(childSnapshots);
+    const startedAtValues = childJobs
+      .map((childJob) => childJob.startedAt)
+      .filter((value): value is Date => Boolean(value));
+    const completedAtValues = childJobs
+      .map((childJob) => childJob.completedAt)
+      .filter((value): value is Date => Boolean(value));
+    const allTerminal = childJobs.every((childJob) =>
+      ['COMPLETED', 'FAILED', 'CANCELLED'].includes(childJob.status)
+    );
+
+    await this.prisma.batchJob.update({
+      where: { id: parentBatchJobId },
+      data: {
+        status: rollup.status,
+        processedImages: rollup.processedImages,
+        detectionsFound: rollup.detectionsFound,
+        errorMessage: rollup.errorMessage,
+        startedAt:
+          startedAtValues.length > 0
+            ? new Date(Math.min(...startedAtValues.map((value) => value.getTime())))
+            : null,
+        completedAt:
+          allTerminal && completedAtValues.length > 0
+            ? new Date(Math.max(...completedAtValues.map((value) => value.getTime())))
+            : null,
+      },
     });
   }
 }
