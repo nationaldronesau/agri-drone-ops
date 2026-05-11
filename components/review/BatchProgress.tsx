@@ -9,9 +9,19 @@ interface BatchProgressProps {
   status: string;
   onReview?: () => void;
   errorMessage?: string | null;
+  title?: string;
+  subtitle?: string | null;
 }
 
-export function BatchProgress({ processed, total, status, onReview, errorMessage }: BatchProgressProps) {
+export function BatchProgress({
+  processed,
+  total,
+  status,
+  onReview,
+  errorMessage,
+  title = 'Batch Progress',
+  subtitle,
+}: BatchProgressProps) {
   const progress = total > 0 ? Math.round((processed / total) * 100) : 0;
   const isComplete = status === 'COMPLETED';
   const showError = status === 'FAILED' && errorMessage;
@@ -19,10 +29,15 @@ export function BatchProgress({ processed, total, status, onReview, errorMessage
 
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-      <div className="text-sm font-medium text-gray-700">Batch Progress</div>
+      <div className="text-sm font-medium text-gray-700">{title}</div>
       <div className="mt-2 text-xs text-gray-500">
         {processed}/{total} images processed · {status.toLowerCase()}
       </div>
+      {subtitle ? (
+        <div className="mt-1 text-xs text-gray-500">
+          {subtitle}
+        </div>
+      ) : null}
       <Progress value={progress} className="mt-2" />
       {showError && (
         <div className="mt-2 text-xs text-red-600">

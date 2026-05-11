@@ -123,18 +123,25 @@ class SAM3Orchestrator {
       return { ready: false, message: 'AWS SAM3 not configured', starting: false };
     }
 
+    const awsStatus = await awsSam3Service.refreshStatus();
     if (awsSam3Service.isReady()) {
       return { ready: true, message: 'Ready!', starting: false };
     }
 
-    // Start the instance in the background
     const funMessage = awsSam3Service.getRandomFunMessage();
-    console.log('[Orchestrator] Starting AWS SAM3 instance...');
+    console.log(`[Orchestrator] AWS not ready (state=${awsStatus.instanceState}), requesting startup...`);
+    const kickoff = await awsSam3Service.kickoffStartInstance();
+    if (!kickoff.accepted) {
+      return {
+        ready: false,
+        message: kickoff.error || 'Failed to start AWS SAM3 instance',
+        starting: false,
+      };
+    }
 
-    // Don't await - let it start in background
-    awsSam3Service.startInstance().catch((error) => {
-      console.error('[Orchestrator] Failed to start AWS instance:', error);
-    });
+    if (kickoff.ready) {
+      return { ready: true, message: 'Ready!', starting: false };
+    }
 
     return { ready: false, message: funMessage, starting: true };
   }

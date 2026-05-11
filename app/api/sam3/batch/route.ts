@@ -24,9 +24,11 @@ import { enqueueBatchJob, getQueueStats } from '@/lib/queue/batch-queue';
 import { checkRedisConnection } from '@/lib/queue/redis';
 import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
 import { sam3ConceptService, type ConceptDetection } from '@/lib/services/sam3-concept';
+import { ensureVisualCropBatchAwsReady } from '@/lib/services/sam3-batch-startup';
 import { normalizeDetectionType } from '@/lib/utils/detection-types';
 import { scaleExemplarBoxes } from '@/lib/utils/exemplar-scaling';
 import { buildExemplarCrops, normalizeExemplarCrops } from '@/lib/utils/exemplar-crops';
+import { SAM3_BATCH_JOB_KINDS } from '@/lib/utils/sam3-batch-jobs';
 import { logStructured } from '@/lib/utils/structured-log';
 import { S3Service } from '@/lib/services/s3';
 
@@ -423,6 +425,31 @@ async function processSynchronously(
         status: 'FAILED',
       };
     }
+  }
+
+  const awsStartupCheck = await ensureVisualCropBatchAwsReady({
+    batchJobId,
+    useSegmentCrops,
+    waitForAwsReady: () => sam3Orchestrator.waitForAWSReady(180000),
+    logger: console,
+  });
+  if (!awsStartupCheck.ok) {
+    await prisma.batchJob.update({
+      where: { id: batchJobId },
+      data: {
+        status: 'FAILED',
+        processedImages: 0,
+        detectionsFound: 0,
+        completedAt: new Date(),
+        errorMessage: awsStartupCheck.errorMessage,
+      },
+    });
+    return {
+      processedImages: 0,
+      detectionsFound: 0,
+      errors: [awsStartupCheck.errorMessage],
+      status: 'FAILED',
+    };
   }
 
   for (let i = 0; i < assets.length; i++) {
@@ -832,6 +859,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     let assetIds: string[];
     try {
       if (body.assetIds?.length) {
+        if (body.assetIds.length > MAX_IMAGES_PER_BATCH) {
+          return NextResponse.json(
+            {
+              error: `Legacy batch processing supports up to ${MAX_IMAGES_PER_BATCH} images. Use the v2 sharded dataset run for larger jobs.`,
+              success: false,
+              recommendedEndpoint: '/api/sam3/v2/batch',
+            },
+            { status: 409 }
+          );
+        }
+
         // Validate asset IDs format
         for (const assetId of body.assetIds) {
           if (!/^c[a-z0-9]{24,}$/i.test(assetId)) {
@@ -845,7 +883,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         // Verify assets exist and belong to project
         const assets = await prisma.asset.findMany({
           where: {
-            id: { in: body.assetIds.slice(0, MAX_IMAGES_PER_BATCH) },
+            id: { in: body.assetIds },
             projectId: body.projectId,
           },
           select: { id: true },
@@ -856,7 +894,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         const assets = await prisma.asset.findMany({
           where: { projectId: body.projectId },
           select: { id: true },
-          take: MAX_IMAGES_PER_BATCH,
+          take: MAX_IMAGES_PER_BATCH + 1,
         });
         assetIds = assets.map(a => a.id);
       }
@@ -872,6 +910,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       return NextResponse.json(
         { error: 'No assets found', success: false },
         { status: 404 }
+      );
+    }
+
+    if (!body.assetIds?.length && assetIds.length > MAX_IMAGES_PER_BATCH) {
+      return NextResponse.json(
+        {
+          error: `Legacy batch processing supports up to ${MAX_IMAGES_PER_BATCH} images. Use the v2 sharded dataset run for larger jobs.`,
+          success: false,
+          recommendedEndpoint: '/api/sam3/v2/batch',
+        },
+        { status: 409 }
       );
     }
 
@@ -1111,7 +1160,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   try {
     const batchJobs = await prisma.batchJob.findMany({
-      where: { projectId },
+      where: {
+        projectId,
+        NOT: {
+          kind: SAM3_BATCH_JOB_KINDS.SHARD,
+        },
+      },
       orderBy: { createdAt: 'desc' },
       include: {
         _count: {
@@ -1120,6 +1174,32 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       },
       take: 50,
     });
+
+    const aggregateParentIds = batchJobs
+      .filter((batchJob) => batchJob.kind === SAM3_BATCH_JOB_KINDS.AGGREGATE)
+      .map((batchJob) => batchJob.id);
+    const aggregateChildren = aggregateParentIds.length
+      ? await prisma.batchJob.findMany({
+          where: { parentBatchJobId: { in: aggregateParentIds } },
+          select: {
+            parentBatchJobId: true,
+            _count: {
+              select: { pendingAnnotations: true },
+            },
+          },
+        })
+      : [];
+    const pendingCountByParentId = aggregateChildren.reduce<Record<string, number>>(
+      (summary, childJob) => {
+        if (!childJob.parentBatchJobId) {
+          return summary;
+        }
+        summary[childJob.parentBatchJobId] =
+          (summary[childJob.parentBatchJobId] || 0) + childJob._count.pendingAnnotations;
+        return summary;
+      },
+      {}
+    );
 
     // Get queue stats
     let queueStats = null;
@@ -1131,7 +1211,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     return NextResponse.json({
       success: true,
-      batchJobs,
+      batchJobs: batchJobs.map((batchJob) => ({
+        ...batchJob,
+        _count: {
+          pendingAnnotations:
+            batchJob.kind === SAM3_BATCH_JOB_KINDS.AGGREGATE
+              ? pendingCountByParentId[batchJob.id] || 0
+              : batchJob._count.pendingAnnotations,
+        },
+      })),
       queueStats,
     });
   } catch (error) {

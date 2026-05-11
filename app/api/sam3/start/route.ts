@@ -11,6 +11,18 @@ export async function POST(): Promise<NextResponse> {
   try {
     const result = await sam3Orchestrator.ensureAWSReady();
 
+    if (!result.ready && !result.starting) {
+      return NextResponse.json(
+        {
+          success: false,
+          ready: false,
+          starting: false,
+          message: result.message,
+        },
+        { status: 503 }
+      );
+    }
+
     return NextResponse.json({
       success: true,
       ready: result.ready,

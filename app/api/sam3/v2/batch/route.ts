@@ -12,6 +12,10 @@ import {
   SAM3_BATCH_V2_MAX_EXEMPLARS,
   SAM3_BATCH_V2_MAX_IMAGES,
 } from '@/lib/services/sam3-batch-v2';
+import {
+  chunkAssetIds,
+  SAM3_BATCH_JOB_KINDS,
+} from '@/lib/utils/sam3-batch-jobs';
 import { checkRateLimit, getRateLimitKey } from '@/lib/utils/security';
 
 interface BoxExemplar {
@@ -129,13 +133,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  if (Array.isArray(body.assetIds) && body.assetIds.length > SAM3_BATCH_V2_MAX_IMAGES) {
-    return NextResponse.json(
-      { success: false, error: `Batch limit is ${SAM3_BATCH_V2_MAX_IMAGES} assets` },
-      { status: 400 }
-    );
-  }
-
   if (Array.isArray(body.assetIds) && body.assetIds.some((assetId) => !PROJECT_ID_REGEX.test(assetId))) {
     return NextResponse.json(
       { success: false, error: 'Invalid asset ID format' },
@@ -186,7 +183,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     : await prisma.asset.findMany({
         where: { projectId: body.projectId },
         select: { id: true },
-        take: SAM3_BATCH_V2_MAX_IMAGES + 1,
+        orderBy: [
+          { uploadedAt: 'asc' },
+          { id: 'asc' },
+        ],
       });
 
   if (body.assetIds?.length && requestedAssets.length !== body.assetIds.length) {
@@ -203,33 +203,119 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  if (!body.assetIds?.length && requestedAssets.length > SAM3_BATCH_V2_MAX_IMAGES) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: `Batch limit is ${SAM3_BATCH_V2_MAX_IMAGES} assets`,
-      },
-      { status: 400 }
-    );
-  }
-
-  const assetIds = requestedAssets.map((asset) => asset.id);
+  const assetIds = body.assetIds?.length
+    ? body.assetIds
+    : requestedAssets.map((asset) => asset.id);
   const exemplarsJson = body.exemplars as unknown as Prisma.InputJsonValue;
   const emptyStageLogJson = [] as unknown as Prisma.InputJsonValue;
+  const batchJobBaseData = {
+    projectId: body.projectId,
+    weedType: body.weedType,
+    exemplars: exemplarsJson,
+    textPrompt: body.textPrompt?.trim().substring(0, 100) || body.weedType,
+    exemplarSourceWidth: body.exemplarSourceWidth,
+    exemplarSourceHeight: body.exemplarSourceHeight,
+    sourceAssetId: body.sourceAssetId,
+    version: 2,
+    mode: body.mode,
+    stageLog: emptyStageLogJson,
+    status: 'QUEUED' as const,
+  };
+
+  if (assetIds.length > SAM3_BATCH_V2_MAX_IMAGES) {
+    const assetChunks = chunkAssetIds(assetIds, SAM3_BATCH_V2_MAX_IMAGES);
+
+    const parentBatchJob = await prisma.batchJob.create({
+      data: {
+        ...batchJobBaseData,
+        kind: SAM3_BATCH_JOB_KINDS.AGGREGATE,
+        totalImages: assetIds.length,
+        shardCount: assetChunks.length,
+      },
+    });
+
+    const shardJobs = await prisma.$transaction(
+      assetChunks.map((chunk, index) =>
+        prisma.batchJob.create({
+          data: {
+            ...batchJobBaseData,
+            parentBatchJobId: parentBatchJob.id,
+            kind: SAM3_BATCH_JOB_KINDS.SHARD,
+            shardIndex: index + 1,
+            shardCount: assetChunks.length,
+            totalImages: chunk.length,
+          },
+        })
+      )
+    );
+
+    try {
+      for (let index = 0; index < shardJobs.length; index += 1) {
+        const shardJob = shardJobs[index];
+        await enqueueBatchJobV2({
+          batchJobId: shardJob.id,
+          projectId: body.projectId,
+          weedType: body.weedType,
+          mode: body.mode,
+          exemplars: body.exemplars,
+          exemplarSourceWidth: body.exemplarSourceWidth,
+          exemplarSourceHeight: body.exemplarSourceHeight,
+          exemplarCrops: body.exemplarCrops,
+          sourceAssetId: body.sourceAssetId,
+          textPrompt: body.textPrompt,
+          assetIds: assetChunks[index],
+        });
+      }
+    } catch (error) {
+      await prisma.$transaction([
+        prisma.batchJob.update({
+          where: { id: parentBatchJob.id },
+          data: {
+            status: 'FAILED',
+            completedAt: new Date(),
+            errorMessage: error instanceof Error ? error.message : 'Failed to enqueue dataset shards.',
+          },
+        }),
+        ...shardJobs.map((shardJob) =>
+          prisma.batchJob.update({
+            where: { id: shardJob.id },
+            data: {
+              status: 'FAILED',
+              completedAt: new Date(),
+              errorMessage: error instanceof Error ? error.message : 'Failed to enqueue shard job.',
+            },
+          })
+        ),
+      ]);
+
+      return NextResponse.json(
+        { success: false, error: 'Failed to enqueue dataset shards. Please retry.' },
+        { status: 503 }
+      );
+    }
+
+    const queueStats = await getQueueStatsV2();
+
+    return NextResponse.json({
+      success: true,
+      batchJobId: parentBatchJob.id,
+      version: 2,
+      kind: SAM3_BATCH_JOB_KINDS.AGGREGATE,
+      mode: body.mode,
+      totalImages: assetIds.length,
+      processedImages: 0,
+      status: 'QUEUED',
+      shardCount: assetChunks.length,
+      queuePosition: queueStats.waiting + 1,
+      pollUrl: `/api/sam3/v2/batch/${parentBatchJob.id}`,
+    });
+  }
+
   const batchJob = await prisma.batchJob.create({
     data: {
-      projectId: body.projectId,
-      weedType: body.weedType,
-      exemplars: exemplarsJson,
-      textPrompt: body.textPrompt?.trim().substring(0, 100) || body.weedType,
-      exemplarSourceWidth: body.exemplarSourceWidth,
-      exemplarSourceHeight: body.exemplarSourceHeight,
-      sourceAssetId: body.sourceAssetId,
-      version: 2,
-      mode: body.mode,
-      stageLog: emptyStageLogJson,
+      ...batchJobBaseData,
+      kind: SAM3_BATCH_JOB_KINDS.SINGLE,
       totalImages: assetIds.length,
-      status: 'QUEUED',
     },
   });
 
@@ -269,6 +355,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     success: true,
     batchJobId: batchJob.id,
     version: 2,
+    kind: SAM3_BATCH_JOB_KINDS.SINGLE,
     mode: body.mode,
     totalImages: assetIds.length,
     status: 'QUEUED',

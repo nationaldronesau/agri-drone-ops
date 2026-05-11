@@ -332,6 +332,11 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     status: string;
     processedImages: number;
     totalImages: number;
+    kind?: string | null;
+    shardCount?: number | null;
+    completedShards?: number | null;
+    failedShards?: number | null;
+    completedWithWarnings?: boolean;
   } | null>(null);
   const [batchJobError, setBatchJobError] = useState<string | null>(null);
   const [batchPollUrl, setBatchPollUrl] = useState<string | null>(null);
@@ -1523,6 +1528,11 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
           status: data.status || 'QUEUED',
           processedImages: data.processedImages || 0,
           totalImages: data.totalImages || 0,
+          kind: data.kind || null,
+          shardCount: data.shardCount || null,
+          completedShards: data.completedShards || 0,
+          failedShards: data.failedShards || 0,
+          completedWithWarnings: Boolean(data.completedWithWarnings),
         });
         setBatchJobError(null);
         setBatchSummary(null);
@@ -1592,6 +1602,11 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
           status: data.batchJob.status,
           processedImages: data.batchJob.processedImages,
           totalImages: data.batchJob.totalImages,
+          kind: data.batchJob.kind || null,
+          shardCount: data.batchJob.shardCount || null,
+          completedShards: data.batchJob.completedShards || 0,
+          failedShards: data.batchJob.failedShards || 0,
+          completedWithWarnings: Boolean(data.batchJob.completedWithWarnings),
         });
         setBatchJobError(data.batchJob.errorMessage || null);
         setBatchSummary(data.summary || null);
@@ -2519,10 +2534,34 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
                 total={batchJobStatus.totalImages}
                 status={batchJobStatus.status}
                 errorMessage={batchJobError}
+                title={
+                  batchJobStatus.kind === 'AGGREGATE'
+                    ? 'Dataset Run Progress'
+                    : 'Batch Progress'
+                }
+                subtitle={
+                  batchJobStatus.kind === 'AGGREGATE' && batchJobStatus.shardCount
+                    ? `${batchJobStatus.shardCount} shard${batchJobStatus.shardCount === 1 ? '' : 's'} · ${batchJobStatus.completedShards || 0} complete${
+                        (batchJobStatus.failedShards || 0) > 0
+                          ? ` · ${batchJobStatus.failedShards} failed`
+                          : ''
+                      }`
+                    : null
+                }
                 onReview={
                   batchJobStatus.status === "COMPLETED" ? handleReviewBatch : undefined
                 }
               />
+              {batchJobStatus.kind === 'AGGREGATE' && (
+                <div className="mt-2 text-xs text-gray-500">
+                  One dataset run is being coordinated across shard jobs automatically.
+                </div>
+              )}
+              {batchJobStatus.completedWithWarnings && (
+                <div className="mt-2 text-xs text-amber-700">
+                  Dataset run completed with warnings. Review the failed shard count before exporting or spraying.
+                </div>
+              )}
               {batchSummary && (
                 <div className="mt-2 text-xs text-gray-500">
                   {batchSummary.pending} pending · {batchSummary.accepted} accepted ·{" "}

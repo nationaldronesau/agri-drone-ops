@@ -4,9 +4,14 @@ import {
   type Sam3BatchV2JobData,
   type Sam3BatchV2JobResult,
   getBatchQueueV2,
+  getQueueStatsV2,
 } from '../lib/queue/batch-queue-v2';
 import { QUEUE_PREFIX, createRedisConnection } from '../lib/queue/redis';
 import prisma from '../lib/db';
+import {
+  startShutdownScheduler,
+  stopShutdownScheduler,
+} from '../lib/services/sam3-shutdown-scheduler';
 import { sam3BatchV2Service } from '../lib/services/sam3-batch-v2';
 
 async function processBatchJob(job: Job<Sam3BatchV2JobData>): Promise<Sam3BatchV2JobResult> {
@@ -17,6 +22,12 @@ async function startWorker() {
   console.log('[Worker:v2] Starting SAM3 batch v2 worker...');
 
   await getBatchQueueV2();
+  startShutdownScheduler({
+    canShutdown: async () => {
+      const stats = await getQueueStatsV2();
+      return stats.waiting === 0 && stats.active === 0;
+    },
+  });
 
   const redisConnection = createRedisConnection();
 
@@ -68,6 +79,7 @@ async function startWorker() {
 
   const shutdown = async () => {
     console.log('[Worker:v2] Shutting down...');
+    stopShutdownScheduler();
     await worker.close();
     await redisConnection.quit();
     await prisma.$disconnect();
