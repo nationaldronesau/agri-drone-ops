@@ -263,8 +263,8 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const [boxExemplars, setBoxExemplars] = useState<BoxExemplar[]>([]);
   const [currentBox, setCurrentBox] = useState<DrawingBox | null>(null);
   const [isDrawingBox, setIsDrawingBox] = useState(false);
-  const [useVisualCrops, setUseVisualCrops] = useState(false);
-  const [useBatchPipelineV2, setUseBatchPipelineV2] = useState(false);
+  const [useVisualCrops, setUseVisualCrops] = useState(true);
+  const [useBatchPipelineV2, setUseBatchPipelineV2] = useState(true);
 
   // Annotation form state
   const [selectedClass, setSelectedClass] = useState(DEFAULT_WEED_CLASSES[0].name);
@@ -1437,11 +1437,14 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
 
     const sourceAssetId = exemplarAssetIds[0];
     let visualExemplarCrops: string[] | undefined;
+    const isMultiImageBatch = projectAssets.length > 1;
+    const batchUsesVisualCrops = isMultiImageBatch || useVisualCrops;
+    const batchUsesPipelineV2 = isMultiImageBatch || useBatchPipelineV2;
 
     setBatchProcessing(true);
     setSam3Error(null);
     try {
-      if (useVisualCrops) {
+      if (batchUsesVisualCrops) {
         if (sourceAssetId !== session.asset.id) {
           console.warn('[Batch] Current asset differs from source exemplar asset; skipping client crop extraction and using server-side source asset crop build', {
             currentAssetId: session.asset.id,
@@ -1489,10 +1492,10 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
             }
           : {};
 
-      const exemplarBoxesForBatch = useVisualCrops
+      const exemplarBoxesForBatch = batchUsesVisualCrops
         ? boxExemplars.slice(0, MAX_VISUAL_EXEMPLAR_CROPS).map(e => e.box)
         : boxExemplars.slice(0, MAX_BATCH_EXEMPLARS).map(e => e.box);
-      const batchEndpoint = useBatchPipelineV2 ? '/api/sam3/v2/batch' : '/api/sam3/batch';
+      const batchEndpoint = batchUsesPipelineV2 ? '/api/sam3/v2/batch' : '/api/sam3/batch';
       const batchPayload = {
         projectId: session.asset.project.id,
         weedType: selectedClass,
@@ -1501,14 +1504,14 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         sourceAssetId,
         // No assetIds = process all images in project
         textPrompt: selectedClass,
-        ...(useBatchPipelineV2
+        ...(batchUsesPipelineV2
           ? {
-              mode: useVisualCrops ? 'visual_crop_match' : 'concept_propagation',
-              exemplarCrops: useVisualCrops ? visualExemplarCrops : undefined,
+              mode: batchUsesVisualCrops ? 'visual_crop_match' : 'concept_propagation',
+              exemplarCrops: batchUsesVisualCrops ? visualExemplarCrops : undefined,
             }
           : {
-              useVisualCrops,
-              exemplarCrops: useVisualCrops ? visualExemplarCrops : undefined,
+              useVisualCrops: batchUsesVisualCrops,
+              exemplarCrops: batchUsesVisualCrops ? visualExemplarCrops : undefined,
             }),
       };
 
@@ -1522,7 +1525,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         const data = await response.json();
         setBatchJobId(data.batchJobId);
         setBatchPollUrl(
-          data.pollUrl || `${useBatchPipelineV2 ? '/api/sam3/v2/batch' : '/api/sam3/batch'}/${data.batchJobId}`
+          data.pollUrl || `${batchUsesPipelineV2 ? '/api/sam3/v2/batch' : '/api/sam3/batch'}/${data.batchJobId}`
         );
         setBatchJobStatus({
           status: data.status || 'QUEUED',
@@ -1567,7 +1570,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     } finally {
       setBatchProcessing(false);
     }
-  }, [session, boxExemplars, selectedClass, useVisualCrops, useBatchPipelineV2, buildVisualExemplarCrops]);
+  }, [session, boxExemplars, selectedClass, useVisualCrops, useBatchPipelineV2, buildVisualExemplarCrops, projectAssets.length]);
 
   useEffect(() => {
     if (!batchJobId || !batchPollUrl) return;
@@ -2620,33 +2623,37 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
                 <div className="flex items-center gap-2 text-[11px] text-purple-700">
                   <Checkbox
                     id="use-visual-crops"
-                    checked={useVisualCrops}
+                    checked={projectAssets.length > 1 || useVisualCrops}
+                    disabled={projectAssets.length > 1}
                     onCheckedChange={(checked) => setUseVisualCrops(checked === true)}
                   />
                   <label htmlFor="use-visual-crops" className="cursor-pointer">
-                    Use example-based visual matching
+                    Use example-based visual matching{projectAssets.length > 1 ? ' (required)' : ''}
                   </label>
                 </div>
                 <div className="flex items-center gap-2 text-[11px] text-purple-700">
                   <Checkbox
                     id="use-batch-pipeline-v2"
-                    checked={useBatchPipelineV2}
+                    checked={projectAssets.length > 1 || useBatchPipelineV2}
+                    disabled={projectAssets.length > 1}
                     onCheckedChange={(checked) => setUseBatchPipelineV2(checked === true)}
                   />
                   <label htmlFor="use-batch-pipeline-v2" className="cursor-pointer">
-                    Use cleared SAM3 Pipeline v2
+                    Use cleared SAM3 Pipeline v2{projectAssets.length > 1 ? ' (required)' : ''}
                   </label>
                 </div>
               </div>
               <p className="text-[10px] text-purple-600 mt-2">
-                {useVisualCrops
+                {projectAssets.length > 1 || useVisualCrops
                   ? 'Uses your drawn examples as visual references. Best for domain-specific objects.'
                   : 'Class-aware matching enabled. Better when the selected class generalizes well.'}
               </p>
               <p className="text-[10px] text-purple-600 mt-1">
-                {useBatchPipelineV2
-                  ? 'V2 uses the queue-only batch worker with explicit stage tracking.'
-                  : 'V1 remains the default path until you opt into v2.'}
+                {projectAssets.length > 1
+                  ? 'Multi-image Apply to All always uses v2 visual matching so target images are matched from the exemplar, not the source box location.'
+                  : useBatchPipelineV2
+                    ? 'V2 uses the queue-only batch worker with explicit stage tracking.'
+                  : 'Legacy V1 selected. Use only for single-image or controlled debugging runs.'}
               </p>
             </div>
           )}
