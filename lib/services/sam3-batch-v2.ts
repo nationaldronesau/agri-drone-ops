@@ -33,6 +33,66 @@ export const SAM3_BATCH_V2_GPU_LOCK_RETRY_TIMEOUT_MS = 60000;
 export const SAM3_BATCH_V2_GPU_MEMORY_THRESHOLD_MB = 12 * 1024;
 export const SAM3_BATCH_V2_MODEL_OVERHEAD_MB = 4096;
 
+const parseOptionalNumber = (value: string | undefined): number | undefined => {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const parseOptionalInt = (value: string | undefined): number | undefined => {
+  if (!value) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+export const SAM3_BATCH_V2_DEFAULT_SIMILARITY_THRESHOLD =
+  parseOptionalNumber(process.env.SAM3_CONCEPT_SIMILARITY_THRESHOLD) ?? 0.65;
+export const SAM3_BATCH_V2_DEFAULT_TOP_K =
+  parseOptionalInt(process.env.SAM3_CONCEPT_TOP_K) ?? 120;
+export const SAM3_BATCH_V2_DEFAULT_MIN_BOX_SIZE =
+  parseOptionalInt(process.env.SAM3_CONCEPT_MIN_BOX_SIZE) ?? 16;
+export const SAM3_BATCH_V2_DEFAULT_MAX_BOX_SIZE =
+  parseOptionalInt(process.env.SAM3_CONCEPT_MAX_BOX_SIZE) ?? 600;
+export const SAM3_BATCH_V2_DEFAULT_NMS_THRESHOLD =
+  parseOptionalNumber(process.env.SAM3_CONCEPT_NMS_THRESHOLD) ?? 0.5;
+
+export function buildBatchV2ConceptApplyOptions(): SAM3ConceptApplyOptions {
+  return {
+    returnPolygons: true,
+    similarityThreshold: SAM3_BATCH_V2_DEFAULT_SIMILARITY_THRESHOLD,
+    topK: SAM3_BATCH_V2_DEFAULT_TOP_K,
+    minBoxSize: SAM3_BATCH_V2_DEFAULT_MIN_BOX_SIZE,
+    maxBoxSize: SAM3_BATCH_V2_DEFAULT_MAX_BOX_SIZE,
+    nmsThreshold: SAM3_BATCH_V2_DEFAULT_NMS_THRESHOLD,
+  };
+}
+
+function conceptDetectionScore(
+  detection: Pick<SAM3ConceptDetection, 'similarity' | 'confidence'>
+): number {
+  if (typeof detection.similarity === 'number' && Number.isFinite(detection.similarity)) {
+    return detection.similarity;
+  }
+  if (typeof detection.confidence === 'number' && Number.isFinite(detection.confidence)) {
+    return detection.confidence;
+  }
+  return 0;
+}
+
+export function filterBatchV2ConceptDetections(
+  detections: SAM3ConceptDetection[],
+  options: SAM3ConceptApplyOptions = buildBatchV2ConceptApplyOptions()
+): SAM3ConceptDetection[] {
+  const threshold =
+    typeof options.similarityThreshold === 'number'
+      ? options.similarityThreshold
+      : SAM3_BATCH_V2_DEFAULT_SIMILARITY_THRESHOLD;
+
+  return detections
+    .filter((detection) => conceptDetectionScore(detection) >= threshold)
+    .sort((left, right) => conceptDetectionScore(right) - conceptDetectionScore(left));
+}
+
 const EMPIRICAL_GPU_MEMORY_LOOKUP_MB: Record<number, number> = {
   1: 4608,
   2: 5632,
@@ -469,6 +529,70 @@ function normalizePolygon(
     [bbox[2], bbox[3]],
     [bbox[0], bbox[3]],
   ];
+}
+
+function bboxToBoxCoordinate(
+  bbox: [number, number, number, number],
+  scaleFactor = 1
+): BoxCoordinate {
+  return {
+    x1: Math.round(bbox[0] * scaleFactor),
+    y1: Math.round(bbox[1] * scaleFactor),
+    x2: Math.round(bbox[2] * scaleFactor),
+    y2: Math.round(bbox[3] * scaleFactor),
+  };
+}
+
+function isValidBox(box: BoxCoordinate): boolean {
+  return box.x2 > box.x1 && box.y2 > box.y1;
+}
+
+function bboxArea(bbox: [number, number, number, number]): number {
+  return Math.max(0, bbox[2] - bbox[0]) * Math.max(0, bbox[3] - bbox[1]);
+}
+
+function bboxIou(
+  first: [number, number, number, number],
+  second: [number, number, number, number]
+): number {
+  const x1 = Math.max(first[0], second[0]);
+  const y1 = Math.max(first[1], second[1]);
+  const x2 = Math.min(first[2], second[2]);
+  const y2 = Math.min(first[3], second[3]);
+  const intersection = bboxArea([x1, y1, x2, y2]);
+  const union = bboxArea(first) + bboxArea(second) - intersection;
+
+  return union > 0 ? intersection / union : 0;
+}
+
+function bestConceptCandidateForBbox(
+  bbox: [number, number, number, number],
+  candidates: SAM3ConceptDetection[]
+): SAM3ConceptDetection | null {
+  let bestCandidate: SAM3ConceptDetection | null = null;
+  let bestScore = -1;
+
+  for (const candidate of candidates) {
+    const score = bboxIou(bbox, candidate.bbox);
+    if (score > bestScore) {
+      bestCandidate = candidate;
+      bestScore = score;
+    }
+  }
+
+  return bestCandidate;
+}
+
+function mapConceptDetectionToAssetDetection(
+  detection: SAM3ConceptDetection
+): AssetInferenceResult['detections'][number] {
+  const score = conceptDetectionScore(detection);
+  return {
+    bbox: detection.bbox,
+    polygon: normalizePolygon(detection.polygon, detection.bbox),
+    confidence: score,
+    similarity: typeof detection.similarity === 'number' ? detection.similarity : score,
+  };
 }
 
 function scaleBboxToOriginal(
@@ -1200,7 +1324,12 @@ export class Sam3BatchV2Service {
             }
 
             if (visualMatchExemplarId) {
-              result = await this.runVisualConceptMatch(asset, imageBuffer, visualMatchExemplarId);
+              result = await this.runVisualConceptMatch(
+                asset,
+                imageBuffer,
+                visualMatchExemplarId,
+                prepared.textPrompt
+              );
             } else {
               result = await this.runVisualCropMatch(asset, imageBuffer, prepared);
             }
@@ -1403,13 +1532,15 @@ export class Sam3BatchV2Service {
   private async runVisualConceptMatch(
     asset: AssetRecord,
     imageBuffer: Buffer,
-    exemplarId: string
+    exemplarId: string,
+    className: string
   ): Promise<AssetInferenceResult> {
+    const conceptOptions = buildBatchV2ConceptApplyOptions();
     const result = await this.awsSam3Service.applyConceptExemplar({
       exemplarId,
       imageBuffer,
       imageId: asset.id,
-      options: { returnPolygons: true },
+      options: conceptOptions,
     });
 
     if (!result.success || !result.data) {
@@ -1422,12 +1553,13 @@ export class Sam3BatchV2Service {
       };
     }
 
-    const detections = result.data.detections.map((detection) => ({
-      bbox: detection.bbox,
-      polygon: normalizePolygon(detection.polygon, detection.bbox),
-      confidence: detection.confidence,
-      similarity: detection.similarity,
-    }));
+    const candidates = filterBatchV2ConceptDetections(result.data.detections, conceptOptions);
+    const detections = await this.refineConceptDetectionsWithBoxPrompts(
+      asset,
+      imageBuffer,
+      className,
+      candidates
+    );
 
     return {
       assetId: asset.id,
@@ -1452,11 +1584,12 @@ export class Sam3BatchV2Service {
       };
     }
 
+    const conceptOptions = buildBatchV2ConceptApplyOptions();
     const result = await this.awsSam3Service.applyConceptExemplar({
       exemplarId: conceptExemplarId,
       imageBuffer,
       imageId: asset.id,
-      options: { returnPolygons: true },
+      options: conceptOptions,
     });
 
     if (!result.success || !result.data) {
@@ -1469,18 +1602,69 @@ export class Sam3BatchV2Service {
       };
     }
 
-    const detections = result.data.detections.map((detection) => ({
-      bbox: detection.bbox,
-      polygon: normalizePolygon(detection.polygon, detection.bbox),
-      confidence: detection.confidence,
-      similarity: detection.similarity,
-    }));
+    const candidates = filterBatchV2ConceptDetections(result.data.detections, conceptOptions);
+    const detections = await this.refineConceptDetectionsWithBoxPrompts(
+      asset,
+      imageBuffer,
+      weedType,
+      candidates
+    );
 
     return {
       assetId: asset.id,
       detections,
       outcome: detections.length > 0 ? 'success' : 'zero_detections',
     };
+  }
+
+  private async refineConceptDetectionsWithBoxPrompts(
+    asset: AssetRecord,
+    imageBuffer: Buffer,
+    className: string,
+    candidates: SAM3ConceptDetection[]
+  ): Promise<AssetInferenceResult['detections']> {
+    if (candidates.length === 0) {
+      return [];
+    }
+
+    const resized = await this.awsSam3Service.resizeImage(imageBuffer);
+    const boxes = candidates
+      .map((candidate) => bboxToBoxCoordinate(candidate.bbox, resized.scaling.scaleFactor))
+      .filter(isValidBox);
+
+    if (boxes.length === 0) {
+      return [];
+    }
+
+    const result = await this.awsSam3Service.segment({
+      image: resized.buffer.toString('base64'),
+      boxes,
+      className,
+    });
+
+    if (!result.success || !result.response || result.response.detections.length === 0) {
+      console.warn(
+        `[SAM3 V2] Target box refinement failed for ${asset.id}; falling back to concept candidates.`
+      );
+      return candidates.map(mapConceptDetectionToAssetDetection);
+    }
+
+    return result.response.detections.map((detection) => {
+      const bbox = scaleBboxToOriginal(detection.bbox, resized.scaling.scaleFactor);
+      const sourceCandidate = bestConceptCandidateForBbox(bbox, candidates);
+      const score = sourceCandidate ? conceptDetectionScore(sourceCandidate) : detection.confidence;
+      const similarity =
+        sourceCandidate && typeof sourceCandidate.similarity === 'number'
+          ? sourceCandidate.similarity
+          : score;
+
+      return {
+        bbox,
+        polygon: scalePolygonToOriginal(detection.polygon, bbox, resized.scaling.scaleFactor),
+        confidence: score,
+        similarity,
+      };
+    });
   }
 
   private async persistAssetResult(
