@@ -2620,28 +2620,38 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
                   )}
                   Apply to All {projectAssets.length} Images
                 </Button>
-                <div className="flex items-center gap-2 text-[11px] text-purple-700">
-                  <Checkbox
-                    id="use-visual-crops"
-                    checked={projectAssets.length > 1 || useVisualCrops}
-                    disabled={projectAssets.length > 1}
-                    onCheckedChange={(checked) => setUseVisualCrops(checked === true)}
-                  />
-                  <label htmlFor="use-visual-crops" className="cursor-pointer">
-                    Use example-based visual matching{projectAssets.length > 1 ? ' (required)' : ''}
-                  </label>
-                </div>
-                <div className="flex items-center gap-2 text-[11px] text-purple-700">
-                  <Checkbox
-                    id="use-batch-pipeline-v2"
-                    checked={projectAssets.length > 1 || useBatchPipelineV2}
-                    disabled={projectAssets.length > 1}
-                    onCheckedChange={(checked) => setUseBatchPipelineV2(checked === true)}
-                  />
-                  <label htmlFor="use-batch-pipeline-v2" className="cursor-pointer">
-                    Use cleared SAM3 Pipeline v2{projectAssets.length > 1 ? ' (required)' : ''}
-                  </label>
-                </div>
+                {projectAssets.length > 1 ? (
+                  <div className="rounded-md border border-purple-200 bg-purple-50 px-2 py-1.5 text-[11px] text-purple-800">
+                    Dataset runs use SAM3 v2 visual matching. Your drawn examples are matched
+                    by appearance across the dataset, then sent to review before training.
+                  </div>
+                ) : (
+                  <div className="space-y-1 rounded-md border border-purple-100 bg-white/70 p-2">
+                    <p className="text-[10px] font-medium uppercase tracking-wide text-purple-500">
+                      Advanced single-image debug options
+                    </p>
+                    <div className="flex items-center gap-2 text-[11px] text-purple-700">
+                      <Checkbox
+                        id="use-visual-crops"
+                        checked={useVisualCrops}
+                        onCheckedChange={(checked) => setUseVisualCrops(checked === true)}
+                      />
+                      <label htmlFor="use-visual-crops" className="cursor-pointer">
+                        Use example-based visual matching
+                      </label>
+                    </div>
+                    <div className="flex items-center gap-2 text-[11px] text-purple-700">
+                      <Checkbox
+                        id="use-batch-pipeline-v2"
+                        checked={useBatchPipelineV2}
+                        onCheckedChange={(checked) => setUseBatchPipelineV2(checked === true)}
+                      />
+                      <label htmlFor="use-batch-pipeline-v2" className="cursor-pointer">
+                        Use SAM3 Pipeline v2
+                      </label>
+                    </div>
+                  </div>
+                )}
               </div>
               <p className="text-[10px] text-purple-600 mt-2">
                 {projectAssets.length > 1 || useVisualCrops

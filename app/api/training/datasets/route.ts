@@ -9,6 +9,7 @@ import prisma from '@/lib/db';
 import { datasetPreparation } from '@/lib/services/dataset-preparation';
 import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
 import { checkRateLimit } from '@/lib/utils/security';
+import { normalizeTrainingDatasetSourceFlags } from '@/lib/utils/training-dataset-sources';
 
 const ALLOWED_AUGMENTATION_PRESETS = new Set([
   'none',
@@ -48,12 +49,18 @@ export async function POST(request: NextRequest) {
       sessionIds,
       classes,
       splitRatio,
-      includeAIDetections = true,
-      includeManualAnnotations = true,
+      includeAIDetections,
+      includeManualAnnotations,
+      includeSAM3,
       minConfidence = 0.5,
       augmentationPreset = 'none',
       augmentationConfig,
     } = body;
+    const sourceFlags = normalizeTrainingDatasetSourceFlags({
+      includeAIDetections,
+      includeManualAnnotations,
+      includeSAM3,
+    });
 
     if (!name || typeof name !== 'string') {
       return NextResponse.json({ error: 'name is required' }, { status: 400 });
@@ -140,8 +147,9 @@ export async function POST(request: NextRequest) {
       sessionIds,
       classes,
       splitRatio: splitRatio || { train: 0.7, val: 0.2, test: 0.1 },
-      includeAIDetections,
-      includeManualAnnotations,
+      includeAIDetections: sourceFlags.includeAIDetections,
+      includeManualAnnotations: sourceFlags.includeManualAnnotations,
+      includeSAM3: sourceFlags.includeSAM3,
       minConfidence,
       createdById: auth.userId,
       augmentationPreset,
@@ -198,6 +206,7 @@ export async function POST(request: NextRequest) {
           augmentationPreset && augmentationPreset !== 'none'
             ? augmentationConfig || null
             : null,
+        sources: sourceFlags,
       },
     });
   } catch (error) {

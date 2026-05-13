@@ -3,6 +3,7 @@
 import { useCallback, useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Sam3Ec2Control } from '@/components/dashboard/sam3-ec2-control';
 import {
@@ -71,6 +72,21 @@ interface BatchJob {
   };
 }
 
+interface WorkflowReadinessCheck {
+  key: 'sam' | 'queue' | 'yolo' | 'roboflow';
+  label: string;
+  ready: boolean;
+  state: 'ready' | 'blocked' | 'available';
+  message: string;
+}
+
+interface WorkflowReadinessResponse {
+  readyForSamDatasetRun: boolean;
+  readyForYoloTraining: boolean;
+  roboflowFallbackAvailable: boolean;
+  checks: WorkflowReadinessCheck[];
+}
+
 export default function TrainingHubPage() {
   const [projects, setProjects] = useState<RoboflowProject[]>([]);
   const [batchJobs, setBatchJobs] = useState<BatchJob[]>([]);
@@ -79,6 +95,9 @@ export default function TrainingHubPage() {
   const [error, setError] = useState<string | null>(null);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [sam3Ready, setSam3Ready] = useState(false);
+  const [workflowReadiness, setWorkflowReadiness] =
+    useState<WorkflowReadinessResponse | null>(null);
+  const [workflowReadinessError, setWorkflowReadinessError] = useState<string | null>(null);
   const [deletingBatchId, setDeletingBatchId] = useState<string | null>(null);
   const [batchToDelete, setBatchToDelete] = useState<BatchJob | null>(null);
 
@@ -132,9 +151,25 @@ export default function TrainingHubPage() {
     }
   };
 
+  const fetchWorkflowReadiness = async () => {
+    try {
+      setWorkflowReadinessError(null);
+      const response = await fetch('/api/training-hub/readiness');
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.error || `Readiness check failed (${response.status})`);
+      }
+      setWorkflowReadiness(data);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load workflow readiness';
+      setWorkflowReadinessError(message);
+    }
+  };
+
   useEffect(() => {
     fetchProjects();
     fetchBatchJobs();
+    fetchWorkflowReadiness();
   }, []);
 
   const handleSam3ReadyChange = useCallback((ready: boolean) => {
@@ -197,7 +232,58 @@ export default function TrainingHubPage() {
           title="SAM3 Readiness"
           onReadyChange={handleSam3ReadyChange}
         />
-
+        <Card className="border-slate-200 bg-white mb-6">
+          <CardHeader className="pb-3">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div>
+                <CardTitle className="text-lg">Commercial Workflow Readiness</CardTitle>
+                <CardDescription>
+                  SAM labels, review gate, YOLO 11 training, and Roboflow fallback.
+                </CardDescription>
+              </div>
+              <Button variant="outline" size="sm" onClick={fetchWorkflowReadiness}>
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Refresh
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {workflowReadinessError ? (
+              <div className="flex items-center gap-2 text-sm text-amber-700">
+                <AlertCircle className="h-4 w-4" />
+                {workflowReadinessError}
+              </div>
+            ) : workflowReadiness ? (
+              <div className="grid gap-3 md:grid-cols-4">
+                {workflowReadiness.checks.map((check) => (
+                  <div
+                    key={check.key}
+                    className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+                  >
+                    <Badge
+                      variant={check.state === 'blocked' ? 'destructive' : 'secondary'}
+                      className={
+                        check.state === 'ready'
+                          ? 'bg-green-100 text-green-700 hover:bg-green-100'
+                          : check.state === 'available'
+                            ? 'bg-blue-100 text-blue-700 hover:bg-blue-100'
+                            : undefined
+                      }
+                    >
+                      {check.label}
+                    </Badge>
+                    <p className="mt-2 text-xs text-slate-600">{check.message}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-sm text-slate-500">
+                <RefreshCw className="h-4 w-4 animate-spin" />
+                Checking workflow readiness...
+              </div>
+            )}
+          </CardContent>
+        </Card>
         <WorkflowGuide current="sam3" />
         {/* Workflow Cards */}
         <div className="grid md:grid-cols-2 gap-6 mb-8">

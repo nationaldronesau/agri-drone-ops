@@ -8,6 +8,7 @@ import prisma from '@/lib/db';
 import { datasetPreparation } from '@/lib/services/dataset-preparation';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
 import { checkRateLimit } from '@/lib/utils/security';
+import { normalizeTrainingDatasetSourceFlags } from '@/lib/utils/training-dataset-sources';
 
 export async function POST(request: NextRequest) {
   try {
@@ -37,10 +38,16 @@ export async function POST(request: NextRequest) {
       sessionIds,
       classes,
       splitRatio,
-      includeAIDetections = true,
-      includeManualAnnotations = true,
+      includeAIDetections,
+      includeManualAnnotations,
+      includeSAM3,
       minConfidence = 0.5,
     } = body;
+    const sourceFlags = normalizeTrainingDatasetSourceFlags({
+      includeAIDetections,
+      includeManualAnnotations,
+      includeSAM3,
+    });
 
     if (!projectId) {
       return NextResponse.json({ error: 'projectId is required' }, { status: 400 });
@@ -99,12 +106,13 @@ export async function POST(request: NextRequest) {
       sessionIds,
       classes,
       splitRatio: splitRatio || { train: 0.7, val: 0.2, test: 0.1 },
-      includeAIDetections,
-      includeManualAnnotations,
+      includeAIDetections: sourceFlags.includeAIDetections,
+      includeManualAnnotations: sourceFlags.includeManualAnnotations,
+      includeSAM3: sourceFlags.includeSAM3,
       minConfidence,
     });
 
-    return NextResponse.json({ preview });
+    return NextResponse.json({ preview, sources: sourceFlags });
   } catch (error) {
     console.error('Error previewing dataset:', error);
     const message = error instanceof Error ? error.message : 'Failed to preview dataset';
