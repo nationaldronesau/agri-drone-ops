@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Sam3Ec2Control } from '@/components/dashboard/sam3-ec2-control';
 import {
   Plus,
   RefreshCw,
@@ -70,19 +71,6 @@ interface BatchJob {
   };
 }
 
-interface Sam3StartResponse {
-  success: boolean;
-  ready: boolean;
-  starting: boolean;
-  message?: string;
-}
-
-interface Sam3StatusResponse {
-  aws: {
-    ready: boolean;
-  };
-}
-
 export default function TrainingHubPage() {
   const [projects, setProjects] = useState<RoboflowProject[]>([]);
   const [batchJobs, setBatchJobs] = useState<BatchJob[]>([]);
@@ -90,7 +78,7 @@ export default function TrainingHubPage() {
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [sam3WarmupMessage, setSam3WarmupMessage] = useState<string | null>(null);
+  const [sam3Ready, setSam3Ready] = useState(false);
   const [deletingBatchId, setDeletingBatchId] = useState<string | null>(null);
   const [batchToDelete, setBatchToDelete] = useState<BatchJob | null>(null);
 
@@ -149,41 +137,8 @@ export default function TrainingHubPage() {
     fetchBatchJobs();
   }, []);
 
-  useEffect(() => {
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
-
-    const startSam3 = async () => {
-      try {
-        const response = await fetch('/api/sam3/start', { method: 'POST' });
-        if (!response.ok) return;
-
-        const data: Sam3StartResponse = await response.json();
-        if (data.starting && !data.ready) {
-          setSam3WarmupMessage(data.message || 'Warming up the SAM3 GPU...');
-          pollTimer = setInterval(async () => {
-            try {
-              const statusResponse = await fetch('/api/sam3/status');
-              if (!statusResponse.ok) return;
-              const statusData: Sam3StatusResponse = await statusResponse.json();
-              if (statusData.aws?.ready) {
-                setSam3WarmupMessage(null);
-                if (pollTimer) clearInterval(pollTimer);
-              }
-            } catch {
-              // Ignore transient status errors
-            }
-          }, 5000);
-        }
-      } catch {
-        // Ignore warmup failures on load
-      }
-    };
-
-    startSam3();
-
-    return () => {
-      if (pollTimer) clearInterval(pollTimer);
-    };
+  const handleSam3ReadyChange = useCallback((ready: boolean) => {
+    setSam3Ready(ready);
   }, []);
 
   const handleProjectCreated = () => {
@@ -237,33 +192,60 @@ export default function TrainingHubPage() {
       </div>
 
       <div>
-        {sam3WarmupMessage && (
-          <Card className="border-blue-200 bg-blue-50 mb-6">
-            <CardContent className="py-4">
-              <div className="flex items-center gap-3 text-blue-700">
-                <RefreshCw className="w-5 h-5 animate-spin" />
-                <div>
-                  <p className="font-medium">Starting SAM3 GPU…</p>
-                  <p className="text-sm text-blue-600">{sam3WarmupMessage}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
+        <Sam3Ec2Control
+          showDetails
+          title="SAM3 Readiness"
+          onReadyChange={handleSam3ReadyChange}
+        />
+
         <WorkflowGuide current="sam3" />
         {/* Workflow Cards */}
         <div className="grid md:grid-cols-2 gap-6 mb-8">
           {/* Label New Species */}
-          <Card className="hover:shadow-lg transition-all cursor-pointer group border-2 hover:border-green-300">
-            <Link href="/training-hub/new-species">
+          <Card className={`transition-all group border-2 ${sam3Ready ? 'hover:shadow-lg cursor-pointer hover:border-green-300' : 'cursor-not-allowed border-gray-200 bg-gray-50 opacity-70'}`}>
+            {sam3Ready ? (
+              <Link href="/training-hub/new-species">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+                      <Sparkles className="w-6 h-6 text-white" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-xl">Label New Species</CardTitle>
+                      <CardDescription>Train AI to detect a new weed type</CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <ul className="space-y-2 text-sm text-gray-600 mb-4">
+                    <li className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-green-500" />
+                      Upload images without AI detection
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-green-500" />
+                      Use SAM3 click-to-segment labeling
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-green-500" />
+                      Push annotations to create new model
+                    </li>
+                  </ul>
+                  <div className="flex items-center text-green-600 font-medium group-hover:gap-3 transition-all">
+                    Start Labeling <ArrowRight className="w-4 h-4 ml-2" />
+                  </div>
+                </CardContent>
+              </Link>
+            ) : (
+              <div>
               <CardHeader className="pb-3">
                 <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+                  <div className="w-12 h-12 rounded-xl bg-gray-200 flex items-center justify-center">
                     <Sparkles className="w-6 h-6 text-white" />
                   </div>
                   <div>
                     <CardTitle className="text-xl">Label New Species</CardTitle>
-                    <CardDescription>Train AI to detect a new weed type</CardDescription>
+                    <CardDescription>Wake SAM3 before starting a labeling run</CardDescription>
                   </div>
                 </div>
               </CardHeader>
@@ -282,11 +264,12 @@ export default function TrainingHubPage() {
                     Push annotations to create new model
                   </li>
                 </ul>
-                <div className="flex items-center text-green-600 font-medium group-hover:gap-3 transition-all">
-                  Start Labeling <ArrowRight className="w-4 h-4 ml-2" />
+                <div className="flex items-center text-gray-500 font-medium">
+                  SAM3 not ready
                 </div>
               </CardContent>
-            </Link>
+              </div>
+            )}
           </Card>
 
           {/* Improve Existing Model */}
@@ -327,19 +310,53 @@ export default function TrainingHubPage() {
         </div>
 
         {/* Assisted Labeling Card - Full Width */}
-        <Card className="hover:shadow-lg transition-all cursor-pointer group border-2 hover:border-purple-300 mb-8">
-          <Link href="/training-hub/new-species">
+        <Card className={`transition-all group border-2 mb-8 ${sam3Ready ? 'hover:shadow-lg cursor-pointer hover:border-purple-300' : 'cursor-not-allowed border-gray-200 bg-gray-50 opacity-70'}`}>
+          {sam3Ready ? (
+            <Link href="/training-hub/new-species">
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-400 to-purple-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+                    <Wand2 className="w-6 h-6 text-white" />
+                  </div>
+                  <div className="flex-1">
+                    <CardTitle className="text-xl">Assisted Labeling (SAM3 Batch)</CardTitle>
+                    <CardDescription>Label a few exemplars, then apply to entire dataset</CardDescription>
+                  </div>
+                  <div className="flex items-center text-purple-600 font-medium group-hover:gap-3 transition-all">
+                    Start <ArrowRight className="w-4 h-4 ml-2" />
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="grid md:grid-cols-3 gap-4 text-sm text-gray-600">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center text-xs font-bold">1</span>
+                    Label 2-5 examples with SAM3
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center text-xs font-bold">2</span>
+                    AI applies predictions to all images
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center text-xs font-bold">3</span>
+                    Review & push accepted annotations
+                  </div>
+                </div>
+              </CardContent>
+            </Link>
+          ) : (
+            <div>
             <CardHeader className="pb-3">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-400 to-purple-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+                <div className="w-12 h-12 rounded-xl bg-gray-200 flex items-center justify-center">
                   <Wand2 className="w-6 h-6 text-white" />
                 </div>
                 <div className="flex-1">
                   <CardTitle className="text-xl">Assisted Labeling (SAM3 Batch)</CardTitle>
-                  <CardDescription>Label a few exemplars, then apply to entire dataset</CardDescription>
+                  <CardDescription>Wake SAM3 and wait for safe-to-process before batch runs</CardDescription>
                 </div>
-                <div className="flex items-center text-purple-600 font-medium group-hover:gap-3 transition-all">
-                  Start <ArrowRight className="w-4 h-4 ml-2" />
+                <div className="flex items-center text-gray-500 font-medium">
+                  SAM3 not ready
                 </div>
               </div>
             </CardHeader>
@@ -359,7 +376,8 @@ export default function TrainingHubPage() {
                 </div>
               </div>
             </CardContent>
-          </Link>
+            </div>
+          )}
         </Card>
 
         {/* YOLO Training Quick Link */}
