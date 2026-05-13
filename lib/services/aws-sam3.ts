@@ -515,6 +515,27 @@ class AWSSAM3Service {
 
     const baseUrl = `http://${this.instanceIp}:${SAM3_PORT}`;
 
+    const tryModernStatus = async () => {
+      try {
+        const response = await fetch(`${baseUrl}/api/v1/status`, {
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!response.ok) return null;
+
+        const data = await response.json();
+        this.apiFlavor = 'modern';
+        this.supportsExemplarCrops = true;
+        this.modelLoaded = data.predictor?.model_loaded === true;
+        this.gpuAvailable = data.device === 'cuda' || data.predictor?.device === 'cuda' || data.device === 'mps';
+        return {
+          modelLoaded: this.modelLoaded,
+          gpuAvailable: this.gpuAvailable,
+        };
+      } catch {
+        return null;
+      }
+    };
+
     const tryModernHealth = async () => {
       try {
         const response = await fetch(`${baseUrl}/api/v1/health`, {
@@ -558,6 +579,9 @@ class AWSSAM3Service {
       }
     };
 
+    const modernStatus = await tryModernStatus();
+    if (modernStatus) return modernStatus;
+
     const modernHealth = await tryModernHealth();
     if (modernHealth) return modernHealth;
 
@@ -589,7 +613,11 @@ class AWSSAM3Service {
       }
       const data = await response.json();
       this.apiFlavor = flavor;
-      this.modelLoaded = data.status === 'loaded' || data.success === true;
+      this.modelLoaded =
+        data.status === 'loaded' ||
+        data.success === true ||
+        data.model_loaded === true ||
+        data.predictor?.model_loaded === true;
       return { success: true as const, data };
     };
 
