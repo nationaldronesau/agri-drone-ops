@@ -232,6 +232,149 @@ describe('sam3-batch-v2', () => {
     });
   });
 
+  it('broadens target matching when strict matching returns too few candidates', async () => {
+    const applyConceptExemplar = vi
+      .fn()
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          detections: [
+            {
+              bbox: [20, 25, 40, 45],
+              confidence: 0.82,
+              similarity: 0.82,
+              polygon: [
+                [20, 25],
+                [40, 25],
+                [40, 45],
+                [20, 45],
+              ],
+              class_name: 'pine sapling',
+            },
+          ],
+          processingTimeMs: 8,
+        },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          detections: [
+            {
+              bbox: [20, 25, 40, 45],
+              confidence: 0.61,
+              similarity: 0.61,
+              polygon: [
+                [20, 25],
+                [40, 25],
+                [40, 45],
+                [20, 45],
+              ],
+              class_name: 'pine sapling',
+            },
+            {
+              bbox: [80, 90, 110, 120],
+              confidence: 0.55,
+              similarity: 0.55,
+              polygon: [
+                [80, 90],
+                [110, 90],
+                [110, 120],
+                [80, 120],
+              ],
+              class_name: 'pine sapling',
+            },
+          ],
+          processingTimeMs: 11,
+        },
+      });
+    const segment = vi.fn().mockResolvedValue({
+      success: true,
+      response: {
+        detections: [
+          {
+            bbox: [20, 25, 40, 45],
+            confidence: 0.92,
+            polygon: [
+              [20, 25],
+              [40, 25],
+              [40, 45],
+              [20, 45],
+            ],
+          },
+          {
+            bbox: [80, 90, 110, 120],
+            confidence: 0.88,
+            polygon: [
+              [80, 90],
+              [110, 90],
+              [110, 120],
+              [80, 120],
+            ],
+          },
+        ],
+        count: 2,
+      },
+    });
+    const service = new Sam3BatchV2Service({
+      prisma: {} as never,
+      awsSam3Service: {
+        applyConceptExemplar,
+        resizeImage: vi.fn().mockImplementation(async (imageBuffer: Buffer) => ({
+          buffer: imageBuffer,
+          scaling: { scaleFactor: 1 },
+        })),
+        segment,
+      } as any,
+      acquireGpuLock: vi.fn(),
+      refreshGpuLock: vi.fn(),
+      releaseGpuLock: vi.fn(),
+      sleep: vi.fn(),
+      now: () => new Date('2026-03-31T00:00:00.000Z'),
+    });
+
+    const result = await (service as any).runVisualConceptMatch(
+      {
+        id: 'asset-target',
+        storageUrl: 'http://localhost/asset-target.jpg',
+        s3Key: null,
+        s3Bucket: null,
+        storageType: 'local',
+        imageWidth: 4000,
+        imageHeight: 3000,
+      },
+      Buffer.from('target-image'),
+      'visual-exemplar-1',
+      'Pine Sapling'
+    );
+
+    expect(applyConceptExemplar).toHaveBeenCalledTimes(2);
+    expect(segment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        boxes: [
+          { x1: 20, y1: 25, x2: 40, y2: 45 },
+          { x1: 80, y1: 90, x2: 110, y2: 120 },
+        ],
+        className: 'Pine Sapling',
+      })
+    );
+    expect(result).toMatchObject({
+      assetId: 'asset-target',
+      outcome: 'success',
+      detections: [
+        {
+          bbox: [20, 25, 40, 45],
+          confidence: 0.82,
+          similarity: 0.82,
+        },
+        {
+          bbox: [80, 90, 110, 120],
+          confidence: 0.55,
+          similarity: 0.55,
+        },
+      ],
+    });
+  });
+
   it('deletes existing annotations before recreating them on retry', async () => {
     const operations: string[] = [];
     let stageLog: unknown[] = [];
@@ -701,13 +844,27 @@ describe('sam3-batch-v2', () => {
         imageId: 'asset-source',
       })
     );
-    expect(applyConceptExemplar).toHaveBeenCalledTimes(1);
-    expect(applyConceptExemplar).toHaveBeenCalledWith(
+    expect(applyConceptExemplar).toHaveBeenCalledTimes(2);
+    expect(applyConceptExemplar).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         options: expect.objectContaining({
           returnPolygons: true,
           similarityThreshold: 0.65,
           topK: 120,
+          minBoxSize: 16,
+          maxBoxSize: 600,
+          nmsThreshold: 0.5,
+        }),
+      })
+    );
+    expect(applyConceptExemplar).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        options: expect.objectContaining({
+          returnPolygons: true,
+          similarityThreshold: 0.5,
+          topK: 40,
           minBoxSize: 16,
           maxBoxSize: 600,
           nmsThreshold: 0.5,
