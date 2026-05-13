@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureSam3BatchV2Queue } from '@/lib/queue/batch-queue-v2';
 import {
   buildBatchV2ConceptApplyOptions,
+  buildBatchV2ConceptFallbackApplyOptions,
   filterBatchV2ConceptDetections,
   Sam3BatchV2Service,
 } from '@/lib/services/sam3-batch-v2';
@@ -106,6 +107,129 @@ describe('sam3-batch-v2', () => {
     });
     expect(detections).toHaveLength(1);
     expect(detections[0].bbox).toEqual([20, 20, 40, 40]);
+  });
+
+  it('falls back to lower-confidence target candidates when strict matching returns zero', async () => {
+    const applyConceptExemplar = vi
+      .fn()
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          detections: [],
+          processingTimeMs: 8,
+        },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          detections: [
+            {
+              bbox: [20, 25, 40, 45],
+              confidence: 0.59,
+              similarity: 0.56,
+              polygon: [
+                [20, 25],
+                [40, 25],
+                [40, 45],
+                [20, 45],
+              ],
+              class_name: 'pine sapling',
+            },
+          ],
+          processingTimeMs: 11,
+        },
+      });
+    const segment = vi.fn().mockResolvedValue({
+      success: true,
+      response: {
+        detections: [
+          {
+            bbox: [20, 25, 40, 45],
+            confidence: 0.91,
+            polygon: [
+              [21, 25],
+              [39, 25],
+              [39, 44],
+              [21, 44],
+            ],
+          },
+        ],
+        count: 1,
+      },
+    });
+    const service = new Sam3BatchV2Service({
+      prisma: {} as never,
+      awsSam3Service: {
+        applyConceptExemplar,
+        resizeImage: vi.fn().mockImplementation(async (imageBuffer: Buffer) => ({
+          buffer: imageBuffer,
+          scaling: { scaleFactor: 1 },
+        })),
+        segment,
+      } as any,
+      acquireGpuLock: vi.fn(),
+      refreshGpuLock: vi.fn(),
+      releaseGpuLock: vi.fn(),
+      sleep: vi.fn(),
+      now: () => new Date('2026-03-31T00:00:00.000Z'),
+    });
+
+    const result = await (service as any).runVisualConceptMatch(
+      {
+        id: 'asset-target',
+        storageUrl: 'http://localhost/asset-target.jpg',
+        s3Key: null,
+        s3Bucket: null,
+        storageType: 'local',
+        imageWidth: 4000,
+        imageHeight: 3000,
+      },
+      Buffer.from('target-image'),
+      'visual-exemplar-1',
+      'Pine Sapling'
+    );
+
+    expect(applyConceptExemplar).toHaveBeenCalledTimes(2);
+    expect(applyConceptExemplar).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        options: expect.objectContaining({
+          similarityThreshold: 0.65,
+          topK: 120,
+        }),
+      })
+    );
+    expect(applyConceptExemplar).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        options: expect.objectContaining({
+          similarityThreshold: 0.5,
+          topK: 40,
+        }),
+      })
+    );
+    expect(buildBatchV2ConceptFallbackApplyOptions()).toMatchObject({
+      returnPolygons: true,
+      similarityThreshold: 0.5,
+      topK: 40,
+    });
+    expect(segment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        boxes: [{ x1: 20, y1: 25, x2: 40, y2: 45 }],
+        className: 'Pine Sapling',
+      })
+    );
+    expect(result).toMatchObject({
+      assetId: 'asset-target',
+      outcome: 'success',
+      detections: [
+        {
+          bbox: [20, 25, 40, 45],
+          confidence: 0.56,
+          similarity: 0.56,
+        },
+      ],
+    });
   });
 
   it('deletes existing annotations before recreating them on retry', async () => {
