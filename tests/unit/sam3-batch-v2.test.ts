@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureSam3BatchV2Queue } from '@/lib/queue/batch-queue-v2';
-import { Sam3BatchV2Service } from '@/lib/services/sam3-batch-v2';
+import {
+  buildBatchV2ConceptApplyOptions,
+  filterBatchV2ConceptDetections,
+  Sam3BatchV2Service,
+} from '@/lib/services/sam3-batch-v2';
 
 describe('sam3-batch-v2', () => {
   const originalFetch = global.fetch;
@@ -70,6 +74,38 @@ describe('sam3-batch-v2', () => {
       errorMessage: 'GPU busy (held by another process), retry later.',
     });
     expect((service as any).acquireGpuLock).toHaveBeenCalledTimes(12);
+  });
+
+  it('filters concept candidates with the v2 similarity floor before target refinement', () => {
+    const options = buildBatchV2ConceptApplyOptions();
+    const detections = filterBatchV2ConceptDetections(
+      [
+        {
+          bbox: [1, 1, 10, 10],
+          confidence: 0.91,
+          similarity: 0.62,
+          class_name: 'pine sapling',
+        },
+        {
+          bbox: [20, 20, 40, 40],
+          confidence: 0.72,
+          similarity: 0.87,
+          class_name: 'pine sapling',
+        },
+      ] as any,
+      options
+    );
+
+    expect(options).toMatchObject({
+      returnPolygons: true,
+      similarityThreshold: 0.65,
+      topK: 120,
+      minBoxSize: 16,
+      maxBoxSize: 600,
+      nmsThreshold: 0.5,
+    });
+    expect(detections).toHaveLength(1);
+    expect(detections[0].bbox).toEqual([20, 20, 40, 40]);
   });
 
   it('deletes existing annotations before recreating them on retry', async () => {
@@ -353,24 +389,44 @@ describe('sam3-batch-v2', () => {
 
   it('uses source-image box matching before concept-backed visual matching for target assets', async () => {
     let stageLog: unknown[] = [];
-    const segment = vi.fn().mockResolvedValue({
-      success: true,
-      response: {
-        detections: [
-          {
-            bbox: [5, 5, 15, 15],
-            confidence: 0.9,
-            polygon: [
-              [5, 5],
-              [15, 5],
-              [15, 15],
-              [5, 15],
-            ],
-          },
-        ],
-        count: 1,
-      },
-    });
+    const segment = vi
+      .fn()
+      .mockResolvedValueOnce({
+        success: true,
+        response: {
+          detections: [
+            {
+              bbox: [5, 5, 15, 15],
+              confidence: 0.9,
+              polygon: [
+                [5, 5],
+                [15, 5],
+                [15, 15],
+                [5, 15],
+              ],
+            },
+          ],
+          count: 1,
+        },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        response: {
+          detections: [
+            {
+              bbox: [20, 25, 40, 45],
+              confidence: 0.93,
+              polygon: [
+                [21, 25],
+                [39, 25],
+                [39, 44],
+                [21, 44],
+              ],
+            },
+          ],
+          count: 1,
+        },
+      });
     const createConceptExemplar = vi.fn().mockResolvedValue({
       success: true,
       data: { exemplarId: 'visual-exemplar-1' },
@@ -506,7 +562,14 @@ describe('sam3-batch-v2', () => {
     });
 
     expect(result.terminalState).toBe('completed');
-    expect(segment).toHaveBeenCalledTimes(1);
+    expect(segment).toHaveBeenCalledTimes(2);
+    expect(segment).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        boxes: [{ x1: 20, y1: 25, x2: 40, y2: 45 }],
+        className: 'Pine Sapling',
+      })
+    );
     expect(createConceptExemplar).toHaveBeenCalledTimes(1);
     expect(createConceptExemplar).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -515,6 +578,18 @@ describe('sam3-batch-v2', () => {
       })
     );
     expect(applyConceptExemplar).toHaveBeenCalledTimes(1);
+    expect(applyConceptExemplar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          returnPolygons: true,
+          similarityThreshold: 0.65,
+          topK: 120,
+          minBoxSize: 16,
+          maxBoxSize: 600,
+          nmsThreshold: 0.5,
+        }),
+      })
+    );
     expect((service as any).awsSam3Service.segmentWithExemplars).not.toHaveBeenCalled();
   });
 
