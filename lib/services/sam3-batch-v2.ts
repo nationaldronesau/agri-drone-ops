@@ -55,12 +55,27 @@ export const SAM3_BATCH_V2_DEFAULT_MAX_BOX_SIZE =
   parseOptionalInt(process.env.SAM3_CONCEPT_MAX_BOX_SIZE) ?? 600;
 export const SAM3_BATCH_V2_DEFAULT_NMS_THRESHOLD =
   parseOptionalNumber(process.env.SAM3_CONCEPT_NMS_THRESHOLD) ?? 0.5;
+export const SAM3_BATCH_V2_FALLBACK_SIMILARITY_THRESHOLD =
+  parseOptionalNumber(process.env.SAM3_CONCEPT_FALLBACK_SIMILARITY_THRESHOLD) ?? 0.5;
+export const SAM3_BATCH_V2_FALLBACK_TOP_K =
+  parseOptionalInt(process.env.SAM3_CONCEPT_FALLBACK_TOP_K) ?? 40;
 
 export function buildBatchV2ConceptApplyOptions(): SAM3ConceptApplyOptions {
   return {
     returnPolygons: true,
     similarityThreshold: SAM3_BATCH_V2_DEFAULT_SIMILARITY_THRESHOLD,
     topK: SAM3_BATCH_V2_DEFAULT_TOP_K,
+    minBoxSize: SAM3_BATCH_V2_DEFAULT_MIN_BOX_SIZE,
+    maxBoxSize: SAM3_BATCH_V2_DEFAULT_MAX_BOX_SIZE,
+    nmsThreshold: SAM3_BATCH_V2_DEFAULT_NMS_THRESHOLD,
+  };
+}
+
+export function buildBatchV2ConceptFallbackApplyOptions(): SAM3ConceptApplyOptions {
+  return {
+    returnPolygons: true,
+    similarityThreshold: SAM3_BATCH_V2_FALLBACK_SIMILARITY_THRESHOLD,
+    topK: SAM3_BATCH_V2_FALLBACK_TOP_K,
     minBoxSize: SAM3_BATCH_V2_DEFAULT_MIN_BOX_SIZE,
     maxBoxSize: SAM3_BATCH_V2_DEFAULT_MAX_BOX_SIZE,
     nmsThreshold: SAM3_BATCH_V2_DEFAULT_NMS_THRESHOLD,
@@ -1553,7 +1568,14 @@ export class Sam3BatchV2Service {
       };
     }
 
-    const candidates = filterBatchV2ConceptDetections(result.data.detections, conceptOptions);
+    const candidates = await this.getConceptCandidatesWithFallback({
+      asset,
+      imageBuffer,
+      exemplarId,
+      primaryDetections: result.data.detections,
+      primaryOptions: conceptOptions,
+      failureCode: 'VISUAL_MATCH_EXEMPLAR_FALLBACK_FAILED',
+    });
     const detections = await this.refineConceptDetectionsWithBoxPrompts(
       asset,
       imageBuffer,
@@ -1602,7 +1624,14 @@ export class Sam3BatchV2Service {
       };
     }
 
-    const candidates = filterBatchV2ConceptDetections(result.data.detections, conceptOptions);
+    const candidates = await this.getConceptCandidatesWithFallback({
+      asset,
+      imageBuffer,
+      exemplarId: conceptExemplarId,
+      primaryDetections: result.data.detections,
+      primaryOptions: conceptOptions,
+      failureCode: 'CONCEPT_FALLBACK_FAILED',
+    });
     const detections = await this.refineConceptDetectionsWithBoxPrompts(
       asset,
       imageBuffer,
@@ -1615,6 +1644,59 @@ export class Sam3BatchV2Service {
       detections,
       outcome: detections.length > 0 ? 'success' : 'zero_detections',
     };
+  }
+
+  private async getConceptCandidatesWithFallback({
+    asset,
+    imageBuffer,
+    exemplarId,
+    primaryDetections,
+    primaryOptions,
+    failureCode,
+  }: {
+    asset: AssetRecord;
+    imageBuffer: Buffer;
+    exemplarId: string;
+    primaryDetections: SAM3ConceptDetection[];
+    primaryOptions: SAM3ConceptApplyOptions;
+    failureCode: string;
+  }): Promise<SAM3ConceptDetection[]> {
+    const primaryCandidates = filterBatchV2ConceptDetections(primaryDetections, primaryOptions);
+    if (primaryCandidates.length > 0) {
+      return primaryCandidates;
+    }
+
+    const fallbackOptions = buildBatchV2ConceptFallbackApplyOptions();
+    const fallbackResult = await this.awsSam3Service.applyConceptExemplar({
+      exemplarId,
+      imageBuffer,
+      imageId: asset.id,
+      options: fallbackOptions,
+    });
+
+    if (!fallbackResult.success || !fallbackResult.data) {
+      const code = fallbackResult.errorCode || failureCode;
+      const message = fallbackResult.error ? ` ${fallbackResult.error}` : '';
+      console.warn(
+        `[SAM3 V2] Target fallback matching failed for ${asset.id}: ${code}${message}`
+      );
+      return [];
+    }
+
+    const fallbackCandidates = filterBatchV2ConceptDetections(
+      fallbackResult.data.detections,
+      fallbackOptions
+    );
+
+    if (fallbackCandidates.length > 0) {
+      console.warn(
+        `[SAM3 V2] Target ${asset.id} used fallback concept threshold ` +
+          `${fallbackOptions.similarityThreshold} after strict threshold ` +
+          `${primaryOptions.similarityThreshold} returned zero candidates.`
+      );
+    }
+
+    return fallbackCandidates;
   }
 
   private async refineConceptDetectionsWithBoxPrompts(
