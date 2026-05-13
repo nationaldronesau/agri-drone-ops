@@ -59,6 +59,15 @@ export const SAM3_BATCH_V2_FALLBACK_SIMILARITY_THRESHOLD =
   parseOptionalNumber(process.env.SAM3_CONCEPT_FALLBACK_SIMILARITY_THRESHOLD) ?? 0.5;
 export const SAM3_BATCH_V2_FALLBACK_TOP_K =
   parseOptionalInt(process.env.SAM3_CONCEPT_FALLBACK_TOP_K) ?? 40;
+export const SAM3_BATCH_V2_MIN_TARGET_CANDIDATES = Math.max(
+  0,
+  parseOptionalInt(process.env.SAM3_CONCEPT_MIN_TARGET_CANDIDATES) ?? 25
+);
+export const SAM3_BATCH_V2_MAX_TARGET_CANDIDATES = Math.max(
+  SAM3_BATCH_V2_MIN_TARGET_CANDIDATES,
+  parseOptionalInt(process.env.SAM3_CONCEPT_MAX_TARGET_CANDIDATES) ??
+    SAM3_BATCH_V2_DEFAULT_TOP_K
+);
 
 export function buildBatchV2ConceptApplyOptions(): SAM3ConceptApplyOptions {
   return {
@@ -578,6 +587,33 @@ function bboxIou(
   const union = bboxArea(first) + bboxArea(second) - intersection;
 
   return union > 0 ? intersection / union : 0;
+}
+
+function dedupeAndLimitConceptDetections(
+  detections: SAM3ConceptDetection[],
+  options: SAM3ConceptApplyOptions,
+  limit = SAM3_BATCH_V2_MAX_TARGET_CANDIDATES
+): SAM3ConceptDetection[] {
+  const nmsThreshold =
+    typeof options.nmsThreshold === 'number'
+      ? options.nmsThreshold
+      : SAM3_BATCH_V2_DEFAULT_NMS_THRESHOLD;
+  const selected: SAM3ConceptDetection[] = [];
+
+  for (const detection of [...detections].sort(
+    (left, right) => conceptDetectionScore(right) - conceptDetectionScore(left)
+  )) {
+    if (selected.some((candidate) => bboxIou(candidate.bbox, detection.bbox) > nmsThreshold)) {
+      continue;
+    }
+
+    selected.push(detection);
+    if (selected.length >= limit) {
+      break;
+    }
+  }
+
+  return selected;
 }
 
 function bestConceptCandidateForBbox(
@@ -1662,8 +1698,8 @@ export class Sam3BatchV2Service {
     failureCode: string;
   }): Promise<SAM3ConceptDetection[]> {
     const primaryCandidates = filterBatchV2ConceptDetections(primaryDetections, primaryOptions);
-    if (primaryCandidates.length > 0) {
-      return primaryCandidates;
+    if (primaryCandidates.length >= SAM3_BATCH_V2_MIN_TARGET_CANDIDATES) {
+      return dedupeAndLimitConceptDetections(primaryCandidates, primaryOptions);
     }
 
     const fallbackOptions = buildBatchV2ConceptFallbackApplyOptions();
@@ -1680,11 +1716,15 @@ export class Sam3BatchV2Service {
       console.warn(
         `[SAM3 V2] Target fallback matching failed for ${asset.id}: ${code}${message}`
       );
-      return [];
+      return dedupeAndLimitConceptDetections(primaryCandidates, primaryOptions);
     }
 
     const fallbackCandidates = filterBatchV2ConceptDetections(
       fallbackResult.data.detections,
+      fallbackOptions
+    );
+    const mergedCandidates = dedupeAndLimitConceptDetections(
+      [...primaryCandidates, ...fallbackCandidates],
       fallbackOptions
     );
 
@@ -1692,11 +1732,12 @@ export class Sam3BatchV2Service {
       console.warn(
         `[SAM3 V2] Target ${asset.id} used fallback concept threshold ` +
           `${fallbackOptions.similarityThreshold} after strict threshold ` +
-          `${primaryOptions.similarityThreshold} returned zero candidates.`
+          `${primaryOptions.similarityThreshold} returned ${primaryCandidates.length} ` +
+          `candidate(s), below target floor ${SAM3_BATCH_V2_MIN_TARGET_CANDIDATES}.`
       );
     }
 
-    return fallbackCandidates;
+    return mergedCandidates;
   }
 
   private async refineConceptDetectionsWithBoxPrompts(
