@@ -28,7 +28,10 @@ import { ensureVisualCropBatchAwsReady } from '@/lib/services/sam3-batch-startup
 import { normalizeDetectionType } from '@/lib/utils/detection-types';
 import { scaleExemplarBoxes } from '@/lib/utils/exemplar-scaling';
 import { buildExemplarCrops, normalizeExemplarCrops } from '@/lib/utils/exemplar-crops';
-import { SAM3_BATCH_JOB_KINDS } from '@/lib/utils/sam3-batch-jobs';
+import {
+  guardLegacySam3BatchScope,
+  SAM3_BATCH_JOB_KINDS,
+} from '@/lib/utils/sam3-batch-jobs';
 import { logStructured } from '@/lib/utils/structured-log';
 import { S3Service } from '@/lib/services/s3';
 
@@ -853,6 +856,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         { error: 'Invalid source asset ID format', success: false },
         { status: 400 }
       );
+    }
+
+    const legacyScopeGuard = guardLegacySam3BatchScope(body.assetIds);
+    if (!legacyScopeGuard.allowed) {
+      return NextResponse.json(legacyScopeGuard.response, { status: 409 });
     }
 
     // Get target asset IDs

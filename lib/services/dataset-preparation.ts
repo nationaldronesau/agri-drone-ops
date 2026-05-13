@@ -80,6 +80,9 @@ interface DatasetDetection {
   boundingBox: unknown;
   type?: string | null;
   preprocessingMeta?: unknown;
+  verified?: boolean | null;
+  rejected?: boolean | null;
+  userCorrected?: boolean | null;
 }
 
 interface DatasetAnnotation {
@@ -537,6 +540,9 @@ class DatasetPreparationService {
 
     if (includeAI && asset.detections) {
       for (const detection of asset.detections) {
+        if (detection.rejected) continue;
+        if (detection.verified === false && detection.userCorrected !== true) continue;
+
         const confidence = typeof detection.confidence === 'number' ? detection.confidence : 0;
         if (confidence < minConfidence) continue;
 
@@ -563,6 +569,8 @@ class DatasetPreparationService {
 
     if (includeSAM3 && asset.pendingAnnotations) {
       for (const pending of asset.pendingAnnotations) {
+        if (pending.status && pending.status !== 'ACCEPTED') continue;
+
         if (typeof pending.confidence === 'number' && pending.confidence < minConfidence) {
           continue;
         }

@@ -21,6 +21,13 @@ describe('export review filters', () => {
     expect(filter).not.toMatchObject({ verified: false, userCorrected: false });
   });
 
+  it('uses the same review gate for Roboflow fallback detections', () => {
+    expect(buildDetectionReviewFilter(false)).toEqual({
+      rejected: false,
+      OR: [{ verified: true }, { userCorrected: true }],
+    });
+  });
+
   it('exports pending AI detections only for explicit review QA exports', () => {
     expect(buildDetectionReviewFilter(true)).toEqual({
       rejected: false,

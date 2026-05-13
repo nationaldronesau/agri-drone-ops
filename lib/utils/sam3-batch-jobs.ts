@@ -7,6 +7,39 @@ export const SAM3_BATCH_JOB_KINDS = {
 export type Sam3BatchJobKind =
   (typeof SAM3_BATCH_JOB_KINDS)[keyof typeof SAM3_BATCH_JOB_KINDS];
 
+export const SAM3_V2_BATCH_ENDPOINT = '/api/sam3/v2/batch';
+
+export const LEGACY_SAM3_REQUIRES_V2_MESSAGE =
+  'Multi-image Apply to Dataset requires SAM3 v2 visual matching.';
+
+export interface LegacySam3BatchGuardResult {
+  allowed: boolean;
+  response?: {
+    success: false;
+    error: string;
+    requiresV2: true;
+    recommendedEndpoint: typeof SAM3_V2_BATCH_ENDPOINT;
+  };
+}
+
+export function guardLegacySam3BatchScope(
+  assetIds: string[] | undefined | null
+): LegacySam3BatchGuardResult {
+  if (Array.isArray(assetIds) && assetIds.length === 1) {
+    return { allowed: true };
+  }
+
+  return {
+    allowed: false,
+    response: {
+      success: false,
+      error: LEGACY_SAM3_REQUIRES_V2_MESSAGE,
+      requiresV2: true,
+      recommendedEndpoint: SAM3_V2_BATCH_ENDPOINT,
+    },
+  };
+}
+
 export interface BatchJobChildSnapshot {
   id: string;
   status: string;
