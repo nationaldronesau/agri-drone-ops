@@ -1,11 +1,14 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Sam3Ec2Control } from "@/components/dashboard/sam3-ec2-control";
 import { Upload, Map, Download, Sparkles, ArrowRight, Images, Route, Activity, ClipboardList } from "lucide-react";
 import Link from "next/link";
 
 export default function Dashboard() {
   return (
     <div className="p-6 lg:p-8">
+      <Sam3Ec2Control />
+
       {/* Welcome Section */}
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-gray-900 mb-1">Welcome back</h1>
