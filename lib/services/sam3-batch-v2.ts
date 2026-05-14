@@ -68,6 +68,10 @@ export const SAM3_BATCH_V2_MAX_TARGET_CANDIDATES = Math.max(
   parseOptionalInt(process.env.SAM3_CONCEPT_MAX_TARGET_CANDIDATES) ??
     SAM3_BATCH_V2_DEFAULT_TOP_K
 );
+export const SAM3_BATCH_V2_MIN_REFINEMENT_IOU = Math.max(
+  0,
+  parseOptionalNumber(process.env.SAM3_TARGET_REFINEMENT_MIN_IOU) ?? 0.1
+);
 
 export function buildBatchV2ConceptApplyOptions(): SAM3ConceptApplyOptions {
   return {
@@ -616,10 +620,10 @@ function dedupeAndLimitConceptDetections(
   return selected;
 }
 
-function bestConceptCandidateForBbox(
+function bestConceptCandidateMatchForBbox(
   bbox: [number, number, number, number],
   candidates: SAM3ConceptDetection[]
-): SAM3ConceptDetection | null {
+): { candidate: SAM3ConceptDetection; iou: number } | null {
   let bestCandidate: SAM3ConceptDetection | null = null;
   let bestScore = -1;
 
@@ -631,7 +635,11 @@ function bestConceptCandidateForBbox(
     }
   }
 
-  return bestCandidate;
+  return bestCandidate ? { candidate: bestCandidate, iou: bestScore } : null;
+}
+
+function conceptCandidateKey(candidate: SAM3ConceptDetection): string {
+  return `${candidate.bbox.join(',')}:${conceptDetectionScore(candidate).toFixed(6)}`;
 }
 
 function mapConceptDetectionToAssetDetection(
@@ -1772,22 +1780,46 @@ export class Sam3BatchV2Service {
       return candidates.map(mapConceptDetectionToAssetDetection);
     }
 
-    return result.response.detections.map((detection) => {
+    const matchedCandidateKeys = new Set<string>();
+    const refinedDetections = result.response.detections.flatMap((detection) => {
       const bbox = scaleBboxToOriginal(detection.bbox, resized.scaling.scaleFactor);
-      const sourceCandidate = bestConceptCandidateForBbox(bbox, candidates);
-      const score = sourceCandidate ? conceptDetectionScore(sourceCandidate) : detection.confidence;
+      const sourceCandidateMatch = bestConceptCandidateMatchForBbox(bbox, candidates);
+      if (
+        !sourceCandidateMatch ||
+        sourceCandidateMatch.iou < SAM3_BATCH_V2_MIN_REFINEMENT_IOU
+      ) {
+        return [];
+      }
+
+      const sourceCandidate = sourceCandidateMatch.candidate;
+      matchedCandidateKeys.add(conceptCandidateKey(sourceCandidate));
+      const score = conceptDetectionScore(sourceCandidate);
       const similarity =
-        sourceCandidate && typeof sourceCandidate.similarity === 'number'
+        typeof sourceCandidate.similarity === 'number'
           ? sourceCandidate.similarity
           : score;
 
-      return {
+      return [{
         bbox,
         polygon: scalePolygonToOriginal(detection.polygon, bbox, resized.scaling.scaleFactor),
         confidence: score,
         similarity,
-      };
+      }];
     });
+
+    const unmatchedCandidates = candidates
+      .filter((candidate) => !matchedCandidateKeys.has(conceptCandidateKey(candidate)))
+      .map(mapConceptDetectionToAssetDetection);
+
+    if (refinedDetections.length === 0) {
+      console.warn(
+        `[SAM3 V2] Target box refinement drifted away from candidates for ${asset.id}; ` +
+          'falling back to concept candidates.'
+      );
+      return candidates.map(mapConceptDetectionToAssetDetection);
+    }
+
+    return [...refinedDetections, ...unmatchedCandidates];
   }
 
   private async persistAssetResult(

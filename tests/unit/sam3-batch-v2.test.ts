@@ -375,6 +375,103 @@ describe('sam3-batch-v2', () => {
     });
   });
 
+  it('falls back to concept candidates when target refinement drifts away from candidates', async () => {
+    const candidate = {
+      bbox: [20, 25, 40, 45],
+      confidence: 0.82,
+      similarity: 0.82,
+      polygon: [
+        [20, 25],
+        [40, 25],
+        [40, 45],
+        [20, 45],
+      ],
+      class_name: 'pine sapling',
+    };
+    const applyConceptExemplar = vi
+      .fn()
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          detections: [candidate],
+          processingTimeMs: 8,
+        },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          detections: [],
+          processingTimeMs: 11,
+        },
+      });
+    const segment = vi.fn().mockResolvedValue({
+      success: true,
+      response: {
+        detections: [
+          {
+            bbox: [220, 225, 260, 265],
+            confidence: 0.93,
+            polygon: [
+              [220, 225],
+              [260, 225],
+              [260, 265],
+              [220, 265],
+            ],
+          },
+        ],
+        count: 1,
+      },
+    });
+    const service = new Sam3BatchV2Service({
+      prisma: {} as never,
+      awsSam3Service: {
+        applyConceptExemplar,
+        resizeImage: vi.fn().mockImplementation(async (imageBuffer: Buffer) => ({
+          buffer: imageBuffer,
+          scaling: { scaleFactor: 1 },
+        })),
+        segment,
+      } as any,
+      acquireGpuLock: vi.fn(),
+      refreshGpuLock: vi.fn(),
+      releaseGpuLock: vi.fn(),
+      sleep: vi.fn(),
+      now: () => new Date('2026-03-31T00:00:00.000Z'),
+    });
+
+    const result = await (service as any).runVisualConceptMatch(
+      {
+        id: 'asset-target',
+        storageUrl: 'http://localhost/asset-target.jpg',
+        s3Key: null,
+        s3Bucket: null,
+        storageType: 'local',
+        imageWidth: 4000,
+        imageHeight: 3000,
+      },
+      Buffer.from('target-image'),
+      'visual-exemplar-1',
+      'Pine Sapling'
+    );
+
+    expect(segment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        boxes: [{ x1: 20, y1: 25, x2: 40, y2: 45 }],
+      })
+    );
+    expect(result).toMatchObject({
+      assetId: 'asset-target',
+      outcome: 'success',
+      detections: [
+        {
+          bbox: [20, 25, 40, 45],
+          confidence: 0.82,
+          similarity: 0.82,
+        },
+      ],
+    });
+  });
+
   it('deletes existing annotations before recreating them on retry', async () => {
     const operations: string[] = [];
     let stageLog: unknown[] = [];
