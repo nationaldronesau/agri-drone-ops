@@ -6,6 +6,7 @@ export interface CommercialWorkflowReadinessInput {
   samState?: string | null;
   samGpuAvailable?: boolean | null;
   samModelLoaded?: boolean | null;
+  samConceptReady?: boolean | null;
   queueReady: boolean;
   yoloReady: boolean;
   yoloError?: string | null;
@@ -31,11 +32,12 @@ export interface CommercialWorkflowReadinessSummary {
 export function summarizeCommercialWorkflowReadiness(
   input: CommercialWorkflowReadinessInput
 ): CommercialWorkflowReadinessSummary {
+  const samPrimaryReady = Boolean(input.samReady && input.samModelLoaded);
+  const samConceptReady = Boolean(input.samConceptReady);
   const samReady = Boolean(
     input.samConfigured &&
-      input.samReady &&
       input.samGpuAvailable &&
-      input.samModelLoaded
+      (samPrimaryReady || samConceptReady)
   );
   const roboflowFallbackAvailable = input.roboflowConfigured && input.roboflowModelCount > 0;
 
@@ -50,7 +52,9 @@ export function summarizeCommercialWorkflowReadiness(
         ready: samReady,
         state: samReady ? 'ready' : 'blocked',
         message: samReady
-          ? 'SAM3 v2 visual matching is ready for dataset labelling.'
+          ? samConceptReady && !samPrimaryReady
+            ? 'SAM3 v2 visual matching is ready via the concept service.'
+            : 'SAM3 v2 visual matching is ready for dataset labelling.'
           : `SAM3 is not ready${input.samState ? ` (state: ${input.samState})` : ''}.`,
       },
       {
