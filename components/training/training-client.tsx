@@ -20,7 +20,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Slider } from "@/components/ui/slider";
-import { WorkflowGuide } from "@/components/workflow-guide";
 import {
   Select,
   SelectContent,
@@ -191,6 +190,10 @@ interface ClassMetricRow {
   support?: number | null;
 }
 
+interface TrainingClientProps {
+  workspaceMode?: boolean;
+}
+
 const ACTIVE_STATUSES = new Set(["QUEUED", "PREPARING", "RUNNING", "UPLOADING"]);
 const STATUS_STYLES: Record<string, string> = {
   QUEUED: "bg-slate-100 text-slate-700",
@@ -334,7 +337,7 @@ const extractClassMetrics = (source: unknown): ClassMetricRow[] => {
 
   if (Array.isArray(source)) {
     return source
-      .map((entry) => {
+      .map((entry): ClassMetricRow | null => {
         if (!entry || typeof entry !== "object") return null;
         const record = entry as Record<string, unknown>;
         const classNameRaw =
@@ -349,13 +352,13 @@ const extractClassMetrics = (source: unknown): ClassMetricRow[] => {
           support: readMetric(record.support),
         };
       })
-      .filter((entry): entry is ClassMetricRow => Boolean(entry));
+      .filter((entry): entry is ClassMetricRow => entry !== null);
   }
 
   if (typeof source !== "object") return [];
 
   return Object.entries(source as Record<string, unknown>)
-    .map(([className, metrics]) => {
+    .map(([className, metrics]): ClassMetricRow | null => {
       if (!metrics || typeof metrics !== "object") return null;
       const record = metrics as Record<string, unknown>;
       return {
@@ -367,7 +370,7 @@ const extractClassMetrics = (source: unknown): ClassMetricRow[] => {
         support: readMetric(record.support),
       };
     })
-    .filter((entry): entry is ClassMetricRow => Boolean(entry));
+    .filter((entry): entry is ClassMetricRow => entry !== null);
 };
 
 type SparklineSeriesKey = keyof Pick<
@@ -485,7 +488,7 @@ function MetricSparkline({
   );
 }
 
-export default function TrainingPage() {
+export default function TrainingPage({ workspaceMode = false }: TrainingClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -1433,22 +1436,24 @@ export default function TrainingPage() {
   }, [preview, datasetForm.augmentationConfig.copiesPerImage]);
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200">
+    <div className={workspaceMode ? "bg-transparent" : "min-h-screen bg-gray-50"}>
+      <header className={workspaceMode ? "rounded-lg border border-gray-200 bg-white" : "bg-white border-b border-gray-200"}>
         <div className="container mx-auto px-4 py-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
-            <Link href="/training-hub">
-              <Button variant="ghost" size="sm" className="gap-2 -ml-2">
-                <ArrowLeft className="h-4 w-4" />
-                Training Hub
-              </Button>
-            </Link>
+            {!workspaceMode && (
+              <Link href="/training">
+                <Button variant="ghost" size="sm" className="gap-2 -ml-2">
+                  <ArrowLeft className="h-4 w-4" />
+                  Training Workspace
+                </Button>
+              </Link>
+            )}
             <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-green-500 to-blue-500 flex items-center justify-center text-white">
               <Activity className="h-5 w-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-xl font-semibold text-gray-900">YOLO Training Dashboard</h1>
+                <h2 className="text-xl font-semibold text-gray-900">Models</h2>
                 {health.loading ? (
                   <Badge variant="secondary">Checking...</Badge>
                 ) : health.authRequired ? (
@@ -1460,7 +1465,7 @@ export default function TrainingPage() {
                 )}
               </div>
               <p className="text-sm text-gray-600">
-                Build datasets, run training jobs, and activate models for detection.
+                Train, compare, activate, and run detection models from reviewed labels.
               </p>
             </div>
           </div>
@@ -1479,7 +1484,7 @@ export default function TrainingPage() {
                 <DialogHeader>
                   <DialogTitle>Create Training Dataset</DialogTitle>
                   <DialogDescription>
-                    Prepare a YOLO dataset from verified annotations.
+                    Prepare a training dataset from verified annotations.
                   </DialogDescription>
                 </DialogHeader>
 
@@ -1933,7 +1938,7 @@ export default function TrainingPage() {
                 <DialogHeader>
                   <DialogTitle>Start Training</DialogTitle>
                   <DialogDescription>
-                    Configure your YOLO training job.
+                    Configure your training run.
                   </DialogDescription>
                 </DialogHeader>
 
@@ -2095,9 +2100,9 @@ export default function TrainingPage() {
             <Dialog open={runInferenceOpen} onOpenChange={setRunInferenceOpen}>
               <DialogContent className="max-w-xl">
                 <DialogHeader>
-                  <DialogTitle>Run Model Inference</DialogTitle>
+                  <DialogTitle>Run model on project</DialogTitle>
                   <DialogDescription>
-                    Generate draft detections to review in Training Hub.
+                    Generate draft detections for review in this workspace.
                   </DialogDescription>
                 </DialogHeader>
 
@@ -2208,7 +2213,7 @@ export default function TrainingPage() {
                       startingInference ||
                       !selectedInferenceModel ||
                       !inferenceForm.projectId ||
-                      (inferencePreview && inferencePreview.totalImages === 0)
+                      Boolean(inferencePreview && inferencePreview.totalImages === 0)
                     }
                   >
                     {startingInference ? "Starting..." : "Start Inference"}
@@ -2217,19 +2222,21 @@ export default function TrainingPage() {
               </DialogContent>
             </Dialog>
 
-            <Link href="/dashboard">
-              <Button variant="outline">Back to Dashboard</Button>
-            </Link>
+            {!workspaceMode && (
+              <Link href="/dashboard">
+                <Button variant="outline">Back to Dashboard</Button>
+              </Link>
+            )}
           </div>
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-8 space-y-6">
+      <main className={workspaceMode ? "space-y-6 pt-6" : "container mx-auto px-4 py-8 space-y-6"}>
         {!health.loading && health.authRequired && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <ShieldCheck className="h-4 w-4" />
-              <span>Please sign in to access YOLO training and project data.</span>
+              <span>Please sign in to access training and project data.</span>
             </div>
             <Link href="/auth/signin?callbackUrl=%2Ftraining">
               <Button variant="outline" size="sm">
@@ -2244,7 +2251,7 @@ export default function TrainingPage() {
             <div className="flex items-center gap-2">
               <AlertTriangle className="h-4 w-4" />
               <span>
-                YOLO service is unavailable. Dataset creation is available, but training and
+                Model runtime is unavailable. Dataset creation is available, but training and
                 model activation are disabled.
               </span>
             </div>
@@ -2253,8 +2260,6 @@ export default function TrainingPage() {
             </Button>
           </div>
         )}
-
-        <WorkflowGuide current="training" />
 
         {notice && (
           <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
@@ -2279,7 +2284,7 @@ export default function TrainingPage() {
           </div>
         )}
 
-        <section id="training" className="grid gap-6 lg:grid-cols-3">
+        <section id="models" className="grid gap-6 lg:grid-cols-3">
           <Card id="inference">
             <CardHeader>
               <CardTitle>Active Training Jobs</CardTitle>
@@ -2399,7 +2404,7 @@ export default function TrainingPage() {
                           <AlertTriangle className="mt-0.5 h-3 w-3" />
                           <span>
                             Live sync error:{" "}
-                            {job.syncError || "Unable to reach EC2. Showing last known data."}
+                            {job.syncError || "Unable to reach the model runtime. Showing last known data."}
                           </span>
                         </div>
                       )}
@@ -2432,7 +2437,7 @@ export default function TrainingPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Inference Jobs</CardTitle>
+              <CardTitle>Detection Runs</CardTitle>
               <CardDescription>Draft detections from custom models.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -2583,13 +2588,13 @@ export default function TrainingPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Project Inference Settings</CardTitle>
+              <CardTitle>Active Models by Project</CardTitle>
               <CardDescription>
-                Configure the active YOLO model and auto-inference per project.
+                Configure the active model and automatic detection per project.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-3">
+              <div className="grid gap-4">
                 <div className="space-y-2">
                   <Label>Project</Label>
                   <Select
@@ -2609,8 +2614,8 @@ export default function TrainingPage() {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label>Auto Inference</Label>
-                  <div className="flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm">
+                  <Label>Auto Detection</Label>
+                  <div className="flex items-start gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm">
                     <Checkbox
                       checked={Boolean(selectedSettingsProject?.autoInferenceEnabled)}
                       onCheckedChange={(value) =>
@@ -2618,13 +2623,13 @@ export default function TrainingPage() {
                       }
                       disabled={!settingsProjectId || savingAutoInference}
                     />
-                    <span className="text-gray-600">
-                      Run active model after uploads
+                    <span className="leading-5 text-gray-600">
+                      Run after uploads
                     </span>
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label>Inference Backend</Label>
+                  <Label>Detection Engine</Label>
                   <Select
                     value={selectedSettingsProject?.inferenceBackend || "AUTO"}
                     onValueChange={(value) =>
@@ -2636,9 +2641,9 @@ export default function TrainingPage() {
                       <SelectValue placeholder="Select backend" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="AUTO">Auto (Local + Fallback)</SelectItem>
-                      <SelectItem value="LOCAL">Local EC2</SelectItem>
-                      <SelectItem value="ROBOFLOW">Roboflow</SelectItem>
+                      <SelectItem value="AUTO">Recommended automatic</SelectItem>
+                      <SelectItem value="LOCAL">Local model</SelectItem>
+                      <SelectItem value="ROBOFLOW">Synced Roboflow model</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -2879,8 +2884,8 @@ export default function TrainingPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Service Snapshot</CardTitle>
-              <CardDescription>EC2 YOLO runtime status.</CardDescription>
+              <CardTitle>Model Runtime</CardTitle>
+              <CardDescription>Training and detection service status.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
               {health.loading ? (
@@ -2918,7 +2923,7 @@ export default function TrainingPage() {
                   <div>
                     <p className="font-medium">Sign in required</p>
                     <p className="text-xs text-amber-700">
-                      Please sign in to check the YOLO service status.
+                      Please sign in to check the model runtime status.
                     </p>
                   </div>
                 </div>
@@ -2926,9 +2931,9 @@ export default function TrainingPage() {
                 <div className="flex items-start gap-2 text-red-700">
                   <XCircle className="h-4 w-4 mt-0.5" />
                   <div>
-                    <p className="font-medium">Service unavailable</p>
+                  <p className="font-medium">Unable to reach the model runtime.</p>
                     <p className="text-xs text-red-600">
-                      {health.error || "Unable to reach the EC2 YOLO service."}
+                      {health.error || "Unable to reach the model runtime."}
                     </p>
                   </div>
                 </div>

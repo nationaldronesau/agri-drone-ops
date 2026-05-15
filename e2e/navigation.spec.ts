@@ -36,16 +36,15 @@ test.describe("Navigation Flows", () => {
     await expect(sidebar.getByText("Overview")).toBeVisible();
   });
 
-  test("training hub cards route to guided workflows", async ({ page }) => {
-    await page.goto("/training-hub");
+  test("training workspace cards route to guided workflows", async ({ page }) => {
+    await page.goto("/training");
 
-    await page.locator('a[href="/training-hub/new-species"]').first().click();
+    await page.getByRole("link", { name: /Start labeling/ }).click();
     await expect(page).toHaveURL(/\/training-hub\/new-species$/);
-    await expect(page.getByText("Step 1: Select source and target")).toBeVisible();
+    await expect(page.getByText("Step 1: Choose source imagery")).toBeVisible();
 
-    await page.goto("/training-hub");
-    await page.locator('a[href="/training-hub/improve"]').first().click();
-    await expect(page).toHaveURL(/\/training-hub\/improve$/);
-    await expect(page.getByText("Step 1: Select project and model")).toBeVisible();
+    await page.goto("/training");
+    await page.getByRole("link", { name: /Open review queue/ }).first().click();
+    await expect(page).toHaveURL(/\/review-queue$/);
   });
 });
