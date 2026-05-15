@@ -588,34 +588,14 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       try {
         const response = await fetch('/api/sam3/status');
         const status: SAM3StatusResponse = await response.json();
-
-        const isAvailable = status.preferredBackend !== 'none';
-        const device = status.aws.ready ? 'aws-gpu' : status.roboflow.ready ? 'roboflow-serverless' : null;
-
-        setSam3Health({
-          available: isAvailable,
-          mode: status.aws.ready ? 'realtime' : (isAvailable ? 'degraded' : 'unavailable'),
-          device,
-          latencyMs: null,
-          backend: status.preferredBackend === 'none' ? undefined : status.preferredBackend,
-          funMessage: status.funMessage,
-        });
-
-        if (!isAvailable) {
-          setAnnotationMode('manual');
-          setSam3Error('No SAM3 backend configured');
-        }
-
-        if (useVisualCrops) {
-          setSam3ConceptStatus(null);
-          return;
-        }
+        let conceptStatus: SAM3ConceptStatusResponse | null = null;
 
         try {
           const conceptResponse = await fetch('/api/sam3/concept/status');
-          const conceptStatus: SAM3ConceptStatusResponse | null = await conceptResponse
+          conceptStatus = await conceptResponse
             .json()
             .catch(() => null);
+
           if (conceptStatus) {
             setSam3ConceptStatus(conceptStatus);
             if (
@@ -643,6 +623,25 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
             sam3Loaded: false,
             dinoLoaded: false,
           });
+        }
+
+        const visualMatchingReady = useVisualCrops && conceptStatus?.ready === true;
+        const awsReadyForMode = status.aws.ready || visualMatchingReady;
+        const isAvailable = awsReadyForMode || status.roboflow.ready || status.preferredBackend !== 'none';
+        const device = awsReadyForMode ? 'aws-gpu' : status.roboflow.ready ? 'roboflow-serverless' : null;
+
+        setSam3Health({
+          available: isAvailable,
+          mode: awsReadyForMode ? 'realtime' : (isAvailable ? 'degraded' : 'unavailable'),
+          device,
+          latencyMs: null,
+          backend: status.preferredBackend === 'none' ? undefined : status.preferredBackend,
+          funMessage: status.funMessage,
+        });
+
+        if (!isAvailable) {
+          setAnnotationMode('manual');
+          setSam3Error('No SAM3 backend configured');
         }
       } catch {
         setSam3Health({ available: false, mode: 'unavailable', device: null, latencyMs: null });
@@ -2315,10 +2314,12 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
                 : 'SAM3 Unavailable'}
             </Badge>
           )}
-          {!useVisualCrops && sam3ConceptStatus && (
+          {sam3ConceptStatus && (
             <Badge variant={sam3ConceptStatus.ready ? "default" : "secondary"} className="text-xs">
               {sam3ConceptStatus.configured
-                ? (sam3ConceptStatus.ready ? 'Concept Ready' : 'Concept Warming')
+                ? sam3ConceptStatus.ready
+                  ? useVisualCrops ? 'Visual Match Ready' : 'Concept Ready'
+                  : useVisualCrops ? 'Visual Match Warming' : 'Concept Warming'
                 : 'Concept Off'}
             </Badge>
           )}

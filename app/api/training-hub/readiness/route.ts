@@ -5,6 +5,7 @@ import {
   summarizeCommercialWorkflowReadiness,
 } from '@/lib/services/commercial-workflow-readiness';
 import { roboflowService } from '@/lib/services/roboflow';
+import { sam3ConceptService } from '@/lib/services/sam3-concept';
 import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
 import { yoloService } from '@/lib/services/yolo';
 
@@ -15,8 +16,23 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const [samStatus, queueReady, yoloResult] = await Promise.all([
+    const [samStatus, conceptResult, queueReady, yoloResult] = await Promise.all([
       sam3Orchestrator.getStatus(),
+      sam3ConceptService.isConfigured()
+        ? sam3ConceptService
+            .checkHealth()
+            .then((health) => ({
+              configured: true,
+              ready: Boolean(health.success && health.data?.sam3Loaded && health.data?.dinoLoaded),
+              health,
+            }))
+            .catch((error) => ({
+              configured: true,
+              ready: false,
+              health: null,
+              error: error instanceof Error ? error.message : 'SAM3 concept service unavailable',
+            }))
+        : Promise.resolve({ configured: false, ready: false, health: null }),
       checkRedisConnection(),
       yoloService
         .checkHealth()
@@ -41,6 +57,7 @@ export async function GET() {
       samState: samStatus.awsState,
       samGpuAvailable: samStatus.awsGpuAvailable,
       samModelLoaded: samStatus.awsModelLoaded,
+      samConceptReady: conceptResult.ready,
       queueReady,
       yoloReady: yoloResult.ready,
       yoloError: yoloResult.error,
@@ -57,6 +74,7 @@ export async function GET() {
           ready: samStatus.awsAvailable,
           gpuAvailable: samStatus.awsGpuAvailable,
           modelLoaded: samStatus.awsModelLoaded,
+          conceptReady: conceptResult.ready,
         },
         queue: { ready: queueReady },
         yolo: {

@@ -1,17 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { summarizeCommercialWorkflowReadiness } from '@/lib/services/commercial-workflow-readiness';
 
+const baseInput = {
+  samConfigured: true,
+  samReady: true,
+  samState: 'ready',
+  samGpuAvailable: true,
+  samModelLoaded: true,
+  samConceptReady: false,
+  queueReady: true,
+  yoloReady: true,
+  yoloError: null,
+  roboflowConfigured: true,
+  roboflowModelCount: 1,
+};
+
 describe('commercial workflow readiness', () => {
   it('marks the full SAM-to-YOLO workflow ready when core services are healthy', () => {
     const summary = summarizeCommercialWorkflowReadiness({
-      samConfigured: true,
-      samReady: true,
+      ...baseInput,
       samState: 'running',
-      samGpuAvailable: true,
-      samModelLoaded: true,
-      queueReady: true,
-      yoloReady: true,
-      roboflowConfigured: true,
       roboflowModelCount: 2,
     });
 
@@ -26,17 +34,23 @@ describe('commercial workflow readiness', () => {
     ]);
   });
 
-  it('blocks SAM dataset runs when the EC2 host is stopped or the model is unloaded', () => {
+  it('treats primary SAM readiness as dataset-run ready', () => {
+    const summary = summarizeCommercialWorkflowReadiness(baseInput);
+
+    expect(summary.readyForSamDatasetRun).toBe(true);
+    expect(summary.checks.find((check) => check.key === 'sam')).toMatchObject({
+      label: 'SAM ready',
+      ready: true,
+    });
+  });
+
+  it('blocks SAM dataset runs when the EC2 host is stopped and no SAM concept service is ready', () => {
     const summary = summarizeCommercialWorkflowReadiness({
-      samConfigured: true,
+      ...baseInput,
       samReady: false,
       samState: 'stopped',
-      samGpuAvailable: true,
       samModelLoaded: false,
-      queueReady: true,
-      yoloReady: true,
-      roboflowConfigured: true,
-      roboflowModelCount: 1,
+      samConceptReady: false,
     });
 
     expect(summary.readyForSamDatasetRun).toBe(false);
@@ -44,6 +58,23 @@ describe('commercial workflow readiness', () => {
       label: 'SAM blocked',
       state: 'blocked',
       message: 'SAM3 is not ready (state: stopped).',
+    });
+  });
+
+  it('treats concept-ready SAM as dataset-run ready while the primary model is unloaded', () => {
+    const summary = summarizeCommercialWorkflowReadiness({
+      ...baseInput,
+      samReady: false,
+      samState: 'running',
+      samModelLoaded: false,
+      samConceptReady: true,
+    });
+
+    expect(summary.readyForSamDatasetRun).toBe(true);
+    expect(summary.checks.find((check) => check.key === 'sam')).toMatchObject({
+      label: 'SAM ready',
+      ready: true,
+      message: 'SAM3 v2 visual matching is ready via the concept service.',
     });
   });
 
