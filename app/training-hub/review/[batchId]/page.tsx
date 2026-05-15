@@ -77,7 +77,7 @@ export default function LegacyBatchReviewRedirect() {
           <p className="text-sm text-red-600">{error}</p>
           <div className="flex flex-wrap justify-center gap-2">
             <Button asChild variant="outline">
-              <Link href="/training-hub">Back to Training Hub</Link>
+              <Link href="/training">Back to Training Workspace</Link>
             </Button>
             <Button asChild>
               <Link href="/dashboard">Go to Dashboard</Link>

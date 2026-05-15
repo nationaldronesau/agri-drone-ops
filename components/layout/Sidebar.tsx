@@ -12,7 +12,6 @@ import {
   Map,
   Download,
   Sparkles,
-  Brain,
   Activity,
   ClipboardList,
   Mountain,
@@ -36,8 +35,7 @@ const navItems: NavItem[] = [
   { label: "Upload", href: "/upload", icon: Upload, section: "data" },
   { label: "Images", href: "/images", icon: Images, section: "data" },
   { label: "Map", href: "/map", icon: Map, section: "data" },
-  { label: "Training Hub", href: "/training-hub", icon: Sparkles, section: "ai" },
-  { label: "YOLO Training", href: "/training", icon: Brain, section: "ai" },
+  { label: "Training", href: "/training", icon: Sparkles, section: "ai" },
   { label: "Temporal Insights", href: "/insights", icon: Activity, section: "ai" },
   { label: "Review Queue", href: "/review-queue", icon: ClipboardList, section: "review" },
   { label: "Mission Planner", href: "/mission-planner", icon: Route, section: "export" },
@@ -61,6 +59,7 @@ export function Sidebar() {
 
   const isActive = (href: string) => {
     if (href === "/dashboard") return pathname === "/dashboard" || pathname === "/test-dashboard";
+    if (href === "/training") return pathname.startsWith("/training") || pathname.startsWith("/training-hub");
     return pathname.startsWith(href);
   };
 
@@ -76,7 +75,7 @@ export function Sidebar() {
     <aside
       className={cn(
         "fixed left-0 top-0 z-40 flex h-screen flex-col border-r border-gray-800 bg-gray-950 text-gray-300 transition-all duration-200",
-        collapsed ? "w-16" : "w-56"
+        collapsed ? "w-16" : "w-16 md:w-56"
       )}
     >
       {/* Logo */}
@@ -86,7 +85,7 @@ export function Sidebar() {
             <Crosshair className="h-5 w-5 text-white" strokeWidth={2.5} />
           </div>
           {!collapsed && (
-            <div className="flex flex-col overflow-hidden">
+            <div className="hidden flex-col overflow-hidden md:flex">
               <span className="truncate text-sm font-bold text-white">
                 National Drones
               </span>
@@ -103,7 +102,7 @@ export function Sidebar() {
         {Object.entries(sections).map(([sectionKey, items]) => (
           <div key={sectionKey} className="mb-4">
             {!collapsed && (
-              <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+              <p className="mb-1.5 hidden px-3 text-[10px] font-semibold uppercase tracking-wider text-gray-500 md:block">
                 {sectionLabels[sectionKey]}
               </p>
             )}
@@ -128,9 +127,11 @@ export function Sidebar() {
                       active ? "text-violet-400" : "text-gray-500 group-hover:text-gray-300"
                     )}
                   />
-                  {!collapsed && <span className="truncate">{item.label}</span>}
+                  <span className={cn("truncate", collapsed ? "sr-only" : "sr-only md:not-sr-only")}>
+                    {item.label}
+                  </span>
                   {active && !collapsed && (
-                    <span className="ml-auto h-1.5 w-1.5 rounded-full bg-violet-400" />
+                    <span className="ml-auto hidden h-1.5 w-1.5 rounded-full bg-violet-400 md:block" />
                   )}
                 </Link>
               );

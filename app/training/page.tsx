@@ -1,10 +1,10 @@
 import { Suspense } from 'react';
-import TrainingClient from '@/components/training/training-client';
+import { TrainingWorkspace } from '@/components/training/training-workspace';
 
 export default function TrainingPage() {
   return (
     <Suspense fallback={<div className="p-6">Loading training…</div>}>
-      <TrainingClient />
+      <TrainingWorkspace />
     </Suspense>
   );
 }

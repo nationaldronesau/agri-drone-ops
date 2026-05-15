@@ -25,7 +25,7 @@ export default function Dashboard() {
           { label: "Insights", href: "/insights", icon: Activity, color: "text-indigo-600" },
           { label: "Review", href: "/review-queue", icon: ClipboardList, color: "text-amber-600" },
           { label: "Export", href: "/export", icon: Download, color: "text-orange-600" },
-          { label: "Training Hub", href: "/training-hub", icon: Sparkles, color: "text-violet-600" },
+          { label: "Training", href: "/training", icon: Sparkles, color: "text-violet-600" },
         ].map((action) => (
           <Link key={action.href} href={action.href}>
             <Card className="hover:shadow-md hover:border-violet-200 transition-all cursor-pointer group">

@@ -30,8 +30,8 @@ test.describe("Smoke Coverage", () => {
       { path: "/upload", expectedText: "Upload Drone Images" },
       { path: "/images", expectedText: "Uploaded Images" },
       { path: "/map", expectedText: "Interactive Map" },
-      { path: "/training-hub", expectedText: "Training Hub" },
-      { path: "/training", expectedText: "YOLO Training Dashboard" },
+      { path: "/training-hub", expectedText: "Training Workspace" },
+      { path: "/training", expectedText: "Training Workspace" },
       { path: "/review-queue", expectedText: "Review Queue" },
       { path: "/mission-planner", expectedText: "Mission Planner" },
       { path: "/export", expectedText: "Export Detection Data" },
@@ -47,17 +47,17 @@ test.describe("Smoke Coverage", () => {
 
   test("training workflow setup routes render", async ({ page }) => {
     await page.goto("/training-hub/new-species");
-    await expect(page.getByRole("heading", { name: "Label New Species" })).toBeVisible();
-    await expect(page.getByText("Step 1: Select source and target")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Label a New Weed or Species" })).toBeVisible();
+    await expect(page.getByText("Step 1: Choose source imagery")).toBeVisible();
 
     await page.goto("/training-hub/improve");
-    await expect(page.getByRole("heading", { name: "Improve Existing Model" })).toBeVisible();
-    await expect(page.getByText("Step 1: Select project and model")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Review AI Results" })).toBeVisible();
+    await expect(page.getByText("Step 1: Choose review work")).toBeVisible();
   });
 
   test("review page handles missing session id", async ({ page }) => {
     await page.goto("/review");
     await expect(page.getByText("Missing sessionId in URL")).toBeVisible();
-    await expect(page.getByRole("link", { name: "Back to Training Hub" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Back to Training Workspace" })).toBeVisible();
   });
 });

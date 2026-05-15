@@ -55,7 +55,8 @@ export default function NewSpeciesWorkflowPage() {
   const [projectsError, setProjectsError] = useState<string | null>(null);
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
-  const [targetType, setTargetType] = useState<WorkflowTarget>('both');
+  const [targetType, setTargetType] = useState<WorkflowTarget>('yolo');
+  const [showAdvancedSync, setShowAdvancedSync] = useState(false);
   const [selectedRoboflowProjectId, setSelectedRoboflowProjectId] = useState<string>('');
   const [selectedRoboflowProject, setSelectedRoboflowProject] = useState<RoboflowProject | null>(
     null
@@ -121,7 +122,8 @@ export default function NewSpeciesWorkflowPage() {
     setSelectedRoboflowProject(project);
   };
 
-  const requiresRoboflowProject = targetType === 'roboflow' || targetType === 'both';
+  const workflowTarget = showAdvancedSync ? targetType : 'yolo';
+  const requiresRoboflowProject = workflowTarget === 'roboflow' || workflowTarget === 'both';
   const canProceed =
     selectedProjectId &&
     projectImages > 0 &&
@@ -140,7 +142,7 @@ export default function NewSpeciesWorkflowPage() {
       } = {
         projectId: selectedProjectId,
         workflowType: 'new_species',
-        targetType,
+        targetType: workflowTarget,
       };
 
       if (requiresRoboflowProject) {
@@ -195,14 +197,14 @@ export default function NewSpeciesWorkflowPage() {
               </div>
 
               <div>
-                <h1 className="text-xl font-bold text-gray-900">Label New Species</h1>
-                <p className="text-sm text-gray-500">Step 1: Select source and target</p>
+                <h1 className="text-xl font-bold text-gray-900">Label a New Weed or Species</h1>
+                <p className="text-sm text-gray-500">Step 1: Choose source imagery</p>
               </div>
             </div>
-            <Link href="/training-hub">
+            <Link href="/training">
               <Button variant="ghost" size="sm">
                 <ArrowLeft className="w-4 h-4 mr-2" />
-                Back to Hub
+                Back to Training
               </Button>
             </Link>
           </div>
@@ -320,48 +322,62 @@ export default function NewSpeciesWorkflowPage() {
             </CardContent>
           </Card>
 
-          {/* Target Project Card */}
+          {/* Training Output Card */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Sparkles className="w-5 h-5" />
-                Target Training Destination
+                Training Output
               </CardTitle>
               <CardDescription>
-                Choose where this review workflow should feed: Roboflow, EC2 YOLO, or both.
+                Recommended: update the local model and sync training data after review.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label>Target</Label>
-                <Select value={targetType} onValueChange={(value) => setTargetType(value as WorkflowTarget)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="both">YOLO + Roboflow</SelectItem>
-                    <SelectItem value="yolo">YOLO (EC2) only</SelectItem>
-                    <SelectItem value="roboflow">Roboflow only</SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+                Labels will stay available for local model training. External dataset sync remains
+                supported from advanced settings.
               </div>
 
-              {requiresRoboflowProject ? (
-                <div className="space-y-2">
-                  <Label>Roboflow Training Project</Label>
-                  <RoboflowProjectSelector
-                    value={selectedRoboflowProjectId}
-                    onChange={handleRoboflowProjectChange}
-                    showCreateButton={true}
-                  />
-                </div>
-              ) : (
-                <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-                  This session will target your EC2 YOLO workflow only. You can train from the reviewed dataset in the training dashboard.
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowAdvancedSync((value) => !value)}
+              >
+                {showAdvancedSync ? 'Hide advanced destinations' : 'Advanced destinations'}
+              </Button>
+
+              {showAdvancedSync && (
+                <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <div className="space-y-2">
+                    <Label>Destination</Label>
+                    <Select value={targetType} onValueChange={(value) => setTargetType(value as WorkflowTarget)}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="yolo">Local model only</SelectItem>
+                        <SelectItem value="both">Local model + external dataset sync</SelectItem>
+                        <SelectItem value="roboflow">External dataset sync only</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {requiresRoboflowProject ? (
+                    <div className="space-y-2">
+                      <Label>External training project</Label>
+                      <RoboflowProjectSelector
+                        value={selectedRoboflowProjectId}
+                        onChange={handleRoboflowProjectChange}
+                        showCreateButton={true}
+                      />
+                    </div>
+                  ) : null}
                 </div>
               )}
 
-              {requiresRoboflowProject && selectedRoboflowProject && (
+              {showAdvancedSync && requiresRoboflowProject && selectedRoboflowProject && (
                 <div className="p-4 rounded-lg bg-green-50 border border-green-200">
                   <div className="flex items-start justify-between">
                     <div>
@@ -401,7 +417,7 @@ export default function NewSpeciesWorkflowPage() {
 
           {/* Action Buttons */}
           <div className="flex items-center justify-between pt-4">
-            <Link href="/training-hub">
+            <Link href="/training">
               <Button variant="outline">
                 <ArrowLeft className="w-4 h-4 mr-2" />
                 Cancel
@@ -420,7 +436,7 @@ export default function NewSpeciesWorkflowPage() {
                 </>
               ) : (
                 <>
-                  Start Labeling
+                  Start labeling
                   <ArrowRight className="w-4 h-4 ml-2" />
                 </>
               )}
@@ -438,7 +454,7 @@ export default function NewSpeciesWorkflowPage() {
           )}
           {!canProceed && selectedProjectId && projectImages > 0 && requiresRoboflowProject && !selectedRoboflowProjectId && (
             <p className="text-center text-sm text-amber-600">
-              Select a Roboflow project or switch the target to YOLO-only.
+              Select an external project or switch advanced destinations back to local model only.
             </p>
           )}
         </div>
