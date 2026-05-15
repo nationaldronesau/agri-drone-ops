@@ -937,6 +937,7 @@ describe('sam3-batch-v2', () => {
     expect(createConceptExemplar).toHaveBeenCalledTimes(1);
     expect(createConceptExemplar).toHaveBeenCalledWith(
       expect.objectContaining({
+        boxes: [{ x1: 5, y1: 5, x2: 15, y2: 15 }],
         className: 'Pine Sapling',
         imageId: 'asset-source',
       })
