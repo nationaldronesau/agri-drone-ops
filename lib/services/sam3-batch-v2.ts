@@ -72,6 +72,10 @@ export const SAM3_BATCH_V2_MIN_REFINEMENT_IOU = Math.max(
   0,
   parseOptionalNumber(process.env.SAM3_TARGET_REFINEMENT_MIN_IOU) ?? 0.1
 );
+export const SAM3_BATCH_V2_SOURCE_DETECTION_EXEMPLAR_LIMIT = Math.max(
+  1,
+  parseOptionalInt(process.env.SAM3_SOURCE_DETECTION_EXEMPLAR_LIMIT) ?? 30
+);
 
 export function buildBatchV2ConceptApplyOptions(): SAM3ConceptApplyOptions {
   return {
@@ -573,6 +577,24 @@ function bboxToBoxCoordinate(
 
 function isValidBox(box: BoxCoordinate): boolean {
   return box.x2 > box.x1 && box.y2 > box.y1;
+}
+
+function sourceDetectionExemplarBoxes(
+  sourceResult: AssetInferenceResult | null
+): BoxCoordinate[] {
+  if (!sourceResult || sourceResult.outcome !== 'success') {
+    return [];
+  }
+
+  return sourceResult.detections
+    .map((detection) => ({
+      box: bboxToBoxCoordinate(detection.bbox),
+      confidence: detection.confidence,
+    }))
+    .filter(({ box }) => isValidBox(box))
+    .sort((left, right) => right.confidence - left.confidence)
+    .slice(0, SAM3_BATCH_V2_SOURCE_DETECTION_EXEMPLAR_LIMIT)
+    .map(({ box }) => box);
 }
 
 function bboxArea(bbox: [number, number, number, number]): number {
@@ -1296,6 +1318,7 @@ export class Sam3BatchV2Service {
     let conceptExemplarId: string | null = null;
     let visualMatchExemplarId: string | null = null;
     let visualMatchInitialized = false;
+    let sourceMatchResult: AssetInferenceResult | null = null;
     if (prepared.mode === 'concept_propagation') {
       const warmup = await this.awsSam3Service.warmupConceptService();
       if (!warmup.success) {
@@ -1376,9 +1399,13 @@ export class Sam3BatchV2Service {
         if (prepared.mode === 'visual_crop_match') {
           if (isSourceAsset) {
             result = await this.runSourceBoxMatch(asset, imageBuffer, prepared);
+            sourceMatchResult = result;
           } else {
             if (!visualMatchInitialized) {
-              visualMatchExemplarId = await this.initializeVisualMatchExemplar(prepared);
+              visualMatchExemplarId = await this.initializeVisualMatchExemplar(
+                prepared,
+                sourceMatchResult
+              );
               visualMatchInitialized = true;
             }
 
@@ -1466,16 +1493,18 @@ export class Sam3BatchV2Service {
   }
 
   private async initializeVisualMatchExemplar(
-    prepared: PreparedBatchContext
+    prepared: PreparedBatchContext,
+    sourceResult: AssetInferenceResult | null
   ): Promise<string | null> {
     const warmup = await this.awsSam3Service.warmupConceptService();
     if (!warmup.success) {
       return null;
     }
 
+    const sourceBoxes = sourceDetectionExemplarBoxes(sourceResult);
     const exemplarResult = await this.awsSam3Service.createConceptExemplar({
       imageBuffer: prepared.sourceImageBuffer,
-      boxes: prepared.exemplars,
+      boxes: sourceBoxes.length > 0 ? sourceBoxes : prepared.exemplars,
       className: prepared.textPrompt,
       imageId: prepared.sourceAssetId,
     });
