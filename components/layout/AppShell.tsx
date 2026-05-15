@@ -26,7 +26,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen bg-gray-50">
       <Sidebar />
       {/* Main content — offset by sidebar width */}
-      <main className={`ml-56 min-h-screen transition-all duration-200 ${isFullWidth ? "" : ""}`}>
+      <main className={`ml-16 min-h-screen transition-all duration-200 md:ml-56 ${isFullWidth ? "" : ""}`}>
         {children}
       </main>
     </div>

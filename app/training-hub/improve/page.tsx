@@ -60,12 +60,16 @@ interface DetectionStats {
   };
 }
 
+type WorkflowTarget = 'roboflow' | 'yolo' | 'both';
+
 export default function ImproveWorkflowPage() {
   const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+  const [targetType, setTargetType] = useState<WorkflowTarget>('yolo');
+  const [showAdvancedSync, setShowAdvancedSync] = useState(false);
   const [selectedRoboflowProjectId, setSelectedRoboflowProjectId] = useState<string>('');
   const [selectedRoboflowProject, setSelectedRoboflowProject] = useState<RoboflowProject | null>(
     null
@@ -123,7 +127,13 @@ export default function ImproveWorkflowPage() {
     setSelectedRoboflowProject(project);
   };
 
-  const canProceed = selectedProjectId && selectedRoboflowProjectId && stats && stats.total > 0;
+  const workflowTarget = showAdvancedSync ? targetType : 'yolo';
+  const requiresRoboflowProject = workflowTarget === 'roboflow' || workflowTarget === 'both';
+  const canProceed =
+    selectedProjectId &&
+    stats &&
+    stats.total > 0 &&
+    (!requiresRoboflowProject || Boolean(selectedRoboflowProjectId));
 
   const handleStartReview = async () => {
     if (!selectedProjectId) return;
@@ -136,8 +146,13 @@ export default function ImproveWorkflowPage() {
         body: JSON.stringify({
           projectId: selectedProjectId,
           workflowType: 'improve_model',
-          targetType: 'both',
-          roboflowProjectId: selectedRoboflowProject?.project?.roboflowId || selectedRoboflowProjectId,
+          targetType: workflowTarget,
+          ...(requiresRoboflowProject
+            ? {
+                roboflowProjectId:
+                  selectedRoboflowProject?.project?.roboflowId || selectedRoboflowProjectId,
+              }
+            : {}),
           confidenceThreshold: confidenceThreshold[0],
         }),
       });
@@ -172,14 +187,14 @@ export default function ImproveWorkflowPage() {
                 <Target className="w-6 h-6 text-white" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-gray-900">Improve Existing Model</h1>
-                <p className="text-sm text-gray-500">Step 1: Select project and model</p>
+                <h1 className="text-xl font-bold text-gray-900">Review AI Results</h1>
+                <p className="text-sm text-gray-500">Step 1: Choose review work</p>
               </div>
             </div>
-            <Link href="/training-hub">
+            <Link href="/training">
               <Button variant="ghost" size="sm">
                 <ArrowLeft className="w-4 h-4 mr-2" />
-                Back to Hub
+                Back to Training
               </Button>
             </Link>
           </div>
@@ -285,28 +300,61 @@ export default function ImproveWorkflowPage() {
             </CardContent>
           </Card>
 
-          {/* Target Training Project Card */}
+          {/* Training Output Card */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Target className="w-5 h-5" />
-                Target Training Project
+                Training Output
               </CardTitle>
               <CardDescription>
-                Select the training project to upload verified/corrected annotations to.
+                Recommended: use reviewed detections to update the local model.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label>Training Project</Label>
-                <RoboflowProjectSelector
-                  value={selectedRoboflowProjectId}
-                  onChange={handleRoboflowProjectChange}
-                  showCreateButton={false}
-                />
+              <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                Accepted corrections will be available for dataset creation and local training.
               </div>
 
-              {selectedRoboflowProject && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowAdvancedSync((value) => !value)}
+              >
+                {showAdvancedSync ? 'Hide advanced destinations' : 'Advanced destinations'}
+              </Button>
+
+              {showAdvancedSync && (
+                <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <div className="space-y-2">
+                    <Label>Destination</Label>
+                    <Select value={targetType} onValueChange={(value) => setTargetType(value as WorkflowTarget)}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="yolo">Local model only</SelectItem>
+                        <SelectItem value="both">Local model + external dataset sync</SelectItem>
+                        <SelectItem value="roboflow">External dataset sync only</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {requiresRoboflowProject ? (
+                    <div className="space-y-2">
+                      <Label>External training project</Label>
+                      <RoboflowProjectSelector
+                        value={selectedRoboflowProjectId}
+                        onChange={handleRoboflowProjectChange}
+                        showCreateButton={false}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              )}
+
+              {showAdvancedSync && requiresRoboflowProject && selectedRoboflowProject && (
                 <div className="p-4 rounded-lg bg-blue-50 border border-blue-200">
                   <p className="font-medium text-blue-900">
                     {selectedRoboflowProject.project.name}
@@ -397,7 +445,7 @@ export default function ImproveWorkflowPage() {
 
           {/* Action Buttons */}
           <div className="flex items-center justify-between pt-4">
-            <Link href="/training-hub">
+            <Link href="/training">
               <Button variant="outline">
                 <ArrowLeft className="w-4 h-4 mr-2" />
                 Cancel
@@ -416,7 +464,7 @@ export default function ImproveWorkflowPage() {
                 </>
               ) : (
                 <>
-                  Start Reviewing
+                  Start review
                   <ArrowRight className="w-4 h-4 ml-2" />
                 </>
               )}
@@ -427,6 +475,12 @@ export default function ImproveWorkflowPage() {
             <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {startError}
             </div>
+          )}
+
+          {!canProceed && selectedProjectId && stats && stats.total > 0 && requiresRoboflowProject && !selectedRoboflowProjectId && (
+            <p className="text-center text-sm text-amber-600">
+              Select an external project or switch advanced destinations back to local model only.
+            </p>
           )}
 
           {!canProceed && selectedProjectId && stats?.total === 0 && (

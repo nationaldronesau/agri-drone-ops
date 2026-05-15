@@ -106,9 +106,9 @@ export function YOLOConfigModal({
     <Dialog open={open} onOpenChange={(value) => !value && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>YOLO Training Configuration</DialogTitle>
+          <DialogTitle>Training Dataset Setup</DialogTitle>
           <DialogDescription>
-            Select classes and split ratios for the YOLO dataset export.
+            Select classes and split ratios for the training dataset.
           </DialogDescription>
         </DialogHeader>
 
@@ -118,7 +118,7 @@ export function YOLOConfigModal({
               <div className="flex flex-col">
                 <span className="font-medium text-gray-700">Review filter</span>
                 <span className="text-xs text-gray-500">
-                  Adjust what you see before pushing to YOLO.
+                  Adjust what you see before creating training data.
                 </span>
               </div>
               <label className="flex items-center gap-2">

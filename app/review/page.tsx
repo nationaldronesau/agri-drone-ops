@@ -263,7 +263,7 @@ function ReviewPageContent() {
         // Capture YOLO training job ID if available
         if (target === 'yolo' && data.results?.yolo?.trainingJobId) {
           setYoloTrainingJobId(data.results.yolo.trainingJobId);
-          setPushMessage(`YOLO training started! Model: ${data.results.yolo.modelName}`);
+          setPushMessage(`Training started! Model: ${data.results.yolo.modelName}`);
         } else {
           setPushMessage('Push started successfully.');
         }
@@ -370,7 +370,7 @@ function ReviewPageContent() {
               <p className="text-sm text-red-600">{error}</p>
               <div className="flex flex-wrap justify-center gap-2">
                 <Button asChild variant="outline">
-                  <Link href="/training-hub">Back to Training Hub</Link>
+                  <Link href="/training">Back to Training Workspace</Link>
                 </Button>
                 <Button asChild>
                   <Link href="/dashboard">Go to Dashboard</Link>
@@ -391,7 +391,7 @@ function ReviewPageContent() {
             <Link href="/training">
               <Button variant="outline" size="sm" className="gap-2 border-blue-200 text-blue-600 hover:bg-blue-50">
                 <Brain className="h-4 w-4" />
-                View YOLO Training Progress
+                View training progress
                 <ExternalLink className="h-3 w-3" />
               </Button>
             </Link>
@@ -443,7 +443,7 @@ function ReviewPageContent() {
                 onClick={() => setShowYoloModal(true)}
                 disabled={pushLoading || availableClasses.length === 0}
               >
-                Push to YOLO
+                Train model
               </Button>
             </div>
           </CardContent>
@@ -644,7 +644,7 @@ function ReviewPageContent() {
                     className="gap-2 bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600"
                   >
                     <Brain className="h-4 w-4" />
-                    Train YOLO Model
+                    Quick train model
                   </Button>
                 </div>
               </div>

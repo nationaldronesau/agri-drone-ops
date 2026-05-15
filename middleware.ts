@@ -3,6 +3,8 @@ import { withAuth } from "next-auth/middleware";
 const PUBLIC_PATHS = ["/", "/auth", "/unauthorized"];
 const authSecret = process.env.NEXTAUTH_SECRET || process.env.AUTH_SECRET;
 const hasAuthSecret = Boolean(authSecret);
+const isAuthBypassed =
+  process.env.NODE_ENV !== "production" && process.env.DISABLE_AUTH === "true";
 
 export default withAuth(
   function middleware() {
@@ -18,6 +20,7 @@ export default withAuth(
         );
 
         if (isPublicPath) return true;
+        if (isAuthBypassed) return true;
         if (!hasAuthSecret) {
           // Avoid locking users out when auth secret is missing in runtime env.
           return true;

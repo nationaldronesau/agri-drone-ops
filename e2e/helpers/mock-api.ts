@@ -89,6 +89,14 @@ type ReviewSession = {
   assignedTo?: { id: string; name: string; email?: string | null } | null;
 };
 
+type ReviewSummary = {
+  pendingCount: number;
+  acceptedCount: number;
+  rejectedCount: number;
+  exportReadyCount: number;
+  totalItemCount: number;
+};
+
 type ReviewItem = {
   id: string;
   source: "manual" | "pending" | "detection";
@@ -670,7 +678,7 @@ const DEFAULT_ROBOFLOW_PROJECTS = [
   },
 ];
 
-function json(route: Route, body: JsonValue, status = 200) {
+function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({
     status,
     contentType: "application/json",
@@ -699,6 +707,23 @@ function toManualConfidence(score?: number): "CERTAIN" | "LIKELY" | "UNCERTAIN" 
 
 function cloneReviewItem(item: ReviewItem): ReviewItem {
   return JSON.parse(JSON.stringify(item)) as ReviewItem;
+}
+
+function buildReviewSummary(items: ReviewItem[]): ReviewSummary {
+  const pendingCount = items.filter((item) => item.status === "pending").length;
+  const acceptedCount = items.filter((item) => item.status === "accepted").length;
+  const rejectedCount = items.filter((item) => item.status === "rejected").length;
+  const exportReadyCount = items.filter(
+    (item) => item.status === "accepted" && item.hasGeoData
+  ).length;
+
+  return {
+    pendingCount,
+    acceptedCount,
+    rejectedCount,
+    exportReadyCount,
+    totalItemCount: items.length,
+  };
 }
 
 export async function setupMockApi(page: Page, options: MockApiOptions = {}) {
@@ -1405,7 +1430,7 @@ export async function setupMockApi(page: Page, options: MockApiOptions = {}) {
       if (!session) return json(route, { error: "Review session not found" }, 404);
       const assetId = url.searchParams.get("assetId");
       const items = getSessionItems(sessionId).filter((item) => (assetId ? item.assetId === assetId : true));
-      return json(route, { items });
+      return json(route, { items, summary: buildReviewSummary(getSessionItems(sessionId)) });
     }
 
     const reviewActionMatch = path.match(/^\/api\/review\/([^/]+)\/(assign|action|bulk-action|push)$/);
@@ -1562,6 +1587,7 @@ export async function setupMockApi(page: Page, options: MockApiOptions = {}) {
         batchJobIds: session.batchJobIds || [],
         assignedTo: session.assignedTo || null,
         createdAt: session.createdAt,
+        summary: buildReviewSummary(getSessionItems(session.id)),
       });
     }
 
