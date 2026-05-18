@@ -98,26 +98,8 @@ class SAM3ConceptService {
   }
 
   private async ensureGpuCapacity(): Promise<void> {
-    if (!awsSam3Service.isConfigured()) {
-      return;
-    }
-
-    try {
-      const status = await awsSam3Service.refreshStatus();
-      if (status.instanceState === 'stopped' || !status.modelLoaded) {
-        return;
-      }
-
-      console.log('[SAM3 Concept] Unloading AWS SAM3 model on :8000 before concept operation');
-      const unloadResult = await awsSam3Service.unloadModel(30000);
-      if (!unloadResult.success) {
-        console.warn(`[SAM3 Concept] Failed to unload AWS SAM3 model: ${unloadResult.message}`);
-      } else {
-        console.log('[SAM3 Concept] AWS SAM3 model unloaded to free GPU for concept service');
-      }
-    } catch (error) {
-      console.warn('[SAM3 Concept] Failed to prepare GPU capacity:', error);
-    }
+    // Keep this hook so concept calls remain valid, but do not unload the
+    // primary SAM3 model during annotation/batch propagation.
   }
 
   private buildHeaders(): Record<string, string> {

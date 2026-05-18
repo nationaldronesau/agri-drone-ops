@@ -1205,12 +1205,12 @@ class AWSSAM3Service {
       return null;
     }
 
-    if (this.modelLoaded) {
-      const unloadResult = await this.unloadModel(30000);
-      if (!unloadResult.success) {
-        console.warn(`[AWS-SAM3] Failed to unload primary model before concept work: ${unloadResult.message}`);
-      }
-    }
+    // if (this.modelLoaded) {
+    //   const unloadResult = await this.unloadModel(30000);
+    //   if (!unloadResult.success) {
+    //     console.warn(`[AWS-SAM3] Failed to unload primary model before concept work: ${unloadResult.message}`);
+    //   }
+    // }
 
     return baseUrl;
   }

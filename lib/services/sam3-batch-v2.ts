@@ -1475,24 +1475,34 @@ export class Sam3BatchV2Service {
             result = await this.runSourceBoxMatch(asset, imageBuffer, prepared);
             sourceMatchResult = result;
           } else {
-            if (!visualMatchInitialized) {
-              visualMatchExemplarId = await this.initializeVisualMatchExemplar(
-                prepared,
-                sourceMatchResult
-              );
-              visualMatchInitialized = true;
+            result = await this.runVisualCropMatch(asset, imageBuffer, prepared);
+
+            if (
+              result.outcome === 'inference_error' ||
+              result.outcome === 'oom' ||
+              result.outcome === 'prepare_error'
+            ) {
+              if (!visualMatchInitialized) {
+                visualMatchExemplarId = await this.initializeVisualMatchExemplar(
+                  prepared,
+                  sourceMatchResult
+                );
+                visualMatchInitialized = true;
+              }
+
+              if (visualMatchExemplarId) {
+                console.warn(
+                  `[SAM3 V2] Visual crop matching failed for ${asset.id}; trying concept fallback.`
+                );
+                result = await this.runVisualConceptMatch(
+                  asset,
+                  imageBuffer,
+                  visualMatchExemplarId,
+                  prepared.textPrompt
+                );
+              }
             }
 
-            if (visualMatchExemplarId) {
-              result = await this.runVisualConceptMatch(
-                asset,
-                imageBuffer,
-                visualMatchExemplarId,
-                prepared.textPrompt
-              );
-            } else {
-              result = await this.runVisualCropMatch(asset, imageBuffer, prepared);
-            }
           }
         } else {
           result = await this.runConceptPropagation(asset, imageBuffer, conceptExemplarId, prepared.weedType);
