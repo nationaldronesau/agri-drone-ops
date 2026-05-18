@@ -21,7 +21,23 @@ describe('review-session-assets', () => {
     expect(findMany).not.toHaveBeenCalled();
   });
 
-  it('merges dynamically discovered batch assets into early-created batch review sessions', async () => {
+  it('keeps stored batch review assets even when only one asset has pending annotations', async () => {
+    const findMany = vi.fn();
+
+    const assetIds = await resolveReviewSessionAssetIds(
+      { pendingAnnotation: { findMany } },
+      {
+        workflowType: 'batch_review',
+        assetIds: ['asset-1', 'asset-2', 'asset-3'],
+        batchJobIds: ['batch-1'],
+      }
+    );
+
+    expect(findMany).not.toHaveBeenCalled();
+    expect(assetIds).toEqual(['asset-1', 'asset-2', 'asset-3']);
+  });
+
+  it('falls back to pending asset ids when an old batch session has no stored asset snapshot', async () => {
     const findMany = vi.fn().mockResolvedValue([
       { assetId: 'asset-2' },
       { assetId: 'asset-5' },
@@ -32,7 +48,7 @@ describe('review-session-assets', () => {
       { pendingAnnotation: { findMany } },
       {
         workflowType: 'batch_review',
-        assetIds: ['asset-2'],
+        assetIds: [],
         batchJobIds: ['batch-1'],
       }
     );
@@ -44,7 +60,7 @@ describe('review-session-assets', () => {
       select: { assetId: true },
       distinct: ['assetId'],
     });
-    expect(assetIds).toEqual(['asset-2', 'asset-1', 'asset-5']);
+    expect(assetIds).toEqual(['asset-1', 'asset-2', 'asset-5']);
   });
 
   it('falls back to stored asset ids when a batch session has no pending annotations yet', async () => {
