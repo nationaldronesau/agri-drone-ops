@@ -97,8 +97,10 @@ export async function POST(request: NextRequest) {
             id: true,
             kind: true,
             status: true,
+            totalImages: true,
+            assetIds: true,
             childBatchJobs: {
-              select: { id: true },
+              select: { id: true, assetIds: true },
               orderBy: [
                 { shardIndex: 'asc' },
                 { createdAt: 'asc' },
@@ -134,14 +136,41 @@ export async function POST(request: NextRequest) {
           )
         );
 
-        const pendingAssets = await prisma.pendingAnnotation.findMany({
-          where: {
-            batchJobId: { in: resolvedBatchJobIds.length > 0 ? resolvedBatchJobIds : ['__none__'] },
-          },
-          select: { assetId: true },
-          distinct: ['assetId'],
-        });
-        pendingAssets.forEach((entry) => assetIdSet.add(entry.assetId));
+        for (const batchJob of batchJobs) {
+          toStringArray(batchJob.assetIds).forEach((assetId) => assetIdSet.add(assetId));
+
+          if (batchJob.kind === SAM3_BATCH_JOB_KINDS.AGGREGATE) {
+            for (const childJob of batchJob.childBatchJobs) {
+              toStringArray(childJob.assetIds).forEach((assetId) => assetIdSet.add(assetId));
+            }
+          }
+        }
+
+        if (assetIdSet.size === 0 && batchJobs.some((batchJob) => batchJob.totalImages > 0)) {
+          const projectAssets = await prisma.asset.findMany({
+            where: { projectId },
+            select: { id: true },
+            orderBy: [
+              { uploadedAt: 'asc' },
+              { id: 'asc' },
+            ],
+          });
+          const requestedImageCounts = new Set(batchJobs.map((batchJob) => batchJob.totalImages));
+          if (requestedImageCounts.has(projectAssets.length)) {
+            projectAssets.forEach((asset) => assetIdSet.add(asset.id));
+          }
+        }
+
+        if (assetIdSet.size === 0) {
+          const pendingAssets = await prisma.pendingAnnotation.findMany({
+            where: {
+              batchJobId: { in: resolvedBatchJobIds.length > 0 ? resolvedBatchJobIds : ['__none__'] },
+            },
+            select: { assetId: true },
+            distinct: ['assetId'],
+          });
+          pendingAssets.forEach((entry) => assetIdSet.add(entry.assetId));
+        }
       }
 
       if (requestedInferenceJobIds.length > 0) {

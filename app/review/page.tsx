@@ -9,7 +9,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
-import { ReviewViewer, type ReviewItem } from '@/components/review/ReviewViewer';
+import { ReviewViewer, type ReviewItem, type ReviewItemAsset } from '@/components/review/ReviewViewer';
 import { YOLOConfigModal, type YOLOTrainingConfig } from '@/components/review/YOLOConfigModal';
 import { AlertTriangle, Brain, Download, ExternalLink, ShieldCheck, Sparkles } from 'lucide-react';
 
@@ -49,6 +49,7 @@ function ReviewPageContent() {
 
   const [session, setSession] = useState<ReviewSession | null>(null);
   const [items, setItems] = useState<ReviewItem[]>([]);
+  const [assets, setAssets] = useState<ReviewItemAsset[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -91,6 +92,7 @@ function ReviewPageContent() {
     }
     const data = await response.json();
     setItems(data.items || []);
+    setAssets(data.assets || []);
     if (data.summary) setSummary(data.summary);
   }, [sessionId]);
 
@@ -610,7 +612,7 @@ function ReviewPageContent() {
           </div>
         )}
 
-        <ReviewViewer items={filteredItems} onAction={handleAction} onEdit={handleEdit} />
+        <ReviewViewer assets={assets} items={filteredItems} onAction={handleAction} onEdit={handleEdit} />
 
         {/* Next Steps Card - shown when there are accepted items */}
         {(summary?.acceptedCount ?? 0) > 0 && (

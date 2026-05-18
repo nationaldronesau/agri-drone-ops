@@ -31,6 +31,10 @@ export async function resolveReviewSessionAssetIds(
     return storedAssetIds;
   }
 
+  if (storedAssetIds.length > 0) {
+    return storedAssetIds;
+  }
+
   const batchJobIds = toStringArray(session.batchJobIds);
   if (batchJobIds.length === 0) {
     return storedAssetIds;

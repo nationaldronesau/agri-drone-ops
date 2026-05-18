@@ -477,6 +477,7 @@ model BatchJob {
   version              Int?
   kind                 String  @default("SINGLE")
   mode                 String?
+  assetIds             Json? // String[] of asset IDs covered by this batch job
   stageLog             Json?
   shardIndex           Int?
   shardCount           Int?

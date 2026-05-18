@@ -207,6 +207,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     ? body.assetIds
     : requestedAssets.map((asset) => asset.id);
   const exemplarsJson = body.exemplars as unknown as Prisma.InputJsonValue;
+  const assetIdsJson = assetIds as unknown as Prisma.InputJsonValue;
   const emptyStageLogJson = [] as unknown as Prisma.InputJsonValue;
   const batchJobBaseData = {
     projectId: body.projectId,
@@ -229,6 +230,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       data: {
         ...batchJobBaseData,
         kind: SAM3_BATCH_JOB_KINDS.AGGREGATE,
+        assetIds: assetIdsJson,
         totalImages: assetIds.length,
         shardCount: assetChunks.length,
       },
@@ -241,6 +243,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             ...batchJobBaseData,
             parentBatchJobId: parentBatchJob.id,
             kind: SAM3_BATCH_JOB_KINDS.SHARD,
+            assetIds: chunk as unknown as Prisma.InputJsonValue,
             shardIndex: index + 1,
             shardCount: assetChunks.length,
             totalImages: chunk.length,
@@ -315,6 +318,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     data: {
       ...batchJobBaseData,
       kind: SAM3_BATCH_JOB_KINDS.SINGLE,
+      assetIds: assetIdsJson,
       totalImages: assetIds.length,
     },
   });

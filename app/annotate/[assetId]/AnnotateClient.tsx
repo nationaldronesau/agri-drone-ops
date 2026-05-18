@@ -590,25 +590,34 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         const status: SAM3StatusResponse = await response.json();
         let conceptStatus: SAM3ConceptStatusResponse | null = null;
 
-        try {
-          const conceptResponse = await fetch('/api/sam3/concept/status');
-          conceptStatus = await conceptResponse
-            .json()
-            .catch(() => null);
+        if (!useVisualCrops) {
+          try {
+            const conceptResponse = await fetch('/api/sam3/concept/status');
+            conceptStatus = await conceptResponse
+              .json()
+              .catch(() => null);
 
-          if (conceptStatus) {
-            setSam3ConceptStatus(conceptStatus);
-            if (
-              conceptStatus.configured &&
-              !conceptStatus.ready &&
-              !conceptWarmupTriggeredRef.current
-            ) {
-              conceptWarmupTriggeredRef.current = true;
-              fetch('/api/sam3/concept/warmup', { method: 'POST' }).catch((warmupError) => {
-                console.warn('[Annotate] Concept warmup request failed:', warmupError);
+            if (conceptStatus) {
+              setSam3ConceptStatus(conceptStatus);
+              if (
+                conceptStatus.configured &&
+                !conceptStatus.ready &&
+                !conceptWarmupTriggeredRef.current
+              ) {
+                conceptWarmupTriggeredRef.current = true;
+                fetch('/api/sam3/concept/warmup', { method: 'POST' }).catch((warmupError) => {
+                  console.warn('[Annotate] Concept warmup request failed:', warmupError);
+                });
+              }
+            } else {
+              setSam3ConceptStatus({
+                configured: false,
+                ready: false,
+                sam3Loaded: false,
+                dinoLoaded: false,
               });
             }
-          } else {
+          } catch {
             setSam3ConceptStatus({
               configured: false,
               ready: false,
@@ -616,17 +625,12 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
               dinoLoaded: false,
             });
           }
-        } catch {
-          setSam3ConceptStatus({
-            configured: false,
-            ready: false,
-            sam3Loaded: false,
-            dinoLoaded: false,
-          });
+        } else {
+          setSam3ConceptStatus(null);
         }
 
-        const visualMatchingReady = useVisualCrops && conceptStatus?.ready === true;
-        const awsReadyForMode = status.aws.ready || visualMatchingReady;
+        const conceptReadyForMode = !useVisualCrops && conceptStatus?.ready === true;
+        const awsReadyForMode = status.aws.ready || conceptReadyForMode;
         const isAvailable = awsReadyForMode || status.roboflow.ready || status.preferredBackend !== 'none';
         const device = awsReadyForMode ? 'aws-gpu' : status.roboflow.ready ? 'roboflow-serverless' : null;
 
