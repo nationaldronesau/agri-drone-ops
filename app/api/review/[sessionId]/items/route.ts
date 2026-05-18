@@ -293,20 +293,7 @@ export async function GET(
     }
 
     if (assetIds.length === 0) {
-      return NextResponse.json({ items: [] });
-    }
-
-    const existingAssets = await prisma.asset.findMany({
-      where: { id: { in: assetIds } },
-      select: { id: true },
-    });
-    const validAssetIds = new Set(existingAssets.map((asset) => asset.id));
-    const filteredAssetIds = assetIdFilter && validAssetIds.has(assetIdFilter)
-      ? [assetIdFilter]
-      : Array.from(validAssetIds);
-
-    if (filteredAssetIds.length === 0) {
-      return NextResponse.json({ items: [] });
+      return NextResponse.json({ items: [], assets: [] });
     }
 
     const assetSelect = {
@@ -327,6 +314,25 @@ export async function GET(
       lrfTargetLon: true,
       metadata: true,
     };
+
+    const existingAssets = await prisma.asset.findMany({
+      where: { id: { in: assetIds } },
+      select: assetSelect,
+    });
+    const assetOrder = new Map(assetIds.map((assetId, index) => [assetId, index]));
+    const validAssetIds = new Set(existingAssets.map((asset) => asset.id));
+    const filteredAssetIds = assetIdFilter && validAssetIds.has(assetIdFilter)
+      ? [assetIdFilter]
+      : assetIds.filter((assetId) => validAssetIds.has(assetId));
+    const filteredAssetIdSet = new Set(filteredAssetIds);
+    const reviewAssets = existingAssets
+      .filter((asset) => filteredAssetIdSet.has(asset.id))
+      .sort((left, right) => (assetOrder.get(left.id) ?? 0) - (assetOrder.get(right.id) ?? 0))
+      .map((asset) => toClientAsset(asset));
+
+    if (filteredAssetIds.length === 0) {
+      return NextResponse.json({ items: [], assets: [] });
+    }
 
     const manualAnnotationsPromise = !isBatchReview
       ? prisma.manualAnnotation.findMany({
@@ -645,7 +651,7 @@ export async function GET(
       assetIds,
     });
 
-    return NextResponse.json({ items: filteredItems, summary });
+    return NextResponse.json({ items: filteredItems, assets: reviewAssets, summary });
   } catch (error) {
     console.error('Error fetching review items:', error);
     return NextResponse.json(

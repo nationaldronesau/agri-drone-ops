@@ -751,70 +751,35 @@ describe('sam3-batch-v2', () => {
     });
   });
 
-  it('keeps operator source boxes as the visual-match anchor when source detections drift', async () => {
+  it('does not fall back to concept matching when visual crop matching fails for target assets', async () => {
     let stageLog: unknown[] = [];
-    const segment = vi
-      .fn()
-      .mockResolvedValueOnce({
-        success: true,
-        response: {
-          detections: [
-            {
-              bbox: [5, 5, 15, 15],
-              confidence: 0.9,
-              polygon: [
-                [5, 5],
-                [15, 5],
-                [15, 15],
-                [5, 15],
-              ],
-            },
-          ],
-          count: 1,
-        },
-      })
-      .mockResolvedValueOnce({
-        success: true,
-        response: {
-          detections: [
-            {
-              bbox: [20, 25, 40, 45],
-              confidence: 0.93,
-              polygon: [
-                [21, 25],
-                [39, 25],
-                [39, 44],
-                [21, 44],
-              ],
-            },
-          ],
-          count: 1,
-        },
-      });
-    const createConceptExemplar = vi.fn().mockResolvedValue({
+    const segment = vi.fn().mockResolvedValue({
       success: true,
-      data: { exemplarId: 'visual-exemplar-1' },
-    });
-    const applyConceptExemplar = vi.fn().mockResolvedValue({
-      success: true,
-      data: {
+      response: {
         detections: [
           {
-            bbox: [20, 25, 40, 45],
-            confidence: 0.82,
-            similarity: 0.88,
+            bbox: [5, 5, 15, 15],
+            confidence: 0.9,
             polygon: [
-              [20, 25],
-              [40, 25],
-              [40, 45],
-              [20, 45],
+              [5, 5],
+              [15, 5],
+              [15, 15],
+              [5, 15],
             ],
-            class_name: 'object',
           },
         ],
-        processingTimeMs: 12,
+        count: 1,
       },
     });
+    const segmentWithExemplars = vi.fn().mockResolvedValue({
+      success: false,
+      response: null,
+      errorCode: 'API_ERROR',
+      error: 'Visual crop endpoint failed',
+    });
+    const warmupConceptService = vi.fn();
+    const createConceptExemplar = vi.fn();
+    const applyConceptExemplar = vi.fn();
     const prismaMock = {
       batchJob: {
         findUnique: vi.fn().mockImplementation(async ({ select }) => {
@@ -892,11 +857,8 @@ describe('sam3-batch-v2', () => {
           scaling: { scaleFactor: 1 },
         })),
         segment,
-        segmentWithExemplars: vi.fn(),
-        warmupConceptService: vi.fn().mockResolvedValue({
-          success: true,
-          data: { sam3Loaded: true, dinoLoaded: true },
-        }),
+        segmentWithExemplars,
+        warmupConceptService,
         createConceptExemplar,
         applyConceptExemplar,
       },
@@ -925,51 +887,26 @@ describe('sam3-batch-v2', () => {
       updateProgress: vi.fn().mockResolvedValue(undefined),
     });
 
-    expect(result.terminalState).toBe('completed');
-    expect(segment).toHaveBeenCalledTimes(2);
-    expect(segment).toHaveBeenNthCalledWith(
-      2,
+    expect(result.terminalState).toBe('completed_partial');
+    expect(result.processedImages).toBe(2);
+    expect(result.failedAssets).toBe(1);
+    expect(segmentWithExemplars).toHaveBeenCalledTimes(1);
+    expect(segmentWithExemplars).toHaveBeenCalledWith(
       expect.objectContaining({
-        boxes: [{ x1: 20, y1: 25, x2: 40, y2: 45 }],
+        exemplarCrops: ['abc123'],
         className: 'Pine Sapling',
       })
     );
-    expect(createConceptExemplar).toHaveBeenCalledTimes(1);
-    expect(createConceptExemplar).toHaveBeenCalledWith(
+    expect(segment).toHaveBeenCalledTimes(1);
+    expect(segment).toHaveBeenCalledWith(
       expect.objectContaining({
         boxes: [{ x1: 100, y1: 100, x2: 150, y2: 160 }],
         className: 'Pine Sapling',
-        imageId: 'asset-source',
       })
     );
-    expect(applyConceptExemplar).toHaveBeenCalledTimes(2);
-    expect(applyConceptExemplar).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        options: expect.objectContaining({
-          returnPolygons: true,
-          similarityThreshold: 0.65,
-          topK: 120,
-          minBoxSize: 16,
-          maxBoxSize: 600,
-          nmsThreshold: 0.5,
-        }),
-      })
-    );
-    expect(applyConceptExemplar).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        options: expect.objectContaining({
-          returnPolygons: true,
-          similarityThreshold: 0.5,
-          topK: 40,
-          minBoxSize: 16,
-          maxBoxSize: 600,
-          nmsThreshold: 0.5,
-        }),
-      })
-    );
-    expect((service as any).awsSam3Service.segmentWithExemplars).not.toHaveBeenCalled();
+    expect(warmupConceptService).not.toHaveBeenCalled();
+    expect(createConceptExemplar).not.toHaveBeenCalled();
+    expect(applyConceptExemplar).not.toHaveBeenCalled();
   });
 
   it('configures the v2 BullMQ queue with global concurrency 1', async () => {

@@ -72,13 +72,17 @@ export interface ReviewItem {
 
 interface ReviewViewerProps {
   items: ReviewItem[];
+  assets?: ReviewItemAsset[];
   onAction: (item: ReviewItem, action: 'accept' | 'reject' | 'correct', correctedClass?: string) => Promise<void>;
   onEdit: (item: ReviewItem) => void;
 }
 
-export function ReviewViewer({ items, onAction, onEdit }: ReviewViewerProps) {
+export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewViewerProps) {
   const groupedAssets = useMemo(() => {
     const map = new Map<string, { asset: ReviewItemAsset; items: ReviewItem[] }>();
+    for (const asset of assets) {
+      map.set(asset.id, { asset, items: [] });
+    }
     for (const item of items) {
       if (!map.has(item.assetId)) {
         map.set(item.assetId, { asset: item.asset, items: [] });
@@ -86,7 +90,7 @@ export function ReviewViewer({ items, onAction, onEdit }: ReviewViewerProps) {
       map.get(item.assetId)!.items.push(item);
     }
     return Array.from(map.values());
-  }, [items]);
+  }, [assets, items]);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [corrections, setCorrections] = useState<Record<string, string>>({});
@@ -281,10 +285,9 @@ export function ReviewViewer({ items, onAction, onEdit }: ReviewViewerProps) {
                       {item.status === 'accepted' && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                       {item.status === 'rejected' && <XCircle className="h-4 w-4 text-red-500" />}
                       {item.warnings.length > 0 && (
-                        <AlertTriangle
-                          className="h-4 w-4 text-amber-500"
-                          title={warningText}
-                        />
+                        <span title={warningText}>
+                          <AlertTriangle className="h-4 w-4 text-amber-500" />
+                        </span>
                       )}
                     </div>
                   </div>
