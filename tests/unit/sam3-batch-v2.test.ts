@@ -751,7 +751,7 @@ describe('sam3-batch-v2', () => {
     });
   });
 
-  it('uses source-image box matching before concept-backed visual matching for target assets', async () => {
+  it('keeps operator source boxes as the visual-match anchor when source detections drift', async () => {
     let stageLog: unknown[] = [];
     const segment = vi
       .fn()
@@ -937,7 +937,7 @@ describe('sam3-batch-v2', () => {
     expect(createConceptExemplar).toHaveBeenCalledTimes(1);
     expect(createConceptExemplar).toHaveBeenCalledWith(
       expect.objectContaining({
-        boxes: [{ x1: 5, y1: 5, x2: 15, y2: 15 }],
+        boxes: [{ x1: 100, y1: 100, x2: 150, y2: 160 }],
         className: 'Pine Sapling',
         imageId: 'asset-source',
       })

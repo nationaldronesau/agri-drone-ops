@@ -76,6 +76,13 @@ export const SAM3_BATCH_V2_SOURCE_DETECTION_EXEMPLAR_LIMIT = Math.max(
   1,
   parseOptionalInt(process.env.SAM3_SOURCE_DETECTION_EXEMPLAR_LIMIT) ?? 30
 );
+export const SAM3_BATCH_V2_SOURCE_DETECTION_MIN_ANCHOR_OVERLAP = Math.max(
+  0,
+  Math.min(
+    1,
+    parseOptionalNumber(process.env.SAM3_SOURCE_DETECTION_MIN_ANCHOR_OVERLAP) ?? 0.2
+  )
+);
 
 export function buildBatchV2ConceptApplyOptions(): SAM3ConceptApplyOptions {
   return {
@@ -579,12 +586,50 @@ function isValidBox(box: BoxCoordinate): boolean {
   return box.x2 > box.x1 && box.y2 > box.y1;
 }
 
+function boxArea(box: BoxCoordinate): number {
+  return Math.max(0, box.x2 - box.x1) * Math.max(0, box.y2 - box.y1);
+}
+
+function boxIntersectionArea(first: BoxCoordinate, second: BoxCoordinate): number {
+  const x1 = Math.max(first.x1, second.x1);
+  const y1 = Math.max(first.y1, second.y1);
+  const x2 = Math.min(first.x2, second.x2);
+  const y2 = Math.min(first.y2, second.y2);
+
+  return Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+}
+
+function boxesOverlapEnough(
+  detectionBox: BoxCoordinate,
+  anchorBox: BoxCoordinate
+): boolean {
+  const smallerArea = Math.min(boxArea(detectionBox), boxArea(anchorBox));
+  if (smallerArea <= 0) {
+    return false;
+  }
+
+  return (
+    boxIntersectionArea(detectionBox, anchorBox) / smallerArea >=
+    SAM3_BATCH_V2_SOURCE_DETECTION_MIN_ANCHOR_OVERLAP
+  );
+}
+
+function boxesAreNearDuplicates(first: BoxCoordinate, second: BoxCoordinate): boolean {
+  const intersection = boxIntersectionArea(first, second);
+  const union = boxArea(first) + boxArea(second) - intersection;
+
+  return union > 0 && intersection / union >= 0.9;
+}
+
 function sourceDetectionExemplarBoxes(
-  sourceResult: AssetInferenceResult | null
+  sourceResult: AssetInferenceResult | null,
+  anchorBoxes: BoxCoordinate[]
 ): BoxCoordinate[] {
   if (!sourceResult || sourceResult.outcome !== 'success') {
     return [];
   }
+
+  const validAnchors = anchorBoxes.filter(isValidBox);
 
   return sourceResult.detections
     .map((detection) => ({
@@ -592,9 +637,38 @@ function sourceDetectionExemplarBoxes(
       confidence: detection.confidence,
     }))
     .filter(({ box }) => isValidBox(box))
+    .filter(({ box }) =>
+      validAnchors.length === 0
+        ? true
+        : validAnchors.some((anchorBox) => boxesOverlapEnough(box, anchorBox))
+    )
     .sort((left, right) => right.confidence - left.confidence)
     .slice(0, SAM3_BATCH_V2_SOURCE_DETECTION_EXEMPLAR_LIMIT)
     .map(({ box }) => box);
+}
+
+function mergeConceptExemplarBoxes(
+  anchorBoxes: BoxCoordinate[],
+  sourceBoxes: BoxCoordinate[]
+): BoxCoordinate[] {
+  const merged: BoxCoordinate[] = [];
+
+  for (const box of [...anchorBoxes, ...sourceBoxes]) {
+    if (!isValidBox(box)) {
+      continue;
+    }
+
+    const duplicate = merged.some((existing) => boxesAreNearDuplicates(box, existing));
+    if (!duplicate) {
+      merged.push(box);
+    }
+
+    if (merged.length >= SAM3_BATCH_V2_SOURCE_DETECTION_EXEMPLAR_LIMIT) {
+      break;
+    }
+  }
+
+  return merged;
 }
 
 function bboxArea(bbox: [number, number, number, number]): number {
@@ -1501,10 +1575,11 @@ export class Sam3BatchV2Service {
       return null;
     }
 
-    const sourceBoxes = sourceDetectionExemplarBoxes(sourceResult);
+    const sourceBoxes = sourceDetectionExemplarBoxes(sourceResult, prepared.exemplars);
+    const conceptBoxes = mergeConceptExemplarBoxes(prepared.exemplars, sourceBoxes);
     const exemplarResult = await this.awsSam3Service.createConceptExemplar({
       imageBuffer: prepared.sourceImageBuffer,
-      boxes: sourceBoxes.length > 0 ? sourceBoxes : prepared.exemplars,
+      boxes: conceptBoxes.length > 0 ? conceptBoxes : prepared.exemplars,
       className: prepared.textPrompt,
       imageId: prepared.sourceAssetId,
     });
