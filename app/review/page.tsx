@@ -151,6 +151,13 @@ function ReviewPageContent() {
 
   const hasJobScope =
     (session?.inferenceJobIds?.length ?? 0) > 0 || (session?.batchJobIds?.length ?? 0) > 0;
+  const replayBundleBatchIds = useMemo(
+    () => Array.from(new Set(session?.batchJobIds?.filter(Boolean) ?? [])),
+    [session?.batchJobIds]
+  );
+  const primaryReplayBundleUrl = replayBundleBatchIds[0]
+    ? `/api/sam3/v2/batch/${replayBundleBatchIds[0]}/replay-bundle`
+    : null;
 
   const bulkCandidates = useMemo(
     () => filteredItems.filter((item) => item.status === 'pending'),
@@ -447,6 +454,16 @@ function ReviewPageContent() {
               >
                 Train model
               </Button>
+              {primaryReplayBundleUrl && (
+                <Button asChild variant="outline" className="gap-2 border-amber-200 text-amber-700 hover:bg-amber-50">
+                  <a href={primaryReplayBundleUrl}>
+                    <Download className="h-4 w-4" />
+                    {replayBundleBatchIds.length > 1
+                      ? `Export replay bundle 1/${replayBundleBatchIds.length}`
+                      : 'Export SAM3 replay bundle'}
+                  </a>
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -506,11 +523,40 @@ function ReviewPageContent() {
 
         {items.length === 0 && hasJobScope && (
           <Card className="border-amber-200 bg-amber-50">
-            <CardContent className="py-4 text-sm text-amber-700">
-              <div className="font-medium">No detections found for this review session.</div>
-              <p className="text-xs text-amber-600 mt-1">
-                This usually means the inference job finished with zero detections or failed.
-              </p>
+            <CardContent className="space-y-3 py-4 text-sm text-amber-700">
+              <div>
+                <div className="font-medium">No detections found for this review session.</div>
+                <p className="mt-1 text-xs text-amber-600">
+                  This usually means the inference job finished with zero detections or failed. Diagnostic
+                  replay bundles do not require visible annotations, so you can still export the batch inputs
+                  for Codex/Williams to replay.
+                </p>
+              </div>
+              {replayBundleBatchIds.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {replayBundleBatchIds.slice(0, 3).map((batchJobId, index) => (
+                    <Button
+                      key={batchJobId}
+                      asChild
+                      size="sm"
+                      variant="outline"
+                      className="gap-2 border-amber-300 bg-white text-amber-800 hover:bg-amber-100"
+                    >
+                      <a href={`/api/sam3/v2/batch/${batchJobId}/replay-bundle`}>
+                        <Download className="h-4 w-4" />
+                        {replayBundleBatchIds.length > 1
+                          ? `Export replay bundle ${index + 1}`
+                          : 'Export SAM3 replay bundle'}
+                      </a>
+                    </Button>
+                  ))}
+                  {replayBundleBatchIds.length > 3 && (
+                    <span className="self-center text-xs text-amber-600">
+                      Showing first 3 of {replayBundleBatchIds.length} batch shards.
+                    </span>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
