@@ -42,6 +42,25 @@ want to replay, then replace the placeholder image paths and boxes:
 Image paths are resolved relative to the fixture file. HTTP/HTTPS image URLs are
 also supported.
 
+## One-Click UI Bundle
+
+For operators, use the app instead of manually building a fixture:
+
+1. Run the normal SAM3 Apply to All workflow.
+2. Wait for the batch to finish or fail.
+3. Click **Export SAM3 replay bundle** in the batch progress card.
+4. Send the downloaded ZIP to Codex/Williams.
+
+The ZIP contains:
+
+- `fixture.json`: ready for this replay command.
+- `manifest.json`: batch ID, project, source/target asset metadata, and counts.
+- `README.md`: exact command and decision rules.
+
+The bundle intentionally uses signed or absolute image URLs instead of embedding
+the full drone imagery, so it stays small enough to share. Run the replay before
+the signed URLs expire.
+
 ## Run It
 
 From the repo root, after preparing a real fixture:

@@ -2541,6 +2541,11 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
                 processed={batchJobStatus.processedImages}
                 total={batchJobStatus.totalImages}
                 status={batchJobStatus.status}
+                replayBundleUrl={
+                  batchJobId && batchPollUrl?.startsWith('/api/sam3/v2/batch')
+                    ? `/api/sam3/v2/batch/${batchJobId}/replay-bundle`
+                    : null
+                }
                 errorMessage={batchJobError}
                 title={
                   batchJobStatus.kind === 'AGGREGATE'
