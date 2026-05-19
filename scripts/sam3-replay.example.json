@@ -1,0 +1,15 @@
+{
+  "name": "ag3-apply-to-all-regression-slice",
+  "className": "Pine Sapling",
+  "source": {
+    "id": "source-image-1",
+    "image": "./fixtures/source.jpg",
+    "boxes": [
+      { "x1": 1240, "y1": 820, "x2": 1325, "y2": 910 }
+    ]
+  },
+  "targets": [
+    { "id": "target-image-2", "image": "./fixtures/target-02.jpg" },
+    { "id": "target-image-3", "image": "./fixtures/target-03.jpg" }
+  ]
+}

@@ -8,6 +8,7 @@ interface BatchProgressProps {
   total: number;
   status: string;
   onReview?: () => void;
+  replayBundleUrl?: string | null;
   errorMessage?: string | null;
   title?: string;
   subtitle?: string | null;
@@ -18,12 +19,14 @@ export function BatchProgress({
   total,
   status,
   onReview,
+  replayBundleUrl,
   errorMessage,
   title = 'Batch Progress',
   subtitle,
 }: BatchProgressProps) {
   const progress = total > 0 ? Math.round((processed / total) * 100) : 0;
   const isComplete = status === 'COMPLETED';
+  const isTerminal = ['COMPLETED', 'FAILED', 'CANCELLED'].includes(status);
   const showError = status === 'FAILED' && errorMessage;
   const showWarning = status === 'COMPLETED' && errorMessage;
 
@@ -49,11 +52,22 @@ export function BatchProgress({
           {errorMessage}
         </div>
       )}
-      {isComplete && onReview && (
-        <Button className="mt-3" onClick={onReview}>
-          Review predictions
-        </Button>
-      )}
+      {(isComplete && onReview) || (isTerminal && replayBundleUrl) ? (
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+          {isComplete && onReview ? (
+            <Button onClick={onReview}>
+              Review predictions
+            </Button>
+          ) : null}
+          {isTerminal && replayBundleUrl ? (
+            <Button asChild variant="outline">
+              <a href={replayBundleUrl}>
+                Export SAM3 replay bundle
+              </a>
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
