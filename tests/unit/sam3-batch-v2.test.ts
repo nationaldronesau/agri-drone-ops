@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import sharp from 'sharp';
 import { configureSam3BatchV2Queue } from '@/lib/queue/batch-queue-v2';
 import {
   buildBatchV2ConceptApplyOptions,
@@ -907,6 +908,182 @@ describe('sam3-batch-v2', () => {
     expect(warmupConceptService).not.toHaveBeenCalled();
     expect(createConceptExemplar).not.toHaveBeenCalled();
     expect(applyConceptExemplar).not.toHaveBeenCalled();
+  });
+
+  it('uses source SAM detections as visual crops for target assets', async () => {
+    let stageLog: unknown[] = [];
+    const imageBuffer = await sharp({
+      create: {
+        width: 240,
+        height: 180,
+        channels: 3,
+        background: '#f8fafc',
+      },
+    })
+      .composite([
+        {
+          input: Buffer.from(
+            '<svg width="240" height="180" xmlns="http://www.w3.org/2000/svg"><circle cx="70" cy="70" r="28" fill="#16a34a"/></svg>'
+          ),
+          top: 0,
+          left: 0,
+        },
+      ])
+      .jpeg()
+      .toBuffer();
+
+    global.fetch = vi.fn().mockImplementation(async () =>
+      new Response(imageBuffer, {
+        status: 200,
+        headers: {
+          'content-type': 'image/jpeg',
+          'content-length': String(imageBuffer.length),
+        },
+      })
+    ) as typeof fetch;
+
+    const segment = vi.fn().mockResolvedValue({
+      success: true,
+      response: {
+        detections: [
+          {
+            bbox: [42, 42, 98, 98],
+            confidence: 0.91,
+            polygon: [
+              [70, 42],
+              [98, 70],
+              [70, 98],
+              [42, 70],
+            ],
+          },
+        ],
+        count: 1,
+      },
+    });
+    const segmentWithExemplars = vi.fn().mockResolvedValue({
+      success: true,
+      response: { detections: [], count: 0 },
+    });
+    const prismaMock = {
+      batchJob: {
+        findUnique: vi.fn().mockImplementation(async ({ select }) => {
+          if (select?.stageLog) {
+            return { stageLog };
+          }
+          if (select?.sourceAssetId) {
+            return { sourceAssetId: 'asset-source' };
+          }
+          return { stageLog };
+        }),
+        update: vi.fn().mockImplementation(async ({ data }) => {
+          if (data?.stageLog) {
+            stageLog = data.stageLog as unknown[];
+          }
+        }),
+      },
+      asset: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'asset-target',
+            storageUrl: 'http://localhost/asset-target.jpg',
+            s3Key: null,
+            s3Bucket: null,
+            storageType: 'local',
+            imageWidth: 240,
+            imageHeight: 180,
+          },
+          {
+            id: 'asset-source',
+            storageUrl: 'http://localhost/asset-source.jpg',
+            s3Key: null,
+            s3Bucket: null,
+            storageType: 'local',
+            imageWidth: 240,
+            imageHeight: 180,
+          },
+        ]),
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'asset-source',
+          storageUrl: 'http://localhost/asset-source.jpg',
+          s3Key: null,
+          s3Bucket: null,
+          storageType: 'local',
+          imageWidth: 240,
+          imageHeight: 180,
+        }),
+      },
+      $transaction: vi.fn().mockImplementation(async <T>(callback: (tx: any) => Promise<T>) => {
+        return callback({
+          pendingAnnotation: {
+            deleteMany: vi.fn(async () => undefined),
+            createMany: vi.fn(async () => undefined),
+          },
+          batchJob: {
+            update: vi.fn(async () => undefined),
+          },
+        });
+      }),
+    } as any;
+
+    const service = new Sam3BatchV2Service({
+      prisma: prismaMock,
+      awsSam3Service: {
+        isConfigured: vi.fn().mockReturnValue(true),
+        isReady: vi.fn().mockReturnValue(true),
+        refreshStatus: vi.fn().mockResolvedValue({
+          modelLoaded: true,
+          instanceState: 'ready',
+          ipAddress: '127.0.0.1',
+        }),
+        startInstance: vi.fn().mockResolvedValue(true),
+        resizeImage: vi.fn().mockImplementation(async (buffer: Buffer) => ({
+          buffer,
+          scaling: { scaleFactor: 1 },
+        })),
+        segment,
+        segmentWithExemplars,
+        warmupConceptService: vi.fn(),
+        createConceptExemplar: vi.fn(),
+        applyConceptExemplar: vi.fn(),
+      },
+      acquireGpuLock: vi.fn().mockResolvedValue({ acquired: true, token: 'gpu-token' }),
+      refreshGpuLock: vi.fn().mockResolvedValue(true),
+      releaseGpuLock: vi.fn().mockResolvedValue(true),
+      sleep: vi.fn(),
+      now: () => new Date('2026-03-31T00:00:00.000Z'),
+    });
+
+    await service.processJob({
+      data: {
+        batchJobId: 'batch-source-crops-1',
+        projectId: 'proj-1',
+        weedType: 'Pine Sapling',
+        mode: 'visual_crop_match',
+        exemplars: [{ x1: 40, y1: 40, x2: 100, y2: 100 }],
+        exemplarSourceWidth: 240,
+        exemplarSourceHeight: 180,
+        exemplarCrops: ['operator-crop'],
+        sourceAssetId: 'asset-source',
+        assetIds: ['asset-target', 'asset-source'],
+        textPrompt: 'Pine Sapling',
+      },
+      attemptsMade: 0,
+      updateProgress: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(segmentWithExemplars).toHaveBeenCalledTimes(1);
+    const targetRequest = segmentWithExemplars.mock.calls[0][0];
+    expect(targetRequest.exemplarCrops).toHaveLength(1);
+    expect(targetRequest.exemplarCrops[0]).not.toBe('operator-crop');
+    expect(stageLog).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          assetId: 'asset-target',
+          visualCropSource: 'source_detections',
+          sourceDetectionCropCount: 1,
+        }),
+      ])
+    );
   });
 
   it('configures the v2 BullMQ queue with global concurrency 1', async () => {
