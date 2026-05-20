@@ -67,6 +67,7 @@ type ParsedArgs = {
   conceptMaxBoxSize: number;
   conceptNmsThreshold: number;
   conceptMinCandidates: number;
+  includeSourceTarget: boolean;
   skipHealth: boolean;
 };
 
@@ -308,6 +309,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     conceptMaxBoxSize,
     conceptNmsThreshold,
     conceptMinCandidates,
+    includeSourceTarget: args.has("include-source-target"),
     skipHealth: args.has("skip-health"),
   };
 }
@@ -1071,6 +1073,7 @@ async function main(): Promise<void> {
       loadImage(target.image, fixtureDir, target.id ?? `target-${index + 1}`)
     )
   );
+  const replayTargets = options.includeSourceTarget ? [source, ...targets] : targets;
   const providedCrops = await loadProvidedCrops(fixture.source, fixtureDir);
   const baselineCrops =
     providedCrops.length > 0
@@ -1144,7 +1147,7 @@ async function main(): Promise<void> {
       const strategyDir = path.join(options.outputDir, strategy);
       const targetManifests: TargetManifest[] = [];
 
-      for (const target of targets) {
+      for (const target of replayTargets) {
         const safeTargetId = sanitizeFileName(target.id);
         const jsonPath = path.join(strategyDir, `${safeTargetId}.json`);
         const overlayPath = path.join(strategyDir, `${safeTargetId}.overlay.png`);
@@ -1239,7 +1242,7 @@ async function main(): Promise<void> {
       options,
       conceptUrl: options.conceptUrl,
       source,
-      targets,
+      replayTargets,
       sourceResult,
       anchorBoxes: fixture.source.boxes,
       className,
@@ -1279,6 +1282,7 @@ async function main(): Promise<void> {
       conceptMaxBoxSize: options.conceptMaxBoxSize,
       conceptNmsThreshold: options.conceptNmsThreshold,
       conceptMinCandidates: options.conceptMinCandidates,
+      includeSourceTarget: options.includeSourceTarget,
     },
     source: {
       id: source.id,
@@ -1306,7 +1310,7 @@ async function runConceptReplay({
   options,
   conceptUrl,
   source,
-  targets,
+  replayTargets,
   sourceResult,
   anchorBoxes,
   className,
@@ -1315,7 +1319,7 @@ async function runConceptReplay({
   options: ParsedArgs;
   conceptUrl: string | null;
   source: LoadedImage;
-  targets: LoadedImage[];
+  replayTargets: LoadedImage[];
   sourceResult: Sam3RunResult | null;
   anchorBoxes: Box[];
   className: string;
@@ -1349,7 +1353,7 @@ async function runConceptReplay({
     rawResponse: exemplar.rawResponse,
   });
 
-  for (const target of targets) {
+  for (const target of replayTargets) {
     const safeTargetId = sanitizeFileName(target.id);
     const jsonPath = path.join(conceptDir, `${safeTargetId}.json`);
     const overlayPath = path.join(conceptDir, `${safeTargetId}.overlay.png`);
