@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
+import { buildExemplarCropsFromDetections } from "@/lib/utils/exemplar-crops";
 
 type StrategyName = "baseline" | "enhanced";
+type ReplayTechnique = "crops" | "concept" | "both";
+type CropSource = "operator" | "source-detections" | "both";
 
 type Box = {
   x1: number;
@@ -15,6 +18,7 @@ type Detection = {
   bbox: [number, number, number, number];
   confidence: number;
   className: string;
+  similarity?: number;
   polygon?: [number, number][];
 };
 
@@ -40,13 +44,30 @@ type ParsedArgs = {
   fixturePath: string;
   outputDir: string;
   sam3Url: string | null;
+  conceptUrl: string | null;
+  conceptApiKey: string | null;
   dryRun: boolean;
+  technique: ReplayTechnique;
+  cropSource: CropSource;
   strategy: "both" | StrategyName;
   maxCrops: number;
+  conceptMaxBoxes: number;
   maxImageSize: number;
   timeoutMs: number;
   minSize: number;
   minAnchorOverlap: number;
+  sourceCropMinConfidence: number;
+  sourceCropPadding: number;
+  sourceCropMask: boolean;
+  conceptSimilarityThreshold: number;
+  conceptFallbackSimilarityThreshold: number;
+  conceptTopK: number;
+  conceptFallbackTopK: number;
+  conceptMinBoxSize: number;
+  conceptMaxBoxSize: number;
+  conceptNmsThreshold: number;
+  conceptMinCandidates: number;
+  includeSourceTarget: boolean;
   skipHealth: boolean;
 };
 
@@ -93,16 +114,41 @@ type TargetManifest = {
 
 type StrategyManifest = {
   name: StrategyName;
+  cropSource: CropSource;
   cropCount: number;
   cropFiles: string[];
   sourceBoxesUsed: Box[];
   targets: TargetManifest[];
 };
 
+type ConceptManifest = {
+  exemplarId: string | null;
+  sourceBoxesUsed: Box[];
+  targets: Array<
+    TargetManifest & {
+      strictCandidateCount?: number;
+      fallbackCandidateCount?: number;
+      candidateCount?: number;
+      refinedCount?: number;
+    }
+  >;
+};
+
 const DEFAULT_MAX_IMAGE_SIZE = 2048;
 const DEFAULT_TIMEOUT_MS = 120000;
 const DEFAULT_MIN_SIZE = 100;
 const DEFAULT_MIN_ANCHOR_OVERLAP = 0.2;
+const DEFAULT_SOURCE_CROP_MIN_CONFIDENCE = 0.6;
+const DEFAULT_SOURCE_CROP_PADDING = 0.08;
+const DEFAULT_CONCEPT_MAX_BOXES = 30;
+const DEFAULT_CONCEPT_SIMILARITY_THRESHOLD = 0.65;
+const DEFAULT_CONCEPT_FALLBACK_SIMILARITY_THRESHOLD = 0.5;
+const DEFAULT_CONCEPT_TOP_K = 120;
+const DEFAULT_CONCEPT_FALLBACK_TOP_K = 40;
+const DEFAULT_CONCEPT_MIN_BOX_SIZE = 16;
+const DEFAULT_CONCEPT_MAX_BOX_SIZE = 600;
+const DEFAULT_CONCEPT_NMS_THRESHOLD = 0.5;
+const DEFAULT_CONCEPT_MIN_CANDIDATES = 25;
 const DATA_URL_PREFIX = /^data:image\/[a-zA-Z0-9.+-]+;base64,/;
 const BASE64_REGEX = /^[A-Za-z0-9+/]+={0,2}$/;
 
@@ -135,7 +181,22 @@ function parseArgs(argv: string[]): ParsedArgs {
     throw new Error("--strategy must be one of: both, baseline, enhanced");
   }
 
+  const technique = args.get("technique") ?? "crops";
+  if (!["crops", "concept", "both"].includes(technique)) {
+    throw new Error("--technique must be one of: crops, concept, both");
+  }
+
+  const cropSource = args.get("crop-source") ?? "both";
+  if (!["operator", "source-detections", "both"].includes(cropSource)) {
+    throw new Error("--crop-source must be one of: operator, source-detections, both");
+  }
+
   const maxCrops = parsePositiveInt(args.get("max-crops"), 10, "--max-crops");
+  const conceptMaxBoxes = parsePositiveInt(
+    args.get("concept-max-boxes"),
+    DEFAULT_CONCEPT_MAX_BOXES,
+    "--concept-max-boxes"
+  );
   const maxImageSize = parsePositiveInt(
     args.get("max-image-size"),
     DEFAULT_MAX_IMAGE_SIZE,
@@ -148,8 +209,61 @@ function parseArgs(argv: string[]): ParsedArgs {
     DEFAULT_MIN_ANCHOR_OVERLAP,
     "--min-anchor-overlap"
   );
+  const sourceCropMinConfidence = parseRatio(
+    args.get("source-crop-min-confidence"),
+    DEFAULT_SOURCE_CROP_MIN_CONFIDENCE,
+    "--source-crop-min-confidence"
+  );
+  const sourceCropPadding = parseRatio(
+    args.get("source-crop-padding"),
+    DEFAULT_SOURCE_CROP_PADDING,
+    "--source-crop-padding"
+  );
+  const sourceCropMask = parseBoolean(args.get("source-crop-mask"), true, "--source-crop-mask");
+  const conceptSimilarityThreshold = parseRatio(
+    args.get("concept-similarity-threshold"),
+    DEFAULT_CONCEPT_SIMILARITY_THRESHOLD,
+    "--concept-similarity-threshold"
+  );
+  const conceptFallbackSimilarityThreshold = parseRatio(
+    args.get("concept-fallback-similarity-threshold"),
+    DEFAULT_CONCEPT_FALLBACK_SIMILARITY_THRESHOLD,
+    "--concept-fallback-similarity-threshold"
+  );
+  const conceptTopK = parsePositiveInt(args.get("concept-top-k"), DEFAULT_CONCEPT_TOP_K, "--concept-top-k");
+  const conceptFallbackTopK = parsePositiveInt(
+    args.get("concept-fallback-top-k"),
+    DEFAULT_CONCEPT_FALLBACK_TOP_K,
+    "--concept-fallback-top-k"
+  );
+  const conceptMinBoxSize = parsePositiveInt(
+    args.get("concept-min-box-size"),
+    DEFAULT_CONCEPT_MIN_BOX_SIZE,
+    "--concept-min-box-size"
+  );
+  const conceptMaxBoxSize = parsePositiveInt(
+    args.get("concept-max-box-size"),
+    DEFAULT_CONCEPT_MAX_BOX_SIZE,
+    "--concept-max-box-size"
+  );
+  const conceptNmsThreshold = parseRatio(
+    args.get("concept-nms-threshold"),
+    DEFAULT_CONCEPT_NMS_THRESHOLD,
+    "--concept-nms-threshold"
+  );
+  const conceptMinCandidates = parsePositiveInt(
+    args.get("concept-min-candidates"),
+    DEFAULT_CONCEPT_MIN_CANDIDATES,
+    "--concept-min-candidates"
+  );
 
   const resolvedFixturePath = path.resolve(fixturePath);
+  const sam3Url =
+    trimTrailingSlash(args.get("sam3-url")) ??
+    trimTrailingSlash(process.env.SAM3_REPLAY_SAM3_URL) ??
+    trimTrailingSlash(process.env.SAM3_SERVICE_URL) ??
+    trimTrailingSlash(process.env.SAM3_BASE_URL) ??
+    null;
   const outputDir =
     args.get("out") ??
     path.join(
@@ -162,19 +276,40 @@ function parseArgs(argv: string[]): ParsedArgs {
   return {
     fixturePath: resolvedFixturePath,
     outputDir: path.resolve(outputDir),
-    sam3Url:
-      trimTrailingSlash(args.get("sam3-url")) ??
-      trimTrailingSlash(process.env.SAM3_REPLAY_SAM3_URL) ??
-      trimTrailingSlash(process.env.SAM3_SERVICE_URL) ??
-      trimTrailingSlash(process.env.SAM3_BASE_URL) ??
+    sam3Url,
+    conceptUrl:
+      trimTrailingSlash(args.get("concept-url")) ??
+      trimTrailingSlash(process.env.SAM3_REPLAY_CONCEPT_URL) ??
+      deriveConceptUrl(sam3Url),
+    conceptApiKey:
+      args.get("concept-api-key") ??
+      process.env.SAM3_REPLAY_CONCEPT_API_KEY ??
+      process.env.SAM3_CONCEPT_API_KEY ??
+      process.env.SAM3_API_KEY ??
+      process.env.NDSD_SAM3_SERVICE_API_KEY ??
       null,
     dryRun: args.has("dry-run"),
+    technique: technique as ReplayTechnique,
+    cropSource: cropSource as CropSource,
     strategy: strategy as ParsedArgs["strategy"],
     maxCrops,
+    conceptMaxBoxes,
     maxImageSize,
     timeoutMs,
     minSize,
     minAnchorOverlap,
+    sourceCropMinConfidence,
+    sourceCropPadding,
+    sourceCropMask,
+    conceptSimilarityThreshold,
+    conceptFallbackSimilarityThreshold,
+    conceptTopK,
+    conceptFallbackTopK,
+    conceptMinBoxSize,
+    conceptMaxBoxSize,
+    conceptNmsThreshold,
+    conceptMinCandidates,
+    includeSourceTarget: args.has("include-source-target"),
     skipHealth: args.has("skip-health"),
   };
 }
@@ -197,10 +332,31 @@ function parseRatio(raw: string | undefined, fallback: number, flag: string): nu
   return parsed;
 }
 
+function parseBoolean(raw: string | undefined, fallback: boolean, flag: string): boolean {
+  if (raw == null) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (['true', '1', 'yes', 'y'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'n'].includes(normalized)) return false;
+  throw new Error(`${flag} must be true or false`);
+}
+
 function trimTrailingSlash(value: string | undefined): string | null {
   const trimmed = value?.trim();
   if (!trimmed) return null;
   return trimmed.replace(/\/+$/, "");
+}
+
+function deriveConceptUrl(sam3Url: string | null): string | null {
+  if (!sam3Url) return null;
+
+  try {
+    const parsed = new URL(sam3Url);
+    parsed.port = "8002";
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -535,10 +691,90 @@ async function callSam3WithCrops(
   });
 }
 
-async function postJson(url: string, payload: unknown, timeoutMs: number): Promise<unknown> {
+async function warmupConceptService(conceptUrl: string, options: ParsedArgs): Promise<unknown> {
+  return postJson(`${conceptUrl}/warmup`, {}, options.timeoutMs, conceptHeaders(options));
+}
+
+async function createConceptExemplar(
+  conceptUrl: string,
+  source: LoadedImage,
+  boxes: Box[],
+  className: string,
+  options: ParsedArgs
+): Promise<{ exemplarId: string; rawResponse: unknown }> {
+  const resized = await resizeForSam3(source.buffer, options.maxImageSize);
+  const payload = {
+    image: resized.buffer.toString("base64"),
+    boxes: boxes.map((box) => scaleBox(box, resized.scaling.scaleFactor)),
+    class_name: className,
+    image_id: source.id,
+  };
+  const response = await postJson(
+    `${conceptUrl}/api/v1/exemplars/create`,
+    payload,
+    options.timeoutMs,
+    conceptHeaders(options)
+  );
+  const record = asRecord(response);
+  const exemplarId = typeof record.exemplar_id === "string" ? record.exemplar_id : "";
+  if (!exemplarId) {
+    throw new Error("Concept create response did not include exemplar_id");
+  }
+  return { exemplarId, rawResponse: response };
+}
+
+async function applyConceptExemplar(
+  conceptUrl: string,
+  exemplarId: string,
+  image: LoadedImage,
+  options: ParsedArgs,
+  fallback = false
+): Promise<{ detections: Detection[]; rawResponse: unknown; scaling: ScalingInfo }> {
+  const resized = await resizeForSam3(image.buffer, options.maxImageSize);
+  const payload = {
+    exemplar_id: exemplarId,
+    images: [resized.buffer.toString("base64")],
+    image_ids: [image.id],
+    return_polygons: true,
+    similarity_threshold: fallback
+      ? options.conceptFallbackSimilarityThreshold
+      : options.conceptSimilarityThreshold,
+    top_k: fallback ? options.conceptFallbackTopK : options.conceptTopK,
+    min_box_size: options.conceptMinBoxSize,
+    max_box_size: options.conceptMaxBoxSize,
+    nms_threshold: options.conceptNmsThreshold,
+  };
+  const response = await postJson(
+    `${conceptUrl}/api/v1/exemplars/apply`,
+    payload,
+    options.timeoutMs,
+    conceptHeaders(options)
+  );
+  return {
+    detections: parseConceptApplyDetections(response, resized.scaling),
+    rawResponse: response,
+    scaling: resized.scaling,
+  };
+}
+
+function parseConceptApplyDetections(response: unknown, scaling: ScalingInfo): Detection[] {
+  const record = asRecord(response);
+  const resultItem = Array.isArray(record.results) ? record.results[0] : null;
+  const rawDetections = Array.isArray(resultItem?.detections) ? resultItem.detections : [];
+  return rawDetections
+    .map((detection) => parseDetection(detection, scaling))
+    .filter((detection): detection is Detection => detection != null);
+}
+
+async function postJson(
+  url: string,
+  payload: unknown,
+  timeoutMs: number,
+  headers: Record<string, string> = { "Content-Type": "application/json" }
+): Promise<unknown> {
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(timeoutMs),
   });
@@ -549,6 +785,14 @@ async function postJson(url: string, payload: unknown, timeoutMs: number): Promi
   }
 
   return response.json();
+}
+
+function conceptHeaders(options: ParsedArgs): Record<string, string> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (options.conceptApiKey) {
+    headers["X-API-Key"] = options.conceptApiKey;
+  }
+  return headers;
 }
 
 function parseSam3Result(
@@ -578,6 +822,7 @@ function parseDetection(value: unknown, scaling: ScalingInfo): Detection | null 
   if (!bbox) return null;
 
   const confidence = toNumber(record.confidence) ?? toNumber(record.score) ?? 0;
+  const similarity = toNumber(record.similarity);
   const className =
     (typeof record.class_name === "string" && record.class_name) ||
     (typeof record.className === "string" && record.className) ||
@@ -585,7 +830,8 @@ function parseDetection(value: unknown, scaling: ScalingInfo): Detection | null 
 
   return {
     bbox: scaleBboxToOriginal(bbox, scaling.scaleFactor),
-    confidence,
+    confidence: similarity ?? confidence,
+    similarity: similarity ?? undefined,
     className,
     polygon: scalePolygonToOriginal(record.polygon, scaling.scaleFactor),
   };
@@ -664,6 +910,40 @@ function boxesAreNearDuplicates(first: Box, second: Box): boolean {
   const intersection = boxIntersectionArea(first, second);
   const union = boxArea(first) + boxArea(second) - intersection;
   return union > 0 && intersection / union >= 0.9;
+}
+
+function bboxIou(first: [number, number, number, number], second: [number, number, number, number]): number {
+  const firstBox = { x1: first[0], y1: first[1], x2: first[2], y2: first[3] };
+  const secondBox = { x1: second[0], y1: second[1], x2: second[2], y2: second[3] };
+  const intersection = boxIntersectionArea(firstBox, secondBox);
+  const union = boxArea(firstBox) + boxArea(secondBox) - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
+function detectionScore(detection: Detection): number {
+  return typeof detection.similarity === "number" ? detection.similarity : detection.confidence;
+}
+
+function filterConceptDetections(detections: Detection[], threshold: number): Detection[] {
+  return detections
+    .filter((detection) => detectionScore(detection) >= threshold)
+    .sort((left, right) => detectionScore(right) - detectionScore(left));
+}
+
+function dedupeConceptDetections(
+  detections: Detection[],
+  nmsThreshold: number,
+  limit: number
+): Detection[] {
+  const selected: Detection[] = [];
+  for (const detection of detections.sort((left, right) => detectionScore(right) - detectionScore(left))) {
+    if (selected.some((existing) => bboxIou(existing.bbox, detection.bbox) > nmsThreshold)) {
+      continue;
+    }
+    selected.push(detection);
+    if (selected.length >= limit) break;
+  }
+  return selected;
 }
 
 async function checkHealth(sam3Url: string, timeoutMs: number): Promise<unknown> {
@@ -757,7 +1037,9 @@ function escapeXml(value: string): string {
     .replace(/'/g, "&apos;");
 }
 
-function strategyList(strategy: ParsedArgs["strategy"]): StrategyName[] {
+function strategyList(strategy: ParsedArgs["strategy"], cropSource: CropSource): StrategyName[] {
+  if (cropSource === "operator") return ["baseline"];
+  if (cropSource === "source-detections") return ["enhanced"];
   if (strategy === "both") return ["baseline", "enhanced"];
   return [strategy];
 }
@@ -770,6 +1052,13 @@ async function main(): Promise<void> {
 
   if (!options.dryRun && !options.sam3Url) {
     throw new Error("--sam3-url is required unless --dry-run is set");
+  }
+  if (
+    !options.dryRun &&
+    (options.technique === "concept" || options.technique === "both") &&
+    !options.conceptUrl
+  ) {
+    throw new Error("--concept-url is required for --technique concept unless it can be derived from --sam3-url");
   }
 
   await fs.mkdir(options.outputDir, { recursive: true });
@@ -784,6 +1073,7 @@ async function main(): Promise<void> {
       loadImage(target.image, fixtureDir, target.id ?? `target-${index + 1}`)
     )
   );
+  const replayTargets = options.includeSourceTarget ? [source, ...targets] : targets;
   const providedCrops = await loadProvidedCrops(fixture.source, fixtureDir);
   const baselineCrops =
     providedCrops.length > 0
@@ -833,100 +1123,130 @@ async function main(): Promise<void> {
         options.maxCrops
       )
     : fixture.source.boxes.slice(0, options.maxCrops);
-  const enhancedCrops = await buildCropsFromBoxes(source.buffer, enhancedBoxes, options.maxCrops);
+  const sourceDetectionCrops = sourceResult
+    ? await buildExemplarCropsFromDetections({
+        imageBuffer: source.buffer,
+        detections: sourceResult.detections,
+        maxCrops: options.maxCrops,
+        minConfidence: options.sourceCropMinConfidence,
+        paddingRatio: options.sourceCropPadding,
+        maskPolygons: options.sourceCropMask,
+      })
+    : [];
+  const enhancedCrops =
+    sourceDetectionCrops.length > 0
+      ? sourceDetectionCrops
+      : await buildCropsFromBoxes(source.buffer, enhancedBoxes, options.maxCrops);
 
   const strategyManifests: StrategyManifest[] = [];
-  for (const strategy of strategyList(options.strategy)) {
-    const crops = strategy === "baseline" ? baselineCrops : enhancedCrops;
-    const sourceBoxesUsed = strategy === "baseline" ? fixture.source.boxes.slice(0, options.maxCrops) : enhancedBoxes;
-    const cropFiles = await writeCropFiles(options.outputDir, strategy, crops);
-    const strategyDir = path.join(options.outputDir, strategy);
-    const targetManifests: TargetManifest[] = [];
+  if (options.technique === "crops" || options.technique === "both") {
+    for (const strategy of strategyList(options.strategy, options.cropSource)) {
+      const crops = strategy === "baseline" ? baselineCrops : enhancedCrops;
+      const sourceBoxesUsed = strategy === "baseline" ? fixture.source.boxes.slice(0, options.maxCrops) : enhancedBoxes;
+      const cropFiles = await writeCropFiles(options.outputDir, strategy, crops);
+      const strategyDir = path.join(options.outputDir, strategy);
+      const targetManifests: TargetManifest[] = [];
 
-    for (const target of targets) {
-      const safeTargetId = sanitizeFileName(target.id);
-      const jsonPath = path.join(strategyDir, `${safeTargetId}.json`);
-      const overlayPath = path.join(strategyDir, `${safeTargetId}.overlay.png`);
+      for (const target of replayTargets) {
+        const safeTargetId = sanitizeFileName(target.id);
+        const jsonPath = path.join(strategyDir, `${safeTargetId}.json`);
+        const overlayPath = path.join(strategyDir, `${safeTargetId}.overlay.png`);
 
-      if (options.dryRun) {
-        await writeJson(jsonPath, {
-          dryRun: true,
-          target: target.id,
-          strategy,
-          cropCount: crops.length,
-        });
-        await renderOverlay({
-          image: target,
-          outputPath: overlayPath,
-          detections: [],
-          title: `${strategy} dry run: ${target.id}`,
-          color: strategy === "baseline" ? "#f59e0b" : "#16a34a",
-        });
-        targetManifests.push({
-          id: target.id,
-          image: target.reference,
-          count: 0,
-          outcome: "dry_run",
-          jsonPath,
-          overlayPath,
-        });
-        continue;
-      }
-
-      try {
-        if (!options.sam3Url) {
-          throw new Error("SAM3 URL was not configured");
+        if (options.dryRun) {
+          await writeJson(jsonPath, {
+            dryRun: true,
+            target: target.id,
+            strategy,
+            cropCount: crops.length,
+          });
+          await renderOverlay({
+            image: target,
+            outputPath: overlayPath,
+            detections: [],
+            title: `${strategy} dry run: ${target.id}`,
+            color: strategy === "baseline" ? "#f59e0b" : "#16a34a",
+          });
+          targetManifests.push({
+            id: target.id,
+            image: target.reference,
+            count: 0,
+            outcome: "dry_run",
+            jsonPath,
+            overlayPath,
+          });
+          continue;
         }
-        const result = await callSam3WithCrops(options.sam3Url, target, crops, className, options);
-        await writeJson(jsonPath, result);
-        await renderOverlay({
-          image: target,
-          outputPath: overlayPath,
-          detections: result.detections,
-          title: `${strategy}: ${target.id}`,
-          color: strategy === "baseline" ? "#f59e0b" : "#16a34a",
-        });
-        targetManifests.push({
-          id: target.id,
-          image: target.reference,
-          count: result.detections.length,
-          outcome: result.detections.length > 0 ? "success" : "zero_detections",
-          jsonPath,
-          overlayPath,
-        });
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : "Unknown SAM3 replay error";
-        await writeJson(jsonPath, {
-          ok: false,
-          error: errorMessage,
-          strategy,
-          target: target.id,
-        });
-        await renderOverlay({
-          image: target,
-          outputPath: overlayPath,
-          detections: [],
-          title: `${strategy}: ${target.id} error`,
-          color: "#dc2626",
-        });
-        targetManifests.push({
-          id: target.id,
-          image: target.reference,
-          count: 0,
-          outcome: "error",
-          jsonPath,
-          overlayPath,
-          error: errorMessage,
-        });
-      }
-    }
 
-    strategyManifests.push({
-      name: strategy,
-      cropCount: crops.length,
-      cropFiles,
-      sourceBoxesUsed,
-      targets: targetManifests,
+        try {
+          if (!options.sam3Url) {
+            throw new Error("SAM3 URL was not configured");
+          }
+          const result = await callSam3WithCrops(options.sam3Url, target, crops, className, options);
+          await writeJson(jsonPath, result);
+          await renderOverlay({
+            image: target,
+            outputPath: overlayPath,
+            detections: result.detections,
+            title: `${strategy}: ${target.id}`,
+            color: strategy === "baseline" ? "#f59e0b" : "#16a34a",
+          });
+          targetManifests.push({
+            id: target.id,
+            image: target.reference,
+            count: result.detections.length,
+            outcome: result.detections.length > 0 ? "success" : "zero_detections",
+            jsonPath,
+            overlayPath,
+          });
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : "Unknown SAM3 replay error";
+          await writeJson(jsonPath, {
+            ok: false,
+            error: errorMessage,
+            strategy,
+            target: target.id,
+          });
+          await renderOverlay({
+            image: target,
+            outputPath: overlayPath,
+            detections: [],
+            title: `${strategy}: ${target.id} error`,
+            color: "#dc2626",
+          });
+          targetManifests.push({
+            id: target.id,
+            image: target.reference,
+            count: 0,
+            outcome: "error",
+            jsonPath,
+            overlayPath,
+            error: errorMessage,
+          });
+        }
+      }
+
+      strategyManifests.push({
+        name: strategy,
+        cropSource: strategy === "baseline" ? "operator" : "source-detections",
+        cropCount: crops.length,
+        cropFiles,
+        sourceBoxesUsed,
+        targets: targetManifests,
+      });
+    }
+  }
+
+  let conceptManifest: ConceptManifest | null = null;
+  if (options.technique === "concept" || options.technique === "both") {
+    conceptManifest = await runConceptReplay({
+      options,
+      conceptUrl: options.conceptUrl,
+      source,
+      replayTargets,
+      sourceResult,
+      anchorBoxes: fixture.source.boxes,
+      className,
+      name: fixture.name ?? "SAM3 replay",
     });
   }
 
@@ -939,14 +1259,30 @@ async function main(): Promise<void> {
     createdAt: new Date().toISOString(),
     dryRun: options.dryRun,
     sam3Url: options.sam3Url,
+    conceptUrl: options.conceptUrl,
     health,
     options: {
+      technique: options.technique,
       strategy: options.strategy,
       maxCrops: options.maxCrops,
+      cropSource: options.cropSource,
+      conceptMaxBoxes: options.conceptMaxBoxes,
       maxImageSize: options.maxImageSize,
       timeoutMs: options.timeoutMs,
       minSize: options.minSize,
       minAnchorOverlap: options.minAnchorOverlap,
+      sourceCropMinConfidence: options.sourceCropMinConfidence,
+      sourceCropPadding: options.sourceCropPadding,
+      sourceCropMask: options.sourceCropMask,
+      conceptSimilarityThreshold: options.conceptSimilarityThreshold,
+      conceptFallbackSimilarityThreshold: options.conceptFallbackSimilarityThreshold,
+      conceptTopK: options.conceptTopK,
+      conceptFallbackTopK: options.conceptFallbackTopK,
+      conceptMinBoxSize: options.conceptMinBoxSize,
+      conceptMaxBoxSize: options.conceptMaxBoxSize,
+      conceptNmsThreshold: options.conceptNmsThreshold,
+      conceptMinCandidates: options.conceptMinCandidates,
+      includeSourceTarget: options.includeSourceTarget,
     },
     source: {
       id: source.id,
@@ -961,11 +1297,205 @@ async function main(): Promise<void> {
         : path.join(sourceDir, "source-box-match.overlay.png"),
     },
     strategies: strategyManifests,
+    sourceDetectionCropCount: sourceDetectionCrops.length,
+    concept: conceptManifest,
   };
 
   const manifestPath = path.join(options.outputDir, "manifest.json");
   await writeJson(manifestPath, manifest);
-  printSummary(manifestPath, strategyManifests, sourceResult, options.dryRun);
+  printSummary(manifestPath, strategyManifests, conceptManifest, sourceResult, options.dryRun);
+}
+
+async function runConceptReplay({
+  options,
+  conceptUrl,
+  source,
+  replayTargets,
+  sourceResult,
+  anchorBoxes,
+  className,
+  name,
+}: {
+  options: ParsedArgs;
+  conceptUrl: string | null;
+  source: LoadedImage;
+  replayTargets: LoadedImage[];
+  sourceResult: Sam3RunResult | null;
+  anchorBoxes: Box[];
+  className: string;
+  name: string;
+}): Promise<ConceptManifest> {
+  const conceptDir = path.join(options.outputDir, "concept");
+  const targetManifests: ConceptManifest["targets"] = [];
+  const sourceBoxesUsed = sourceResult
+    ? mergeSourceBoxes(anchorBoxes, sourceResult.detections, options.minAnchorOverlap, options.conceptMaxBoxes)
+    : anchorBoxes.slice(0, options.conceptMaxBoxes);
+
+  if (options.dryRun) {
+    return {
+      exemplarId: null,
+      sourceBoxesUsed,
+      targets: targetManifests,
+    };
+  }
+
+  if (!conceptUrl) {
+    throw new Error("Concept URL was not configured");
+  }
+
+  const warmup = await warmupConceptService(conceptUrl, options);
+  await writeJson(path.join(conceptDir, "warmup.json"), warmup);
+
+  const exemplar = await createConceptExemplar(conceptUrl, source, sourceBoxesUsed, className, options);
+  await writeJson(path.join(conceptDir, "exemplar.json"), {
+    exemplarId: exemplar.exemplarId,
+    sourceBoxesUsed,
+    rawResponse: exemplar.rawResponse,
+  });
+
+  for (const target of replayTargets) {
+    const safeTargetId = sanitizeFileName(target.id);
+    const jsonPath = path.join(conceptDir, `${safeTargetId}.json`);
+    const overlayPath = path.join(conceptDir, `${safeTargetId}.overlay.png`);
+
+    try {
+      const strict = await applyConceptExemplar(conceptUrl, exemplar.exemplarId, target, options);
+      const strictCandidates = filterConceptDetections(strict.detections, options.conceptSimilarityThreshold);
+      let fallbackCandidates: Detection[] = [];
+      let fallbackRaw: unknown = null;
+
+      if (strictCandidates.length < options.conceptMinCandidates) {
+        const fallback = await applyConceptExemplar(conceptUrl, exemplar.exemplarId, target, options, true);
+        fallbackCandidates = filterConceptDetections(
+          fallback.detections,
+          options.conceptFallbackSimilarityThreshold
+        );
+        fallbackRaw = fallback.rawResponse;
+      }
+
+      const candidates = dedupeConceptDetections(
+        [...strictCandidates, ...fallbackCandidates],
+        options.conceptNmsThreshold,
+        Math.max(options.conceptTopK, options.conceptMinCandidates)
+      );
+
+      let refined: Detection[] = [];
+      if (options.sam3Url && candidates.length > 0) {
+        const refineResult = await callSam3WithBoxes(
+          options.sam3Url,
+          target,
+          candidates.map(detectionToBox),
+          className,
+          options
+        );
+        refined = refineResult.detections;
+      }
+
+      const detections = mergeRefinedConceptDetections(candidates, refined);
+      await writeJson(jsonPath, {
+        ok: true,
+        target: target.id,
+        exemplarId: exemplar.exemplarId,
+        strictCandidateCount: strictCandidates.length,
+        fallbackCandidateCount: fallbackCandidates.length,
+        candidateCount: candidates.length,
+        refinedCount: refined.length,
+        count: detections.length,
+        detections,
+        rawResponse: {
+          strict: strict.rawResponse,
+          fallback: fallbackRaw,
+        },
+      });
+      await renderOverlay({
+        image: target,
+        outputPath: overlayPath,
+        detections,
+        title: `concept: ${name} / ${target.id}`,
+        color: "#7c3aed",
+      });
+      targetManifests.push({
+        id: target.id,
+        image: target.reference,
+        count: detections.length,
+        outcome: detections.length > 0 ? "success" : "zero_detections",
+        jsonPath,
+        overlayPath,
+        strictCandidateCount: strictCandidates.length,
+        fallbackCandidateCount: fallbackCandidates.length,
+        candidateCount: candidates.length,
+        refinedCount: refined.length,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown SAM3 concept replay error";
+      await writeJson(jsonPath, {
+        ok: false,
+        target: target.id,
+        exemplarId: exemplar.exemplarId,
+        error: errorMessage,
+      });
+      await renderOverlay({
+        image: target,
+        outputPath: overlayPath,
+        detections: [],
+        title: `concept: ${target.id} error`,
+        color: "#dc2626",
+      });
+      targetManifests.push({
+        id: target.id,
+        image: target.reference,
+        count: 0,
+        outcome: "error",
+        jsonPath,
+        overlayPath,
+        error: errorMessage,
+      });
+    }
+  }
+
+  return {
+    exemplarId: exemplar.exemplarId,
+    sourceBoxesUsed,
+    targets: targetManifests,
+  };
+}
+
+function mergeRefinedConceptDetections(candidates: Detection[], refined: Detection[]): Detection[] {
+  if (candidates.length === 0) return [];
+  if (refined.length === 0) return candidates;
+
+  const matchedCandidateIndexes = new Set<number>();
+  const acceptedRefined = refined.flatMap((detection) => {
+    let bestIndex = -1;
+    let bestIou = 0;
+
+    for (let index = 0; index < candidates.length; index += 1) {
+      const candidateIou = bboxIou(detection.bbox, candidates[index].bbox);
+      if (candidateIou > bestIou) {
+        bestIou = candidateIou;
+        bestIndex = index;
+      }
+    }
+
+    if (bestIndex < 0 || bestIou < 0.1) {
+      return [];
+    }
+
+    matchedCandidateIndexes.add(bestIndex);
+    const candidate = candidates[bestIndex];
+    return [{
+      ...detection,
+      confidence: detectionScore(candidate),
+      similarity: candidate.similarity,
+    }];
+  });
+
+  if (acceptedRefined.length === 0) {
+    return candidates;
+  }
+
+  const unmatchedCandidates = candidates.filter((_, index) => !matchedCandidateIndexes.has(index));
+  return [...acceptedRefined, ...unmatchedCandidates];
 }
 
 function sanitizeFileName(value: string): string {
@@ -975,6 +1505,7 @@ function sanitizeFileName(value: string): string {
 function printSummary(
   manifestPath: string,
   strategies: StrategyManifest[],
+  concept: ConceptManifest | null,
   sourceResult: Sam3RunResult | null,
   dryRun: boolean
 ): void {
@@ -991,7 +1522,17 @@ function printSummary(
     const counts = strategy.targets
       .map((target) => `${target.id}=${target.outcome === "error" ? "error" : target.count}`)
       .join(", ");
-    console.log(`${strategy.name}: ${strategy.cropCount} crop(s), ${counts}`);
+    console.log(`${strategy.name}/${strategy.cropSource}: ${strategy.cropCount} crop(s), ${counts}`);
+  }
+
+  if (concept) {
+    const counts = concept.targets
+      .map((target) =>
+        `${target.id}=${target.outcome === "error" ? "error" : target.count}` +
+        (target.candidateCount != null ? ` (${target.candidateCount} candidates)` : "")
+      )
+      .join(", ");
+    console.log(`concept: ${concept.sourceBoxesUsed.length} source box(es), ${counts}`);
   }
 }
 
