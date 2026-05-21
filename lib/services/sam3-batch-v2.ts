@@ -202,7 +202,7 @@ export interface Sam3BatchV2StageLogEntry {
   cropCount?: number;
   operatorCropCount?: number;
   sourceDetectionCropCount?: number;
-  visualCropSource?: 'operator' | 'source_detections';
+  visualCropSource?: 'operator' | 'source_detections' | 'concept_exemplar';
   detectionCount?: number;
   durationMs?: number;
   gpuMemoryMb?: number;
@@ -1460,6 +1460,9 @@ export class Sam3BatchV2Service {
     let activeVisualCrops = prepared.exemplarCrops;
     let visualCropSource: Sam3BatchV2StageLogEntry['visualCropSource'] = 'operator';
     let sourceDetectionCropCount = 0;
+    let sourceMatchResult: AssetInferenceResult | null = null;
+    let visualMatchExemplarId: string | null = null;
+    let visualMatchInitialized = false;
 
     for (const missingAssetId of prepared.missingAssetIds) {
       const result: AssetInferenceResult = {
@@ -1502,6 +1505,7 @@ export class Sam3BatchV2Service {
         if (prepared.mode === 'visual_crop_match') {
           if (isSourceAsset) {
             result = await this.runSourceBoxMatch(asset, imageBuffer, prepared);
+            sourceMatchResult = result;
             const sourceCrops = await this.buildSourceDetectionVisualCrops(
               imageBuffer,
               result
@@ -1512,12 +1516,30 @@ export class Sam3BatchV2Service {
               visualCropSource = 'source_detections';
             }
           } else {
-            result = await this.runVisualCropMatch(
-              asset,
-              imageBuffer,
-              prepared,
-              activeVisualCrops
-            );
+            if (!visualMatchInitialized) {
+              visualMatchExemplarId = await this.initializeVisualMatchExemplar(
+                prepared,
+                sourceMatchResult
+              );
+              visualMatchInitialized = true;
+            }
+
+            if (visualMatchExemplarId) {
+              visualCropSource = 'concept_exemplar';
+              result = await this.runVisualConceptMatch(
+                asset,
+                imageBuffer,
+                visualMatchExemplarId,
+                prepared.textPrompt
+              );
+            } else {
+              result = await this.runVisualCropMatch(
+                asset,
+                imageBuffer,
+                prepared,
+                activeVisualCrops
+              );
+            }
           }
         } else {
           result = await this.runConceptPropagation(asset, imageBuffer, conceptExemplarId, prepared.weedType);
