@@ -111,6 +111,8 @@ export interface SAM3SegmentResponse {
   detections: SAM3Detection[];
   count: number;
   image_size: [number, number];
+  mode?: string;
+  warning?: string;
 }
 
 export interface SAM3SegmentResult {
@@ -1137,7 +1139,15 @@ class AWSSAM3Service {
       }
 
       const result = await response.json();
-      console.log(`[AWS-SAM3] Segment with exemplars returned ${result.count} detections`);
+      if (result.warning) {
+        console.warn(
+          `[AWS-SAM3] Segment with exemplars returned ${result.count} detections using ${result.mode || 'unknown'}: ${result.warning}`
+        );
+      } else {
+        console.log(
+          `[AWS-SAM3] Segment with exemplars returned ${result.count} detections using ${result.mode || 'unknown'}`
+        );
+      }
 
       // Convert response format to match SAM3SegmentResponse
       return {
@@ -1152,6 +1162,8 @@ class AWSSAM3Service {
           })),
           count: result.count,
           image_size: [0, 0], // Not provided by exemplar endpoint
+          mode: result.mode,
+          warning: result.warning,
         },
       };
     } catch (error) {

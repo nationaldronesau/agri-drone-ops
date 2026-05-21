@@ -6,7 +6,7 @@ uses the crop set as context for text-assisted matching; it is not a
 fully crop-conditioned few-shot detector.
 
 Supports three modes:
-1. Exemplar crops mode: best-effort cross-image matching with crop context
+1. Exemplar crops mode: text-assisted compatibility path, not true crop-conditioned matching
 2. Box mode: use boxes on the same image as prompts
 3. Text mode: use class_name as a text prompt fallback
 """
@@ -67,7 +67,8 @@ class SegmentResponse(BaseModel):
     detections: List[Detection]
     count: int
     processing_time_ms: float
-    mode: str = Field(..., description="Detection mode used: 'exemplar_crops', 'boxes', or 'text'")
+    mode: str = Field(..., description="Detection mode used")
+    warning: Optional[str] = Field(None, description="Non-fatal warning about fallback behavior")
 
 
 # Global model (lazy loaded)
@@ -239,11 +240,22 @@ async def segment(request: SegmentRequest):
 
     detections = []
     mode = "unknown"
+    warning = None
 
-    # Mode 1: Visual crop exemplars (best for domain-specific objects)
+    # Mode 1: Exemplar crops compatibility path.
     if request.exemplar_crops and len(request.exemplar_crops) > 0:
-        mode = "exemplar_crops"
-        logger.info(f"Using exemplar crops mode with {len(request.exemplar_crops)} crops")
+        mode = "text_assisted_exemplar_crops"
+        warning = (
+            "The current /segment exemplar_crops implementation decodes crops but does not "
+            "perform true crop-conditioned visual matching; it uses the text prompt against "
+            "the target image. Treat results as diagnostic until the SAM3 backend supports "
+            "crop-conditioned few-shot matching."
+        )
+        logger.warning(
+            "Using text-assisted exemplar crop compatibility path with %s crops; "
+            "true crop-conditioned visual matching is not implemented in this endpoint",
+            len(request.exemplar_crops),
+        )
 
         all_detections = []
 
@@ -252,10 +264,10 @@ async def segment(request: SegmentRequest):
                 crop_image = decode_base64_image(crop_b64)
                 crop_w, crop_h = crop_image.size
 
-                # This is a compatibility fallback, not a fully crop-conditioned
-                # exemplar matcher. We decode the crop so callers can pass real
-                # example imagery, but the current model invocation still uses
-                # text-assisted target-image segmentation.
+                # TODO: Replace this compatibility path with true crop-conditioned
+                # visual matching once the deployed SAM3 backend exposes crop/image
+                # embeddings for cross-image few-shot detection. Until then, this
+                # path is intentionally reported as text_assisted_exemplar_crops.
                 inputs = processor(
                     images=target_image,
                     text=request.class_name or "object",
@@ -429,7 +441,8 @@ async def segment(request: SegmentRequest):
         detections=detections,
         count=len(detections),
         processing_time_ms=processing_time,
-        mode=mode
+        mode=mode,
+        warning=warning,
     )
 
 
