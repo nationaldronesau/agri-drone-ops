@@ -13,11 +13,7 @@ import {
 } from '@/lib/services/aws-sam3';
 import { S3Service } from '@/lib/services/s3';
 import { normalizeDetectionType } from '@/lib/utils/detection-types';
-import {
-  buildExemplarCrops,
-  buildExemplarCropsFromDetections,
-  normalizeExemplarCrops,
-} from '@/lib/utils/exemplar-crops';
+import { normalizeExemplarCrops } from '@/lib/utils/exemplar-crops';
 import {
   SAM3_BATCH_JOB_KINDS,
   summarizeChildBatchJobs,
@@ -87,25 +83,6 @@ export const SAM3_BATCH_V2_SOURCE_DETECTION_MIN_ANCHOR_OVERLAP = Math.max(
     parseOptionalNumber(process.env.SAM3_SOURCE_DETECTION_MIN_ANCHOR_OVERLAP) ?? 0.2
   )
 );
-export const SAM3_VISUAL_SOURCE_CROP_MAX = Math.max(
-  1,
-  parseOptionalInt(process.env.SAM3_VISUAL_SOURCE_CROP_MAX) ?? 30
-);
-export const SAM3_VISUAL_SOURCE_CROP_MIN_CONFIDENCE = Math.max(
-  0,
-  Math.min(
-    1,
-    parseOptionalNumber(process.env.SAM3_VISUAL_SOURCE_CROP_MIN_CONFIDENCE) ?? 0.6
-  )
-);
-export const SAM3_VISUAL_SOURCE_CROP_PADDING = Math.max(
-  0,
-  Math.min(
-    1,
-    parseOptionalNumber(process.env.SAM3_VISUAL_SOURCE_CROP_PADDING) ?? 0.08
-  )
-);
-
 export function buildBatchV2ConceptApplyOptions(): SAM3ConceptApplyOptions {
   return {
     returnPolygons: true,
@@ -202,7 +179,7 @@ export interface Sam3BatchV2StageLogEntry {
   cropCount?: number;
   operatorCropCount?: number;
   sourceDetectionCropCount?: number;
-  modeUsed?: 'source_box_match' | 'visual_crops' | 'concept_propagation';
+  modeUsed?: 'box_prompt_match' | 'source_box_match' | 'visual_crops' | 'concept_propagation';
   visualCropSource?: 'operator' | 'operator_crops' | 'server_built_crops' | 'source_detections' | 'concept_exemplar';
   backendMode?: string;
   backendWarning?: string;
@@ -1036,38 +1013,11 @@ export class Sam3BatchV2Service {
       );
     }
     const normalizedCrops = normalizeExemplarCrops(data.exemplarCrops);
-    let exemplarCrops = normalizedCrops;
-    let visualCropSource: Sam3BatchV2StageLogEntry['visualCropSource'] | undefined =
-      data.mode === 'visual_crop_match' && normalizedCrops.length > 0 ? 'operator_crops' : undefined;
-
-    if (data.mode === 'visual_crop_match' && exemplarCrops.length === 0) {
-      const scaled = scaleExemplarBoxes({
-        exemplars: data.exemplars,
-        sourceWidth: data.exemplarSourceWidth,
-        sourceHeight: data.exemplarSourceHeight,
-        targetWidth: sourceAsset.imageWidth || data.exemplarSourceWidth || 0,
-        targetHeight: sourceAsset.imageHeight || data.exemplarSourceHeight || 0,
-        jobId: data.batchJobId,
-        assetId: sourceAsset.id,
-      });
-      exemplarCrops = await buildExemplarCrops({
-        imageBuffer: sourceImageBuffer,
-        boxes: scaled.boxes.length > 0 ? scaled.boxes : data.exemplars,
-      });
-      if (exemplarCrops.length > 0) {
-        visualCropSource = 'server_built_crops';
-      }
-    }
-
-    const cropCount = data.mode === 'visual_crop_match'
-      ? exemplarCrops.length
-      : data.exemplars.length;
+    const exemplarCrops = normalizedCrops;
+    const cropCount = data.exemplars.length;
 
     if (cropCount <= 0) {
-      const errorMessage =
-        data.mode === 'visual_crop_match'
-          ? 'At least one visual exemplar crop is required for v2 visual crop matching.'
-          : 'At least one exemplar is required for v2 batch processing.';
+      const errorMessage = 'At least one exemplar is required for v2 batch processing.';
       await this.appendStageLog(data.batchJobId, stageLog, {
         stage: 'prepare',
         status: 'failed',
@@ -1088,8 +1038,7 @@ export class Sam3BatchV2Service {
       totalAssets: data.assetIds.length,
       cropCount,
       operatorCropCount: data.mode === 'visual_crop_match' ? normalizedCrops.length : 0,
-      modeUsed: data.mode === 'visual_crop_match' ? 'visual_crops' : 'concept_propagation',
-      visualCropSource,
+      modeUsed: data.mode === 'visual_crop_match' ? 'box_prompt_match' : 'concept_propagation',
       durationMs: this.now().getTime() - startedAt,
     });
 
@@ -1106,7 +1055,6 @@ export class Sam3BatchV2Service {
       exemplarSourceWidth: data.exemplarSourceWidth,
       exemplarSourceHeight: data.exemplarSourceHeight,
       exemplarCrops,
-      visualCropSource,
       assets: orderedAssets,
       missingAssetIds,
       cropCount,
@@ -1391,11 +1339,6 @@ export class Sam3BatchV2Service {
       if (right.id === prepared.sourceAssetId) return 1;
       return 0;
     });
-    let activeVisualCrops = prepared.exemplarCrops;
-    let visualCropSource: Sam3BatchV2StageLogEntry['visualCropSource'] =
-      prepared.visualCropSource || 'operator_crops';
-    let sourceDetectionCropCount = 0;
-
     for (const missingAssetId of prepared.missingAssetIds) {
       const result: AssetInferenceResult = {
         assetId: missingAssetId,
@@ -1432,28 +1375,8 @@ export class Sam3BatchV2Service {
 
       try {
         const imageBuffer = await fetchAssetImage(asset);
-        const isSourceAsset = asset.id === prepared.sourceAssetId;
-
         if (prepared.mode === 'visual_crop_match') {
-          if (isSourceAsset) {
-            result = await this.runSourceBoxMatch(asset, imageBuffer, prepared);
-            const sourceCrops = await this.buildSourceDetectionVisualCrops(
-              imageBuffer,
-              result
-            );
-            sourceDetectionCropCount = sourceCrops.length;
-            if (sourceCrops.length > 0) {
-              activeVisualCrops = sourceCrops;
-              visualCropSource = 'source_detections';
-            }
-          } else {
-            result = await this.runVisualCropMatch(
-              asset,
-              imageBuffer,
-              prepared,
-              activeVisualCrops
-            );
-          }
+          result = await this.runBoxPromptMatch(asset, imageBuffer, prepared);
         } else {
           result = await this.runConceptPropagation(asset, imageBuffer, conceptExemplarId, prepared.weedType);
         }
@@ -1469,12 +1392,10 @@ export class Sam3BatchV2Service {
           detectionCount: result.detections.length,
           modeUsed:
             prepared.mode === 'visual_crop_match'
-              ? isSourceAsset ? 'source_box_match' : 'visual_crops'
+              ? 'box_prompt_match'
               : 'concept_propagation',
-          cropCount: prepared.mode === 'visual_crop_match' ? activeVisualCrops.length : undefined,
+          cropCount: prepared.mode === 'visual_crop_match' ? prepared.exemplars.length : undefined,
           operatorCropCount: prepared.mode === 'visual_crop_match' ? prepared.operatorCropCount : undefined,
-          sourceDetectionCropCount: prepared.mode === 'visual_crop_match' ? sourceDetectionCropCount : undefined,
-          visualCropSource: prepared.mode === 'visual_crop_match' ? visualCropSource : undefined,
           backendMode: result.backendMode,
           backendWarning: result.backendWarning,
           durationMs: this.now().getTime() - runStartedAt,
@@ -1536,7 +1457,7 @@ export class Sam3BatchV2Service {
     return results;
   }
 
-  private async runSourceBoxMatch(
+  private async runBoxPromptMatch(
     asset: AssetRecord,
     imageBuffer: Buffer,
     prepared: PreparedBatchContext
@@ -1557,7 +1478,7 @@ export class Sam3BatchV2Service {
         detections: [],
         outcome: 'prepare_error',
         errorCode: 'INVALID_EXEMPLAR_BOXES',
-        errorMessage: 'Source exemplar boxes could not be scaled for the source asset.',
+        errorMessage: 'Exemplar boxes could not be scaled for this asset.',
       };
     }
 
@@ -1578,8 +1499,8 @@ export class Sam3BatchV2Service {
         assetId: asset.id,
         detections: [],
         outcome: classifyInferenceFailure(result.errorCode, result.error),
-        errorCode: result.errorCode || 'SAM3_SOURCE_MATCH_FAILED',
-        errorMessage: result.error || 'SAM3 source-image box matching failed.',
+        errorCode: result.errorCode || 'SAM3_BOX_PROMPT_MATCH_FAILED',
+        errorMessage: result.error || 'SAM3 box-prompt matching failed.',
       };
     }
 
@@ -1597,32 +1518,6 @@ export class Sam3BatchV2Service {
       detections,
       outcome: detections.length > 0 ? 'success' : 'zero_detections',
     };
-  }
-
-  private async buildSourceDetectionVisualCrops(
-    sourceImageBuffer: Buffer,
-    sourceResult: AssetInferenceResult
-  ): Promise<string[]> {
-    if (sourceResult.outcome !== 'success' || sourceResult.detections.length === 0) {
-      return [];
-    }
-
-    try {
-      return await buildExemplarCropsFromDetections({
-        imageBuffer: sourceImageBuffer,
-        detections: sourceResult.detections,
-        maxCrops: SAM3_VISUAL_SOURCE_CROP_MAX,
-        minConfidence: SAM3_VISUAL_SOURCE_CROP_MIN_CONFIDENCE,
-        paddingRatio: SAM3_VISUAL_SOURCE_CROP_PADDING,
-        maskPolygons: true,
-      });
-    } catch (error) {
-      console.warn(
-        '[SAM3 V2] Failed to build source-derived visual crops:',
-        error instanceof Error ? error.message : error
-      );
-      return [];
-    }
   }
 
   private async runVisualCropMatch(
