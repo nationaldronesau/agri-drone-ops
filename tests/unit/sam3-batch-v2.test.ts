@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import sharp from 'sharp';
 import { configureSam3BatchV2Queue } from '@/lib/queue/batch-queue-v2';
 import {
   buildBatchV2ConceptApplyOptions,
@@ -752,9 +751,9 @@ describe('sam3-batch-v2', () => {
     });
   });
 
-  it('uses direct visual crops for target assets without concept fallback', async () => {
+  it('uses SAM3 box-prompt propagation for visual-match target assets', async () => {
     let stageLog: unknown[] = [];
-    const segment = vi.fn().mockResolvedValueOnce({
+    const segment = vi.fn().mockResolvedValue({
       success: true,
       response: {
         detections: [
@@ -911,20 +910,14 @@ describe('sam3-batch-v2', () => {
     expect(result.terminalState).toBe('completed');
     expect(result.processedImages).toBe(2);
     expect(result.failedAssets).toBe(0);
-    expect(segment).toHaveBeenCalledTimes(1);
+    expect(segment).toHaveBeenCalledTimes(2);
     expect(segment).toHaveBeenCalledWith(
       expect.objectContaining({
         boxes: [{ x1: 100, y1: 100, x2: 150, y2: 160 }],
         className: 'Pine Sapling',
       })
     );
-    expect(segmentWithExemplars).toHaveBeenCalledTimes(1);
-    expect(segmentWithExemplars).toHaveBeenCalledWith(
-      expect.objectContaining({
-        exemplarCrops: ['abc123'],
-        className: 'Pine Sapling',
-      })
-    );
+    expect(segmentWithExemplars).not.toHaveBeenCalled();
     expect(warmupConceptService).not.toHaveBeenCalled();
     expect(createConceptExemplar).not.toHaveBeenCalled();
     expect(applyConceptExemplar).not.toHaveBeenCalled();
@@ -932,36 +925,16 @@ describe('sam3-batch-v2', () => {
       expect.arrayContaining([
         expect.objectContaining({
           assetId: 'asset-target',
-          modeUsed: 'visual_crops',
-          visualCropSource: 'operator_crops',
-          backendMode: 'text_assisted_exemplar_crops',
-          backendWarning: 'diagnostic only',
+          modeUsed: 'box_prompt_match',
+          cropCount: 1,
         }),
       ])
     );
   });
 
-  it('uses source SAM detections as visual crops for target assets', async () => {
+  it('scales the original operator boxes for each visual-match target asset', async () => {
     let stageLog: unknown[] = [];
-    const imageBuffer = await sharp({
-      create: {
-        width: 240,
-        height: 180,
-        channels: 3,
-        background: '#f8fafc',
-      },
-    })
-      .composite([
-        {
-          input: Buffer.from(
-            '<svg width="240" height="180" xmlns="http://www.w3.org/2000/svg"><circle cx="70" cy="70" r="28" fill="#16a34a"/></svg>'
-          ),
-          top: 0,
-          left: 0,
-        },
-      ])
-      .jpeg()
-      .toBuffer();
+    const imageBuffer = Buffer.from('image-bytes');
 
     global.fetch = vi.fn().mockImplementation(async () =>
       new Response(imageBuffer, {
@@ -973,7 +946,7 @@ describe('sam3-batch-v2', () => {
       })
     ) as typeof fetch;
 
-    const segment = vi.fn().mockResolvedValueOnce({
+    const segment = vi.fn().mockResolvedValue({
       success: true,
       response: {
         detections: [
@@ -991,26 +964,7 @@ describe('sam3-batch-v2', () => {
         count: 1,
       },
     });
-    const segmentWithExemplars = vi.fn().mockResolvedValue({
-      success: true,
-      response: {
-        detections: [
-          {
-            bbox: [70, 70, 130, 130],
-            confidence: 0.94,
-            polygon: [
-              [70, 70],
-              [130, 70],
-              [130, 130],
-              [70, 130],
-            ],
-          },
-        ],
-        count: 1,
-        mode: 'text_assisted_exemplar_crops',
-        warning: 'diagnostic only',
-      },
-    });
+    const segmentWithExemplars = vi.fn();
     const warmupConceptService = vi.fn().mockResolvedValue({
       success: true,
       data: { sam3Loaded: true, dinoLoaded: true },
@@ -1045,8 +999,8 @@ describe('sam3-batch-v2', () => {
             s3Key: null,
             s3Bucket: null,
             storageType: 'local',
-            imageWidth: 240,
-            imageHeight: 180,
+            imageWidth: 480,
+            imageHeight: 360,
           },
           {
             id: 'asset-source',
@@ -1129,18 +1083,27 @@ describe('sam3-batch-v2', () => {
 
     expect(createConceptExemplar).not.toHaveBeenCalled();
     expect(applyConceptExemplar).not.toHaveBeenCalled();
-    expect(segmentWithExemplars).toHaveBeenCalledTimes(1);
-    const visualCropRequest = segmentWithExemplars.mock.calls[0][0];
-    expect(visualCropRequest.className).toBe('Pine Sapling');
-    expect(visualCropRequest.exemplarCrops).toHaveLength(1);
-    expect(visualCropRequest.exemplarCrops).not.toContain('operator-crop');
+    expect(segmentWithExemplars).not.toHaveBeenCalled();
+    expect(segment).toHaveBeenCalledTimes(2);
+    expect(segment).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        boxes: [{ x1: 40, y1: 40, x2: 100, y2: 100 }],
+        className: 'Pine Sapling',
+      })
+    );
+    expect(segment).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        boxes: [{ x1: 80, y1: 80, x2: 200, y2: 200 }],
+        className: 'Pine Sapling',
+      })
+    );
     expect(stageLog).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           assetId: 'asset-target',
-          modeUsed: 'visual_crops',
-          visualCropSource: 'source_detections',
-          sourceDetectionCropCount: 1,
+          modeUsed: 'box_prompt_match',
         }),
       ])
     );

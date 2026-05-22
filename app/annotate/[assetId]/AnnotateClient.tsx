@@ -2632,8 +2632,8 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
                 </Button>
                 {projectAssets.length > 1 ? (
                   <div className="rounded-md border border-purple-200 bg-purple-50 px-2 py-1.5 text-[11px] text-purple-800">
-                    Dataset runs use SAM3 v2 visual matching. Your drawn examples are matched
-                    by appearance across the dataset, then sent to review before training.
+                    Dataset runs use SAM3 v2 box-prompt propagation. Your drawn examples are
+                    scaled into each image as SAM3 prompts, then sent to review before training.
                   </div>
                 ) : (
                   <div className="space-y-1 rounded-md border border-purple-100 bg-white/70 p-2">
@@ -2665,12 +2665,12 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
               </div>
               <p className="text-[10px] text-purple-600 mt-2">
                 {projectAssets.length > 1 || useVisualCrops
-                  ? 'Uses your drawn examples as visual references. Best for domain-specific objects.'
+                  ? 'Uses your drawn examples as SAM3 prompts across the dataset. Best for restoring the proven Apply to All flow.'
                   : 'Class-aware matching enabled. Better when the selected class generalizes well.'}
               </p>
               <p className="text-[10px] text-purple-600 mt-1">
                 {projectAssets.length > 1
-                  ? 'Multi-image Apply to All always uses v2 visual matching so target images are matched from the exemplar, not the source box location.'
+                  ? 'Multi-image Apply to All uses the original operator boxes on every image, matching the April workflow that generated consistent review counts.'
                   : useBatchPipelineV2
                     ? 'V2 uses the queue-only batch worker with explicit stage tracking.'
                   : 'Legacy V1 selected. Use only for single-image or controlled debugging runs.'}
