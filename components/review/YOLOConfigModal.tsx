@@ -15,7 +15,10 @@ import {
 } from '@/components/ui/dialog';
 import { sanitizeClassName } from '@/lib/services/dataset-preparation';
 
+export type YOLOTrainingIntent = 'update_existing' | 'new_class';
+
 export interface YOLOTrainingConfig {
+  trainingIntent: YOLOTrainingIntent;
   datasetName: string;
   classes: string[];
   classMapping: Record<string, string>;
@@ -48,6 +51,7 @@ export function YOLOConfigModal({
   onConfirm,
 }: YOLOConfigModalProps) {
   const [datasetName, setDatasetName] = useState('review-session');
+  const [trainingIntent, setTrainingIntent] = useState<YOLOTrainingIntent>('update_existing');
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.5);
   const [splitRatio, setSplitRatio] = useState({ train: 0.7, val: 0.2, test: 0.1 });
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -94,6 +98,7 @@ export function YOLOConfigModal({
     }
 
     onConfirm({
+      trainingIntent,
       datasetName: datasetName.trim(),
       classes: selectedSanitized,
       classMapping,
@@ -106,13 +111,45 @@ export function YOLOConfigModal({
     <Dialog open={open} onOpenChange={(value) => !value && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Training Dataset Setup</DialogTitle>
+          <DialogTitle>Send accepted labels to YOLO</DialogTitle>
           <DialogDescription>
-            Select classes and split ratios for the training dataset.
+            Choose whether this is a model update or a new class/model. Only accepted and corrected
+            labels are eligible; pending and rejected review items stay out.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
+          <div className="grid gap-2 md:grid-cols-2">
+            {[
+              {
+                value: 'update_existing' as const,
+                title: 'Update existing model',
+                body:
+                  'Create a new YOLO dataset/version from the accepted labels. Keep the current active model until the new checkpoint is reviewed.',
+              },
+              {
+                value: 'new_class' as const,
+                title: 'Create new label/class',
+                body:
+                  'Bootstrap a new class or separate model path from this review session. Use this when the species is not already in the model.',
+              },
+            ].map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setTrainingIntent(option.value)}
+                className={`rounded-lg border px-3 py-3 text-left transition ${
+                  trainingIntent === option.value
+                    ? 'border-green-500 bg-green-50 text-green-900'
+                    : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <div className="text-sm font-semibold">{option.title}</div>
+                <p className="mt-1 text-xs leading-5">{option.body}</p>
+              </button>
+            ))}
+          </div>
+
           {typeof pendingOnly === 'boolean' && onPendingOnlyChange && (
             <div className="flex items-center justify-between rounded-md border border-gray-200 px-3 py-2 text-sm">
               <div className="flex flex-col">
@@ -133,6 +170,10 @@ export function YOLOConfigModal({
           <div className="space-y-1">
             <label className="text-sm font-medium text-gray-700">Dataset Name</label>
             <Input value={datasetName} onChange={(e) => setDatasetName(e.target.value)} />
+            <p className="text-xs text-gray-500">
+              This creates a new dataset/checkpoint. Activation remains a separate step so the
+              previous production model can be rolled back if metrics or field QA worsen.
+            </p>
           </div>
 
           <div className="space-y-2">
@@ -166,7 +207,7 @@ export function YOLOConfigModal({
 
           <div className="grid gap-3 md:grid-cols-3">
             <div className="space-y-1">
-              <label className="text-xs font-medium text-gray-600">Train %</label>
+              <label className="text-xs font-medium text-gray-600">Train ratio</label>
               <Input
                 type="number"
                 min={0}
@@ -182,7 +223,7 @@ export function YOLOConfigModal({
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-medium text-gray-600">Val %</label>
+              <label className="text-xs font-medium text-gray-600">Val ratio</label>
               <Input
                 type="number"
                 min={0}
@@ -198,7 +239,7 @@ export function YOLOConfigModal({
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-medium text-gray-600">Test %</label>
+              <label className="text-xs font-medium text-gray-600">Test ratio</label>
               <Input
                 type="number"
                 min={0}
@@ -233,6 +274,15 @@ export function YOLOConfigModal({
                 onChange={(e) => setConfidenceThreshold(Number(e.target.value))}
               />
             )}
+            <p className="text-xs text-gray-500">
+              Current threshold is applied to accepted SAM3 and reviewed AI labels in this training
+              dataset. Lower thresholds increase recall but require stronger human QA first.
+            </p>
+          </div>
+
+          <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800">
+            Recommended workflow: accept or correct the SAM3 labels in review, create the YOLO
+            checkpoint, compare it against the active model, then activate only if it improves.
           </div>
         </div>
 
@@ -244,7 +294,7 @@ export function YOLOConfigModal({
             onClick={handleConfirm}
             disabled={!datasetName.trim() || selected.size === 0 || hasCollision}
           >
-            Start Training
+            Create YOLO training run
           </Button>
         </DialogFooter>
       </DialogContent>

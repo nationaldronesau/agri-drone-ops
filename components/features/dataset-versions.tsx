@@ -85,7 +85,7 @@ const DEFAULT_FORM: CreateFormState = {
   classes: "",
   includeAIDetections: true,
   includeManual: true,
-  includeSAM3: false,
+  includeSAM3: true,
   verifiedOnly: false,
   minConfidence: 0.5,
   splitTrain: 80,

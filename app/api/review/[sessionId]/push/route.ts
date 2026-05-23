@@ -92,6 +92,7 @@ export async function POST(
     const target = body.target as PushTarget | undefined;
     const roboflowProjectId = body.roboflowProjectId as string | undefined;
     const yoloConfig = body.yoloConfig as {
+      trainingIntent?: 'update_existing' | 'new_class';
       datasetName: string;
       classes: string[];
       classMapping?: Record<string, string>;
@@ -284,6 +285,7 @@ export async function POST(
         splitRatio: yoloConfig.splitRatio || { train: 0.7, val: 0.2, test: 0.1 },
         includeAIDetections: true,
         includeManualAnnotations: true,
+        includeSAM3: true,
         minConfidence: yoloConfig.confidenceThreshold ?? 0.5,
         createdAfter: session.createdAt,
         createdById: auth.userId,
@@ -327,6 +329,7 @@ export async function POST(
           createdById: auth.userId,
           trainingConfig: JSON.stringify({
             modelName,
+            trainingIntent: yoloConfig.trainingIntent || 'update_existing',
             ...(augmentation ? { augmentation } : {}),
           }),
         },
@@ -384,6 +387,7 @@ export async function POST(
             status: 'PREPARING',
             trainingConfig: JSON.stringify({
               modelName,
+              trainingIntent: yoloConfig.trainingIntent || 'update_existing',
               ...(augmentation ? { augmentation } : {}),
               gpuLockToken: gpuLock.token,
             }),
