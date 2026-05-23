@@ -114,3 +114,55 @@ The output directory contains:
    exemplar quality, not the app review UI.
 6. If replay detects objects but the UI shows none, the problem is in persistence
    or review display filtering.
+
+## Server-Side Diagnostics Endpoint
+
+For faster production investigation, use the non-mutating diagnostics endpoint
+when a real `BatchJob` already exists:
+
+```bash
+POST /api/sam3/v2/batch/{batchId}/diagnostics
+```
+
+It reads the batch, source boxes, source asset, and target assets from the
+database; refreshes S3 image access internally; runs SAM3 strategy comparisons;
+and returns JSON counts and sampled boxes. It does **not** create, update, or
+delete `PendingAnnotation` records.
+
+Example authenticated request body:
+
+```json
+{
+  "startIfNeeded": true,
+  "targetLimit": 3,
+  "detectionLimit": 10,
+  "strategies": [
+    "box_prompt_match",
+    "operator_visual_crops",
+    "source_detection_crops",
+    "concept_match",
+    "concept_refined_box_prompt"
+  ]
+}
+```
+
+Strategy meaning:
+
+- `box_prompt_match`: current production v2 behavior; scales source boxes onto
+  each target image and calls SAM3 box prompts.
+- `operator_visual_crops`: builds crops directly from the operator's source
+  boxes and asks SAM3 to find visually similar targets.
+- `source_detection_crops`: first segments the source boxes, then uses those
+  segmented detections as visual crops.
+- `concept_match`: uses the concept/exemplar service directly.
+- `concept_refined_box_prompt`: uses concept candidates, then refines candidate
+  boxes through SAM3 box prompts.
+
+Decision rules:
+
+- If `box_prompt_match` is low but a visual/concept strategy is materially
+  higher, the app orchestration should move away from scaled target boxes.
+- If every strategy is low, the blocker is likely exemplar quality, model
+  behavior, or SAM3 service tuning.
+- If diagnostics return good counts but the UI still shows poor results, the
+  issue is persistence, review filtering, or confidence thresholding.
