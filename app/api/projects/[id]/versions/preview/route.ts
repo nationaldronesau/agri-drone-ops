@@ -78,7 +78,7 @@ export async function POST(
       splitRatio: splits,
       includeAIDetections: filters?.includeAIDetections ?? true,
       includeManualAnnotations: filters?.includeManual ?? true,
-      includeSAM3: filters?.includeSAM3 ?? false,
+      includeSAM3: filters?.includeSAM3 ?? true,
       minConfidence: filters?.minConfidence ?? 0.5,
       verifiedOnly: filters?.verifiedOnly ?? false,
       createdBefore: new Date(),

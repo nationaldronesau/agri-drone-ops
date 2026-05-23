@@ -13,6 +13,30 @@ import { ReviewViewer, type ReviewItem, type ReviewItemAsset } from '@/component
 import { YOLOConfigModal, type YOLOTrainingConfig } from '@/components/review/YOLOConfigModal';
 import { AlertTriangle, Brain, Download, ExternalLink, ShieldCheck, Sparkles } from 'lucide-react';
 
+const REVIEW_DEFAULT_CONFIDENCE = 74;
+const REVIEW_CONFIDENCE_PRESETS = [
+  {
+    label: 'Conservative',
+    value: 76,
+    description: 'Lower noise',
+  },
+  {
+    label: 'Balanced',
+    value: 74,
+    description: 'Default QA pass',
+  },
+  {
+    label: 'High recall',
+    value: 72,
+    description: 'Find more candidates',
+  },
+  {
+    label: 'Exhaustive QA',
+    value: 70,
+    description: 'Maximum review load',
+  },
+] as const;
+
 interface ReviewSummary {
   pendingCount: number;
   acceptedCount: number;
@@ -58,6 +82,7 @@ function ReviewPageContent() {
   const [pendingOnly, setPendingOnly] = useState(false);
   const [pendingOnlyInitialized, setPendingOnlyInitialized] = useState(false);
   const [minConfidence, setMinConfidence] = useState<number>(0);
+  const [confidenceInitialized, setConfidenceInitialized] = useState(false);
   const [exportFormat, setExportFormat] = useState<'csv' | 'kml' | 'shapefile'>('csv');
   const [exportIncludeAI, setExportIncludeAI] = useState(true);
   const [exportIncludeManual, setExportIncludeManual] = useState(true);
@@ -119,10 +144,14 @@ function ReviewPageContent() {
   }, [refresh, sessionId]);
 
   useEffect(() => {
-    if (session?.confidenceThreshold != null && minConfidence === 0) {
+    if (confidenceInitialized || !session) return;
+    if (session.confidenceThreshold != null) {
       setMinConfidence(Math.round(session.confidenceThreshold * 100));
+    } else if (session.workflowType === 'batch_review') {
+      setMinConfidence(REVIEW_DEFAULT_CONFIDENCE);
     }
-  }, [minConfidence, session?.confidenceThreshold]);
+    setConfidenceInitialized(true);
+  }, [confidenceInitialized, session]);
 
   useEffect(() => {
     if (pendingOnlyInitialized || !session?.workflowType) return;
@@ -162,6 +191,31 @@ function ReviewPageContent() {
   const bulkCandidates = useMemo(
     () => filteredItems.filter((item) => item.status === 'pending'),
     [filteredItems]
+  );
+
+  const pendingItems = useMemo(
+    () => items.filter((item) => item.status === 'pending'),
+    [items]
+  );
+
+  const pendingVisibleCount = useMemo(() => {
+    const min = minConfidence > 0 ? minConfidence / 100 : null;
+    return pendingItems.filter((item) => !min || item.confidence >= min).length;
+  }, [minConfidence, pendingItems]);
+
+  const pendingHiddenCount = Math.max(0, pendingItems.length - pendingVisibleCount);
+
+  const confidencePresetCounts = useMemo(
+    () =>
+      REVIEW_CONFIDENCE_PRESETS.map((preset) => ({
+        ...preset,
+        count: pendingItems.filter((item) => item.confidence >= preset.value / 100).length,
+      })),
+    [pendingItems]
+  );
+
+  const activeConfidencePreset = REVIEW_CONFIDENCE_PRESETS.find(
+    (preset) => preset.value === minConfidence
   );
 
   const availableClasses = useMemo(() => {
@@ -287,7 +341,7 @@ function ReviewPageContent() {
 
   const handleBulkAccept = useCallback(async () => {
     if (!sessionId || bulkCandidates.length === 0) return;
-    if (!window.confirm(`Accept ${bulkCandidates.length} filtered predictions?`)) return;
+    if (!window.confirm(`Accept ${bulkCandidates.length} visible pending predictions?`)) return;
     setActionLoading(true);
     setActionError(null);
     try {
@@ -561,51 +615,107 @@ function ReviewPageContent() {
           </Card>
         )}
 
-        <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600">
-          <label className="flex items-center gap-2">
-            <Checkbox checked={pendingOnly} onCheckedChange={(value) => setPendingOnly(Boolean(value))} />
-            Show pending only
-          </label>
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-2">
-              <span>Min confidence (%)</span>
-              <Input
-                type="number"
-                min={0}
-                max={100}
-                step={1}
-                value={minConfidence}
-                onChange={(event) => {
-                  const next = Number(event.target.value);
-                  if (!Number.isFinite(next)) return;
-                  const clamped = Math.min(100, Math.max(0, next));
-                  setMinConfidence(clamped);
-                }}
-                className="h-8 w-20"
-              />
+        <Card className="border-slate-200 bg-white">
+          <CardContent className="space-y-4 py-4">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="space-y-2">
+                <div>
+                  <div className="text-sm font-semibold text-gray-900">Review sensitivity</div>
+                  <p className="max-w-2xl text-xs text-gray-500">
+                    Lower the confidence threshold to reveal more SAM3 candidates for QA. This only
+                    changes what is visible here; YOLO training and spray export still use accepted
+                    or corrected labels only.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {confidencePresetCounts.map((preset) => (
+                    <Button
+                      key={preset.value}
+                      type="button"
+                      size="sm"
+                      variant={minConfidence === preset.value ? 'default' : 'outline'}
+                      onClick={() => setMinConfidence(preset.value)}
+                      className="h-auto flex-col items-start gap-0 px-3 py-2 text-left"
+                    >
+                      <span className="text-xs font-semibold">
+                        {preset.label} · {preset.value}%
+                      </span>
+                      <span className="text-[11px] opacity-80">
+                        {preset.count} pending · {preset.description}
+                      </span>
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="min-w-[260px] rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-medium">Visible pending</span>
+                  <span>{pendingVisibleCount} / {pendingItems.length}</span>
+                </div>
+                <div className="mt-1 flex items-center justify-between gap-3 text-xs text-gray-500">
+                  <span>Hidden below threshold</span>
+                  <span>{pendingHiddenCount}</span>
+                </div>
+                <div className="mt-1 flex items-center justify-between gap-3 text-xs text-gray-500">
+                  <span>Current preset</span>
+                  <span>{activeConfidencePreset?.label || 'Custom'}</span>
+                </div>
+              </div>
             </div>
-            <div className="flex items-center gap-3">
-              <Slider
-                value={[minConfidence]}
-                min={0}
-                max={100}
-                step={1}
-                onValueChange={(value) => setMinConfidence(value[0] ?? 0)}
-                className="w-56"
-              />
-              <span className="text-xs text-gray-500 w-10 text-right">{minConfidence}%</span>
+
+            <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600">
+              <label className="flex items-center gap-2">
+                <Checkbox checked={pendingOnly} onCheckedChange={(value) => setPendingOnly(Boolean(value))} />
+                Show pending only
+              </label>
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <span>Min confidence (%)</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={minConfidence}
+                    onChange={(event) => {
+                      const next = Number(event.target.value);
+                      if (!Number.isFinite(next)) return;
+                      const clamped = Math.min(100, Math.max(0, next));
+                      setMinConfidence(clamped);
+                    }}
+                    className="h-8 w-20"
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  <Slider
+                    value={[minConfidence]}
+                    min={0}
+                    max={100}
+                    step={1}
+                    onValueChange={(value) => setMinConfidence(value[0] ?? 0)}
+                    className="w-56"
+                  />
+                  <span className="text-xs text-gray-500 w-10 text-right">{minConfidence}%</span>
+                </div>
+              </div>
+              {actionLoading && <span className="text-xs text-gray-400">Saving changes...</span>}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleBulkAccept}
+                disabled={actionLoading || bulkCandidates.length === 0}
+              >
+                Accept visible pending ({bulkCandidates.length})
+              </Button>
+              {minConfidence <= 72 && (
+                <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                  High recall mode: expect more false positives to reject.
+                </span>
+              )}
             </div>
-          </div>
-          {actionLoading && <span className="text-xs text-gray-400">Saving changes...</span>}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleBulkAccept}
-            disabled={actionLoading || bulkCandidates.length === 0}
-          >
-            Accept filtered ({bulkCandidates.length})
-          </Button>
-        </div>
+          </CardContent>
+        </Card>
 
         <div className="flex flex-wrap items-center gap-3 text-sm text-gray-600">
           <span className="text-xs uppercase tracking-wide text-gray-500">Export</span>

@@ -183,7 +183,7 @@ class DatasetPreparationService {
           config.includeAIDetections ?? true,
           config.includeManualAnnotations ?? true,
           config.minConfidence ?? 0.5,
-          config.includeSAM3 ?? false
+          config.includeSAM3 ?? true
         );
 
         if (yoloAnnotations.length === 0) {
@@ -272,7 +272,7 @@ class DatasetPreparationService {
 
     const includeAI = config.includeAIDetections ?? true;
     const includeManual = config.includeManualAnnotations ?? true;
-    const includeSAM3 = config.includeSAM3 ?? false;
+    const includeSAM3 = config.includeSAM3 ?? true;
     const minConfidence = config.minConfidence ?? 0.5;
 
     const availableCounts = new Map<string, number>();
@@ -356,7 +356,7 @@ class DatasetPreparationService {
 
     const includeAI = config.includeAIDetections ?? true;
     const includeManual = config.includeManualAnnotations ?? true;
-    const includeSAM3 = config.includeSAM3 ?? false;
+    const includeSAM3 = config.includeSAM3 ?? true;
     const minConfidence = config.minConfidence ?? 0.5;
 
     const availableCounts = new Map<string, number>();
