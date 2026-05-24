@@ -146,6 +146,33 @@ Example authenticated request body:
 }
 ```
 
+For automated loops, set `SAM3_DIAGNOSTICS_TOKEN` in the app environment and
+send it as a header. This bypasses browser/session auth only for this
+non-mutating diagnostics endpoint:
+
+```bash
+curl -sS \
+  -X POST "https://agri.ndsmartdata.com/api/sam3/v2/batch/$BATCH_ID/diagnostics" \
+  -H "Content-Type: application/json" \
+  -H "x-sam3-diagnostics-token: $SAM3_DIAGNOSTICS_TOKEN" \
+  --data '{
+    "startIfNeeded": true,
+    "targetLimit": 3,
+    "detectionLimit": 10,
+    "strategies": [
+      "box_prompt_match",
+      "operator_visual_crops",
+      "source_detection_crops",
+      "concept_match",
+      "concept_refined_box_prompt"
+    ]
+  }'
+```
+
+Token-authenticated diagnostics are rate-limited separately at 30 requests per
+minute per source IP. Normal browser/session diagnostics remain limited to 4
+requests per minute.
+
 Strategy meaning:
 
 - `box_prompt_match`: current production v2 behavior; scales source boxes onto
