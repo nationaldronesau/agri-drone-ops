@@ -13,7 +13,7 @@ import {
 } from '@/lib/services/aws-sam3';
 import { S3Service } from '@/lib/services/s3';
 import { normalizeDetectionType } from '@/lib/utils/detection-types';
-import { normalizeExemplarCrops } from '@/lib/utils/exemplar-crops';
+import { buildExemplarCrops, normalizeExemplarCrops } from '@/lib/utils/exemplar-crops';
 import {
   SAM3_BATCH_JOB_KINDS,
   summarizeChildBatchJobs,
@@ -1013,10 +1013,12 @@ export class Sam3BatchV2Service {
       );
     }
     const normalizedCrops = normalizeExemplarCrops(data.exemplarCrops);
-    const exemplarCrops = normalizedCrops;
-    const cropCount = data.exemplars.length;
+    let exemplarCrops = normalizedCrops;
+    let visualCropSource: Sam3BatchV2StageLogEntry['visualCropSource'] | undefined =
+      data.mode === 'visual_crop_match' && normalizedCrops.length > 0 ? 'operator_crops' : undefined;
+    const boxCount = data.exemplars.length;
 
-    if (cropCount <= 0) {
+    if (boxCount <= 0) {
       const errorMessage = 'At least one exemplar is required for v2 batch processing.';
       await this.appendStageLog(data.batchJobId, stageLog, {
         stage: 'prepare',
@@ -1031,6 +1033,31 @@ export class Sam3BatchV2Service {
       );
     }
 
+    if (data.mode === 'visual_crop_match' && exemplarCrops.length === 0) {
+      exemplarCrops = await buildExemplarCrops({
+        imageBuffer: sourceImageBuffer,
+        boxes: data.exemplars.slice(0, SAM3_BATCH_V2_MAX_EXEMPLARS),
+      });
+      visualCropSource = exemplarCrops.length > 0 ? 'server_built_crops' : undefined;
+    }
+
+    if (data.mode === 'visual_crop_match' && exemplarCrops.length === 0) {
+      const errorMessage = 'Visual crop matching requires at least one valid exemplar crop.';
+      await this.appendStageLog(data.batchJobId, stageLog, {
+        stage: 'prepare',
+        status: 'failed',
+        attempt: attemptsMade,
+        errorCode: 'NO_EXEMPLAR_CROPS',
+        errorMessage,
+      });
+      throw createNamedError(
+        'PrepareFailureError',
+        errorMessage
+      );
+    }
+
+    const cropCount = data.mode === 'visual_crop_match' ? exemplarCrops.length : boxCount;
+
     await this.appendStageLog(data.batchJobId, stageLog, {
       stage: 'prepare',
       status: 'completed',
@@ -1038,7 +1065,8 @@ export class Sam3BatchV2Service {
       totalAssets: data.assetIds.length,
       cropCount,
       operatorCropCount: data.mode === 'visual_crop_match' ? normalizedCrops.length : 0,
-      modeUsed: data.mode === 'visual_crop_match' ? 'box_prompt_match' : 'concept_propagation',
+      modeUsed: data.mode === 'visual_crop_match' ? 'visual_crops' : 'concept_propagation',
+      visualCropSource,
       durationMs: this.now().getTime() - startedAt,
     });
 
@@ -1055,6 +1083,7 @@ export class Sam3BatchV2Service {
       exemplarSourceWidth: data.exemplarSourceWidth,
       exemplarSourceHeight: data.exemplarSourceHeight,
       exemplarCrops,
+      visualCropSource,
       assets: orderedAssets,
       missingAssetIds,
       cropCount,
@@ -1376,7 +1405,7 @@ export class Sam3BatchV2Service {
       try {
         const imageBuffer = await fetchAssetImage(asset);
         if (prepared.mode === 'visual_crop_match') {
-          result = await this.runBoxPromptMatch(asset, imageBuffer, prepared);
+          result = await this.runVisualCropMatch(asset, imageBuffer, prepared);
         } else {
           result = await this.runConceptPropagation(asset, imageBuffer, conceptExemplarId, prepared.weedType);
         }
@@ -1392,10 +1421,11 @@ export class Sam3BatchV2Service {
           detectionCount: result.detections.length,
           modeUsed:
             prepared.mode === 'visual_crop_match'
-              ? 'box_prompt_match'
+              ? 'visual_crops'
               : 'concept_propagation',
-          cropCount: prepared.mode === 'visual_crop_match' ? prepared.exemplars.length : undefined,
+          cropCount: prepared.mode === 'visual_crop_match' ? prepared.exemplarCrops.length : undefined,
           operatorCropCount: prepared.mode === 'visual_crop_match' ? prepared.operatorCropCount : undefined,
+          visualCropSource: prepared.mode === 'visual_crop_match' ? prepared.visualCropSource : undefined,
           backendMode: result.backendMode,
           backendWarning: result.backendWarning,
           durationMs: this.now().getTime() - runStartedAt,
