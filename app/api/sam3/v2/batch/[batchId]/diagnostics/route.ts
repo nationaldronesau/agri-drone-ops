@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { timingSafeEqual } from 'crypto';
 import prisma from '@/lib/db';
 import { checkProjectAccess } from '@/lib/auth/api-auth';
 import {
@@ -106,6 +107,7 @@ const MAX_CROPS = 30;
 const DEFAULT_SOURCE_CROP_MIN_CONFIDENCE = 0.6;
 const DEFAULT_SOURCE_CROP_PADDING = 0.08;
 const DEFAULT_MIN_ANCHOR_OVERLAP = 0.2;
+const DIAGNOSTICS_TOKEN_HEADER = 'x-sam3-diagnostics-token';
 const DEFAULT_STRATEGIES: DiagnosticStrategy[] = [
   'box_prompt_match',
   'operator_visual_crops',
@@ -165,6 +167,27 @@ function parseStrategies(value: unknown): DiagnosticStrategy[] {
     typeof item === 'string' && allowed.has(item as DiagnosticStrategy)
   );
   return parsed.length > 0 ? parsed : DEFAULT_STRATEGIES;
+}
+
+function secureTokenEquals(provided: string, expected: string): boolean {
+  const providedBuffer = Buffer.from(provided);
+  const expectedBuffer = Buffer.from(expected);
+  if (providedBuffer.length !== expectedBuffer.length) return false;
+
+  return timingSafeEqual(providedBuffer, expectedBuffer);
+}
+
+function hasDiagnosticsTokenAccess(request: NextRequest): boolean {
+  const expectedToken = process.env.SAM3_DIAGNOSTICS_TOKEN?.trim();
+  const providedToken = request.headers.get(DIAGNOSTICS_TOKEN_HEADER)?.trim();
+
+  if (!expectedToken || !providedToken) return false;
+
+  try {
+    return secureTokenEquals(providedToken, expectedToken);
+  } catch {
+    return false;
+  }
 }
 
 async function parseBody(request: NextRequest): Promise<DiagnosticBody> {
@@ -676,8 +699,12 @@ export async function POST(
   request: NextRequest,
   { params }: RouteParams
 ): Promise<NextResponse> {
-  const rateLimit = checkRateLimit(getRateLimitKey(request, 'sam3-v2-diagnostics'), {
-    maxRequests: 4,
+  const diagnosticsTokenAccess = hasDiagnosticsTokenAccess(request);
+  const rateLimitKey = diagnosticsTokenAccess
+    ? 'sam3-v2-diagnostics-token'
+    : 'sam3-v2-diagnostics';
+  const rateLimit = checkRateLimit(getRateLimitKey(request, rateLimitKey), {
+    maxRequests: diagnosticsTokenAccess ? 30 : 4,
     windowMs: 60000,
   });
 
@@ -743,18 +770,20 @@ export async function POST(
     );
   }
 
-  const projectAccess = await checkProjectAccess(batchJob.projectId);
-  if (!projectAccess.authenticated) {
-    return NextResponse.json(
-      { success: false, error: 'Authentication required' },
-      { status: 401 }
-    );
-  }
-  if (!projectAccess.hasAccess) {
-    return NextResponse.json(
-      { success: false, error: projectAccess.error || 'Access denied' },
-      { status: 403 }
-    );
+  if (!diagnosticsTokenAccess) {
+    const projectAccess = await checkProjectAccess(batchJob.projectId);
+    if (!projectAccess.authenticated) {
+      return NextResponse.json(
+        { success: false, error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+    if (!projectAccess.hasAccess) {
+      return NextResponse.json(
+        { success: false, error: projectAccess.error || 'Access denied' },
+        { status: 403 }
+      );
+    }
   }
 
   const rawExemplars = toBoxArray(batchJob.exemplars);
@@ -1074,6 +1103,7 @@ export async function POST(
       status: sam3Ready.status,
     },
     request: {
+      authMode: diagnosticsTokenAccess ? 'diagnostics_token' : 'session',
       targetLimit,
       includedTargetCount: loadedTargets.length,
       availableTargetCount: targetAssetIds.length,
