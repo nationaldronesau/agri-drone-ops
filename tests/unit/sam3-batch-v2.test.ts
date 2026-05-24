@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import sharp from 'sharp';
 import { configureSam3BatchV2Queue } from '@/lib/queue/batch-queue-v2';
 import {
   buildBatchV2ConceptApplyOptions,
@@ -751,7 +752,7 @@ describe('sam3-batch-v2', () => {
     });
   });
 
-  it('uses SAM3 box-prompt propagation for visual-match target assets', async () => {
+  it('uses SAM3 visual exemplar crops for visual-match target assets', async () => {
     let stageLog: unknown[] = [];
     const segment = vi.fn().mockResolvedValue({
       success: true,
@@ -848,7 +849,15 @@ describe('sam3-batch-v2', () => {
           imageHeight: 3000,
         }),
       },
-      $transaction: vi.fn().mockImplementation(async <T>(callback: (tx: any) => Promise<T>) => {
+      $transaction: vi.fn().mockImplementation(async <T>(callback: (tx: {
+        pendingAnnotation: {
+          deleteMany: () => Promise<undefined>;
+          createMany: () => Promise<undefined>;
+        };
+        batchJob: {
+          update: () => Promise<undefined>;
+        };
+      }) => Promise<T>) => {
         return callback({
           pendingAnnotation: {
             deleteMany: vi.fn(async () => undefined),
@@ -859,10 +868,10 @@ describe('sam3-batch-v2', () => {
           },
         });
       }),
-    } as any;
+    };
 
     const service = new Sam3BatchV2Service({
-      prisma: prismaMock,
+      prisma: prismaMock as never,
       awsSam3Service: {
         isConfigured: vi.fn().mockReturnValue(true),
         isReady: vi.fn().mockReturnValue(true),
@@ -910,14 +919,14 @@ describe('sam3-batch-v2', () => {
     expect(result.terminalState).toBe('completed');
     expect(result.processedImages).toBe(2);
     expect(result.failedAssets).toBe(0);
-    expect(segment).toHaveBeenCalledTimes(2);
-    expect(segment).toHaveBeenCalledWith(
+    expect(segment).not.toHaveBeenCalled();
+    expect(segmentWithExemplars).toHaveBeenCalledTimes(2);
+    expect(segmentWithExemplars).toHaveBeenCalledWith(
       expect.objectContaining({
-        boxes: [{ x1: 100, y1: 100, x2: 150, y2: 160 }],
+        exemplarCrops: ['abc123'],
         className: 'Pine Sapling',
       })
     );
-    expect(segmentWithExemplars).not.toHaveBeenCalled();
     expect(warmupConceptService).not.toHaveBeenCalled();
     expect(createConceptExemplar).not.toHaveBeenCalled();
     expect(applyConceptExemplar).not.toHaveBeenCalled();
@@ -925,16 +934,19 @@ describe('sam3-batch-v2', () => {
       expect.arrayContaining([
         expect.objectContaining({
           assetId: 'asset-target',
-          modeUsed: 'box_prompt_match',
+          modeUsed: 'visual_crops',
           cropCount: 1,
+          operatorCropCount: 1,
+          visualCropSource: 'operator_crops',
         }),
       ])
     );
   });
 
-  it('scales the original operator boxes for each visual-match target asset', async () => {
+  it('reuses operator visual crops instead of scaling boxes for each target asset', async () => {
     let stageLog: unknown[] = [];
     const imageBuffer = Buffer.from('image-bytes');
+    const operatorCrop = Buffer.from('operator-crop').toString('base64');
 
     global.fetch = vi.fn().mockImplementation(async () =>
       new Response(imageBuffer, {
@@ -964,7 +976,25 @@ describe('sam3-batch-v2', () => {
         count: 1,
       },
     });
-    const segmentWithExemplars = vi.fn();
+    const segmentWithExemplars = vi.fn().mockResolvedValue({
+      success: true,
+      response: {
+        detections: [
+          {
+            bbox: [70, 70, 130, 130],
+            confidence: 0.91,
+            polygon: [
+              [100, 70],
+              [130, 100],
+              [100, 130],
+              [70, 100],
+            ],
+          },
+        ],
+        count: 1,
+        mode: 'visual_exemplar_crops',
+      },
+    });
     const warmupConceptService = vi.fn().mockResolvedValue({
       success: true,
       data: { sam3Loaded: true, dinoLoaded: true },
@@ -1022,7 +1052,15 @@ describe('sam3-batch-v2', () => {
           imageHeight: 180,
         }),
       },
-      $transaction: vi.fn().mockImplementation(async <T>(callback: (tx: any) => Promise<T>) => {
+      $transaction: vi.fn().mockImplementation(async <T>(callback: (tx: {
+        pendingAnnotation: {
+          deleteMany: () => Promise<undefined>;
+          createMany: () => Promise<undefined>;
+        };
+        batchJob: {
+          update: () => Promise<undefined>;
+        };
+      }) => Promise<T>) => {
         return callback({
           pendingAnnotation: {
             deleteMany: vi.fn(async () => undefined),
@@ -1033,10 +1071,10 @@ describe('sam3-batch-v2', () => {
           },
         });
       }),
-    } as any;
+    };
 
     const service = new Sam3BatchV2Service({
-      prisma: prismaMock,
+      prisma: prismaMock as never,
       awsSam3Service: {
         isConfigured: vi.fn().mockReturnValue(true),
         isReady: vi.fn().mockReturnValue(true),
@@ -1072,7 +1110,7 @@ describe('sam3-batch-v2', () => {
         exemplars: [{ x1: 40, y1: 40, x2: 100, y2: 100 }],
         exemplarSourceWidth: 240,
         exemplarSourceHeight: 180,
-        exemplarCrops: ['operator-crop'],
+        exemplarCrops: [operatorCrop],
         sourceAssetId: 'asset-source',
         assetIds: ['asset-target', 'asset-source'],
         textPrompt: 'Pine Sapling',
@@ -1083,19 +1121,19 @@ describe('sam3-batch-v2', () => {
 
     expect(createConceptExemplar).not.toHaveBeenCalled();
     expect(applyConceptExemplar).not.toHaveBeenCalled();
-    expect(segmentWithExemplars).not.toHaveBeenCalled();
-    expect(segment).toHaveBeenCalledTimes(2);
-    expect(segment).toHaveBeenNthCalledWith(
+    expect(segment).not.toHaveBeenCalled();
+    expect(segmentWithExemplars).toHaveBeenCalledTimes(2);
+    expect(segmentWithExemplars).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        boxes: [{ x1: 40, y1: 40, x2: 100, y2: 100 }],
+        exemplarCrops: [operatorCrop],
         className: 'Pine Sapling',
       })
     );
-    expect(segment).toHaveBeenNthCalledWith(
+    expect(segmentWithExemplars).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        boxes: [{ x1: 80, y1: 80, x2: 200, y2: 200 }],
+        exemplarCrops: [operatorCrop],
         className: 'Pine Sapling',
       })
     );
@@ -1103,7 +1141,189 @@ describe('sam3-batch-v2', () => {
       expect.arrayContaining([
         expect.objectContaining({
           assetId: 'asset-target',
-          modeUsed: 'box_prompt_match',
+          modeUsed: 'visual_crops',
+          visualCropSource: 'operator_crops',
+        }),
+      ])
+    );
+  });
+
+  it('builds source-asset visual crops on the server when client crops are unavailable', async () => {
+    let stageLog: unknown[] = [];
+    const imageBuffer = await sharp({
+      create: {
+        width: 120,
+        height: 90,
+        channels: 3,
+        background: { r: 34, g: 120, b: 60 },
+      },
+    })
+      .jpeg()
+      .toBuffer();
+
+    global.fetch = vi.fn().mockImplementation(async () =>
+      new Response(imageBuffer, {
+        status: 200,
+        headers: {
+          'content-type': 'image/jpeg',
+          'content-length': String(imageBuffer.length),
+        },
+      })
+    ) as typeof fetch;
+
+    const segment = vi.fn();
+    const segmentWithExemplars = vi.fn().mockResolvedValue({
+      success: true,
+      response: {
+        detections: [
+          {
+            bbox: [12, 12, 28, 28],
+            confidence: 0.88,
+            polygon: [
+              [12, 12],
+              [28, 12],
+              [28, 28],
+              [12, 28],
+            ],
+          },
+        ],
+        count: 1,
+        mode: 'visual_exemplar_crops',
+      },
+    });
+    const prismaMock = {
+      batchJob: {
+        findUnique: vi.fn().mockImplementation(async ({ select }) => {
+          if (select?.stageLog) {
+            return { stageLog };
+          }
+          if (select?.sourceAssetId) {
+            return { sourceAssetId: 'asset-source' };
+          }
+          return { stageLog };
+        }),
+        update: vi.fn().mockImplementation(async ({ data }) => {
+          if (data?.stageLog) {
+            stageLog = data.stageLog as unknown[];
+          }
+        }),
+      },
+      asset: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'asset-target',
+            storageUrl: 'http://localhost/asset-target.jpg',
+            s3Key: null,
+            s3Bucket: null,
+            storageType: 'local',
+            imageWidth: 120,
+            imageHeight: 90,
+          },
+          {
+            id: 'asset-source',
+            storageUrl: 'http://localhost/asset-source.jpg',
+            s3Key: null,
+            s3Bucket: null,
+            storageType: 'local',
+            imageWidth: 120,
+            imageHeight: 90,
+          },
+        ]),
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'asset-source',
+          storageUrl: 'http://localhost/asset-source.jpg',
+          s3Key: null,
+          s3Bucket: null,
+          storageType: 'local',
+          imageWidth: 120,
+          imageHeight: 90,
+        }),
+      },
+      $transaction: vi.fn().mockImplementation(async <T>(callback: (tx: {
+        pendingAnnotation: {
+          deleteMany: () => Promise<undefined>;
+          createMany: () => Promise<undefined>;
+        };
+        batchJob: {
+          update: () => Promise<undefined>;
+        };
+      }) => Promise<T>) => {
+        return callback({
+          pendingAnnotation: {
+            deleteMany: vi.fn(async () => undefined),
+            createMany: vi.fn(async () => undefined),
+          },
+          batchJob: {
+            update: vi.fn(async () => undefined),
+          },
+        });
+      }),
+    };
+
+    const service = new Sam3BatchV2Service({
+      prisma: prismaMock as never,
+      awsSam3Service: {
+        isConfigured: vi.fn().mockReturnValue(true),
+        isReady: vi.fn().mockReturnValue(true),
+        refreshStatus: vi.fn().mockResolvedValue({
+          modelLoaded: true,
+          instanceState: 'ready',
+          ipAddress: '127.0.0.1',
+        }),
+        startInstance: vi.fn().mockResolvedValue(true),
+        resizeImage: vi.fn().mockImplementation(async (buffer: Buffer) => ({
+          buffer,
+          scaling: { scaleFactor: 1 },
+        })),
+        segment,
+        segmentWithExemplars,
+        warmupConceptService: vi.fn(),
+        createConceptExemplar: vi.fn(),
+        applyConceptExemplar: vi.fn(),
+      },
+      acquireGpuLock: vi.fn().mockResolvedValue({ acquired: true, token: 'gpu-token' }),
+      refreshGpuLock: vi.fn().mockResolvedValue(true),
+      releaseGpuLock: vi.fn().mockResolvedValue(true),
+      sleep: vi.fn(),
+      now: () => new Date('2026-03-31T00:00:00.000Z'),
+    });
+
+    const result = await service.processJob({
+      data: {
+        batchJobId: 'batch-server-crops-1',
+        projectId: 'proj-1',
+        weedType: 'Pine Sapling',
+        mode: 'visual_crop_match',
+        exemplars: [{ x1: 10, y1: 10, x2: 35, y2: 35 }],
+        exemplarSourceWidth: 120,
+        exemplarSourceHeight: 90,
+        sourceAssetId: 'asset-source',
+        assetIds: ['asset-target', 'asset-source'],
+        textPrompt: 'Pine Sapling',
+      },
+      attemptsMade: 0,
+      updateProgress: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(result.terminalState).toBe('completed');
+    expect(segment).not.toHaveBeenCalled();
+    expect(segmentWithExemplars).toHaveBeenCalledTimes(2);
+    expect(segmentWithExemplars.mock.calls[0][0].exemplarCrops).toEqual([
+      expect.any(String),
+    ]);
+    expect(stageLog).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stage: 'prepare',
+          modeUsed: 'visual_crops',
+          cropCount: 1,
+          operatorCropCount: 0,
+          visualCropSource: 'server_built_crops',
+        }),
+        expect.objectContaining({
+          assetId: 'asset-target',
+          modeUsed: 'visual_crops',
+          visualCropSource: 'server_built_crops',
         }),
       ])
     );
