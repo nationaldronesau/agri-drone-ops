@@ -798,7 +798,26 @@ export async function POST(
     toStringArray(childJob.assetIds)
   );
   const directAssetIds = toStringArray(batchJob.assetIds);
-  const batchAssetIds = uniqueAssetIds(directAssetIds.length > 0 ? directAssetIds : childAssetIds);
+  let assetIdSource = directAssetIds.length > 0
+    ? 'batch_asset_ids'
+    : childAssetIds.length > 0
+      ? 'child_batch_jobs'
+      : 'pending_annotations';
+  let batchAssetIds = uniqueAssetIds(directAssetIds.length > 0 ? directAssetIds : childAssetIds);
+
+  if (batchAssetIds.length === 0) {
+    // Some older successful v2 runs persisted annotations but did not backfill BatchJob.assetIds.
+    const pendingAssetRows = await prisma.pendingAnnotation.findMany({
+      where: { batchJobId: batchJob.id },
+      select: { assetId: true },
+      orderBy: [
+        { createdAt: 'asc' },
+        { assetId: 'asc' },
+      ],
+    });
+    batchAssetIds = uniqueAssetIds(pendingAssetRows.map((row) => row.assetId));
+    assetIdSource = 'pending_annotations';
+  }
   const sourceAssetId = batchJob.sourceAssetId || batchAssetIds[0];
 
   if (!sourceAssetId) {
@@ -1104,6 +1123,7 @@ export async function POST(
     },
     request: {
       authMode: diagnosticsTokenAccess ? 'diagnostics_token' : 'session',
+      assetIdSource,
       targetLimit,
       includedTargetCount: loadedTargets.length,
       availableTargetCount: targetAssetIds.length,
