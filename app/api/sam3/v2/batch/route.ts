@@ -41,6 +41,15 @@ interface BatchV2Request {
 const PROJECT_ID_REGEX = /^c[a-z0-9]{24,}$/i;
 const MODE_SET = new Set<Sam3BatchV2Mode>(['visual_crop_match', 'concept_propagation']);
 
+export function resolveBatchV2ModeForAssetCount(
+  requestedMode: Sam3BatchV2Mode,
+  assetCount: number
+): Sam3BatchV2Mode {
+  return assetCount > 1 && requestedMode === 'visual_crop_match'
+    ? 'concept_propagation'
+    : requestedMode;
+}
+
 function isValidBox(value: BoxExemplar) {
   const entries = [value.x1, value.y1, value.x2, value.y2];
   return entries.every((entry) => typeof entry === 'number' && Number.isFinite(entry) && entry >= 0);
@@ -206,6 +215,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const assetIds = body.assetIds?.length
     ? body.assetIds
     : requestedAssets.map((asset) => asset.id);
+  const effectiveMode = resolveBatchV2ModeForAssetCount(body.mode, assetIds.length);
+  const effectiveExemplarCrops =
+    effectiveMode === 'visual_crop_match' ? body.exemplarCrops : undefined;
   const exemplarsJson = body.exemplars as unknown as Prisma.InputJsonValue;
   const assetIdsJson = assetIds as unknown as Prisma.InputJsonValue;
   const emptyStageLogJson = [] as unknown as Prisma.InputJsonValue;
@@ -218,7 +230,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     exemplarSourceHeight: body.exemplarSourceHeight,
     sourceAssetId: body.sourceAssetId,
     version: 2,
-    mode: body.mode,
+    mode: effectiveMode,
     stageLog: emptyStageLogJson,
     status: 'QUEUED' as const,
   };
@@ -259,11 +271,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           batchJobId: shardJob.id,
           projectId: body.projectId,
           weedType: body.weedType,
-          mode: body.mode,
+          mode: effectiveMode,
           exemplars: body.exemplars,
           exemplarSourceWidth: body.exemplarSourceWidth,
           exemplarSourceHeight: body.exemplarSourceHeight,
-          exemplarCrops: body.exemplarCrops,
+          exemplarCrops: effectiveExemplarCrops,
           sourceAssetId: body.sourceAssetId,
           textPrompt: body.textPrompt,
           assetIds: assetChunks[index],
@@ -304,7 +316,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       batchJobId: parentBatchJob.id,
       version: 2,
       kind: SAM3_BATCH_JOB_KINDS.AGGREGATE,
-      mode: body.mode,
+      mode: effectiveMode,
+      requestedMode: body.mode,
+      modeOverridden: effectiveMode !== body.mode,
       totalImages: assetIds.length,
       processedImages: 0,
       status: 'QUEUED',
@@ -328,11 +342,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       batchJobId: batchJob.id,
       projectId: body.projectId,
       weedType: body.weedType,
-      mode: body.mode,
+      mode: effectiveMode,
       exemplars: body.exemplars,
       exemplarSourceWidth: body.exemplarSourceWidth,
       exemplarSourceHeight: body.exemplarSourceHeight,
-      exemplarCrops: body.exemplarCrops,
+      exemplarCrops: effectiveExemplarCrops,
       sourceAssetId: body.sourceAssetId,
       textPrompt: body.textPrompt,
       assetIds,
@@ -360,7 +374,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     batchJobId: batchJob.id,
     version: 2,
     kind: SAM3_BATCH_JOB_KINDS.SINGLE,
-    mode: body.mode,
+    mode: effectiveMode,
+    requestedMode: body.mode,
+    modeOverridden: effectiveMode !== body.mode,
     totalImages: assetIds.length,
     status: 'QUEUED',
     queuePosition: queueStats.waiting + 1,
