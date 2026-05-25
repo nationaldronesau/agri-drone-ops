@@ -1441,41 +1441,10 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     }
 
     const sourceAssetId = exemplarAssetIds[0];
-    let visualExemplarCrops: string[] | undefined;
-    const isMultiImageBatch = projectAssets.length > 1;
-    const batchUsesRawVisualCrops = !isMultiImageBatch && useVisualCrops;
-    const batchUsesPipelineV2 = isMultiImageBatch || useBatchPipelineV2;
 
     setBatchProcessing(true);
     setSam3Error(null);
     try {
-      if (batchUsesRawVisualCrops) {
-        if (sourceAssetId !== session.asset.id) {
-          console.warn('[Batch] Current asset differs from source exemplar asset; skipping client crop extraction and using server-side source asset crop build', {
-            currentAssetId: session.asset.id,
-            sourceAssetId,
-          });
-          visualExemplarCrops = undefined;
-        } else {
-          try {
-            visualExemplarCrops = buildVisualExemplarCrops();
-          } catch (cropBuildError) {
-            console.warn('[Batch] Client-side visual crop extraction failed; falling back to server-side crop build', cropBuildError);
-            visualExemplarCrops = undefined;
-          }
-        }
-
-        if (!visualExemplarCrops || visualExemplarCrops.length === 0) {
-          // Allow request to continue so backend can build crops from source asset + exemplar boxes.
-          console.warn('[Batch] No client-side exemplar crops available; using server-side crop build fallback');
-        } else {
-          console.log('[Batch] Built visual exemplar crops on client', {
-            sourceAssetId,
-            exemplarCount: boxExemplars.length,
-            cropCount: visualExemplarCrops.length,
-          });
-        }
-      }
       // Check if source image has dimensions for proper scaling
       if (sourceAssetId === session.asset.id && (!session.asset.imageWidth || !session.asset.imageHeight)) {
         console.warn('[Batch] Source image missing dimensions - scaling may be inaccurate');
@@ -1497,10 +1466,8 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
             }
           : {};
 
-      const exemplarBoxesForBatch = batchUsesRawVisualCrops
-        ? boxExemplars.slice(0, MAX_VISUAL_EXEMPLAR_CROPS).map(e => e.box)
-        : boxExemplars.slice(0, MAX_BATCH_EXEMPLARS).map(e => e.box);
-      const batchEndpoint = batchUsesPipelineV2 ? '/api/sam3/v2/batch' : '/api/sam3/batch';
+      const exemplarBoxesForBatch = boxExemplars.slice(0, MAX_BATCH_EXEMPLARS).map(e => e.box);
+      const batchEndpoint = '/api/sam3/v2/batch';
       const batchPayload = {
         projectId: session.asset.project.id,
         weedType: selectedClass,
@@ -1509,15 +1476,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         sourceAssetId,
         // No assetIds = process all images in project
         textPrompt: selectedClass,
-        ...(batchUsesPipelineV2
-          ? {
-              mode: batchUsesRawVisualCrops ? 'visual_crop_match' : 'concept_propagation',
-              exemplarCrops: batchUsesRawVisualCrops ? visualExemplarCrops : undefined,
-            }
-          : {
-              useVisualCrops: batchUsesRawVisualCrops,
-              exemplarCrops: batchUsesRawVisualCrops ? visualExemplarCrops : undefined,
-            }),
+        mode: 'concept_propagation' as const,
       };
 
       const response = await fetch(batchEndpoint, {
@@ -1529,9 +1488,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       if (response.ok) {
         const data = await response.json();
         setBatchJobId(data.batchJobId);
-        setBatchPollUrl(
-          data.pollUrl || `${batchUsesPipelineV2 ? '/api/sam3/v2/batch' : '/api/sam3/batch'}/${data.batchJobId}`
-        );
+        setBatchPollUrl(data.pollUrl || `/api/sam3/v2/batch/${data.batchJobId}`);
         setBatchJobStatus({
           status: data.status || 'QUEUED',
           processedImages: data.processedImages || 0,
@@ -1575,7 +1532,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     } finally {
       setBatchProcessing(false);
     }
-  }, [session, boxExemplars, selectedClass, useVisualCrops, useBatchPipelineV2, buildVisualExemplarCrops, projectAssets.length]);
+  }, [session, boxExemplars, selectedClass]);
 
   useEffect(() => {
     if (!batchJobId || !batchPollUrl) return;
