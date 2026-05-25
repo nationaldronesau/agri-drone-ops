@@ -590,7 +590,8 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         const status: SAM3StatusResponse = await response.json();
         let conceptStatus: SAM3ConceptStatusResponse | null = null;
 
-        if (!useVisualCrops) {
+        const batchUsesVisualExemplarService = projectAssets.length > 1;
+        if (!useVisualCrops || batchUsesVisualExemplarService) {
           try {
             const conceptResponse = await fetch('/api/sam3/concept/status');
             conceptStatus = await conceptResponse
@@ -629,7 +630,8 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
           setSam3ConceptStatus(null);
         }
 
-        const conceptReadyForMode = !useVisualCrops && conceptStatus?.ready === true;
+        const conceptReadyForMode =
+          (!useVisualCrops || batchUsesVisualExemplarService) && conceptStatus?.ready === true;
         const awsReadyForMode = status.aws.ready || conceptReadyForMode;
         const isAvailable = awsReadyForMode || status.roboflow.ready || status.preferredBackend !== 'none';
         const device = awsReadyForMode ? 'aws-gpu' : status.roboflow.ready ? 'roboflow-serverless' : null;
@@ -657,7 +659,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     checkSam3Status();
     const interval = setInterval(checkSam3Status, 10000);
     return () => clearInterval(interval);
-  }, [useVisualCrops]);
+  }, [projectAssets.length, useVisualCrops]);
 
   // Fetch AI detections
   useEffect(() => {
@@ -1441,13 +1443,13 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     const sourceAssetId = exemplarAssetIds[0];
     let visualExemplarCrops: string[] | undefined;
     const isMultiImageBatch = projectAssets.length > 1;
-    const batchUsesVisualCrops = isMultiImageBatch || useVisualCrops;
+    const batchUsesRawVisualCrops = !isMultiImageBatch && useVisualCrops;
     const batchUsesPipelineV2 = isMultiImageBatch || useBatchPipelineV2;
 
     setBatchProcessing(true);
     setSam3Error(null);
     try {
-      if (batchUsesVisualCrops) {
+      if (batchUsesRawVisualCrops) {
         if (sourceAssetId !== session.asset.id) {
           console.warn('[Batch] Current asset differs from source exemplar asset; skipping client crop extraction and using server-side source asset crop build', {
             currentAssetId: session.asset.id,
@@ -1495,7 +1497,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
             }
           : {};
 
-      const exemplarBoxesForBatch = batchUsesVisualCrops
+      const exemplarBoxesForBatch = batchUsesRawVisualCrops
         ? boxExemplars.slice(0, MAX_VISUAL_EXEMPLAR_CROPS).map(e => e.box)
         : boxExemplars.slice(0, MAX_BATCH_EXEMPLARS).map(e => e.box);
       const batchEndpoint = batchUsesPipelineV2 ? '/api/sam3/v2/batch' : '/api/sam3/batch';
@@ -1509,12 +1511,12 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
         textPrompt: selectedClass,
         ...(batchUsesPipelineV2
           ? {
-              mode: batchUsesVisualCrops ? 'visual_crop_match' : 'concept_propagation',
-              exemplarCrops: batchUsesVisualCrops ? visualExemplarCrops : undefined,
+              mode: batchUsesRawVisualCrops ? 'visual_crop_match' : 'concept_propagation',
+              exemplarCrops: batchUsesRawVisualCrops ? visualExemplarCrops : undefined,
             }
           : {
-              useVisualCrops: batchUsesVisualCrops,
-              exemplarCrops: batchUsesVisualCrops ? visualExemplarCrops : undefined,
+              useVisualCrops: batchUsesRawVisualCrops,
+              exemplarCrops: batchUsesRawVisualCrops ? visualExemplarCrops : undefined,
             }),
       };
 
@@ -2322,8 +2324,12 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
             <Badge variant={sam3ConceptStatus.ready ? "default" : "secondary"} className="text-xs">
               {sam3ConceptStatus.configured
                 ? sam3ConceptStatus.ready
-                  ? useVisualCrops ? 'Visual Match Ready' : 'Concept Ready'
-                  : useVisualCrops ? 'Visual Match Warming' : 'Concept Warming'
+                  ? projectAssets.length > 1
+                    ? 'Visual Exemplar Ready'
+                    : useVisualCrops ? 'Visual Match Ready' : 'Concept Ready'
+                  : projectAssets.length > 1
+                    ? 'Visual Exemplar Warming'
+                    : useVisualCrops ? 'Visual Match Warming' : 'Concept Warming'
                 : 'Concept Off'}
             </Badge>
           )}
@@ -2632,8 +2638,8 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
                 </Button>
                 {projectAssets.length > 1 ? (
                   <div className="rounded-md border border-purple-200 bg-purple-50 px-2 py-1.5 text-[11px] text-purple-800">
-                    Dataset runs use SAM3 v2 box-prompt propagation. Your drawn examples are
-                    scaled into each image as SAM3 prompts, then sent to review before training.
+                    Dataset runs use SAM3 v2 visual exemplar matching. Your drawn boxes create
+                    a visual exemplar on the GPU service, then SAM3 refines the matches before review.
                   </div>
                 ) : (
                   <div className="space-y-1 rounded-md border border-purple-100 bg-white/70 p-2">
@@ -2665,12 +2671,12 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
               </div>
               <p className="text-[10px] text-purple-600 mt-2">
                 {projectAssets.length > 1 || useVisualCrops
-                  ? 'Uses your drawn examples as SAM3 prompts across the dataset. Best for restoring the proven Apply to All flow.'
+                  ? 'Uses your drawn examples to find matching plants across the dataset. Best for restoring the proven Apply to All flow.'
                   : 'Class-aware matching enabled. Better when the selected class generalizes well.'}
               </p>
               <p className="text-[10px] text-purple-600 mt-1">
                 {projectAssets.length > 1
-                  ? 'Multi-image Apply to All uses the original operator boxes on every image, matching the April workflow that generated consistent review counts.'
+                  ? 'Multi-image Apply to All uses visual exemplar matching, not text-prompt matching; the selected class labels the outputs for review and training.'
                   : useBatchPipelineV2
                     ? 'V2 uses the queue-only batch worker with explicit stage tracking.'
                   : 'Legacy V1 selected. Use only for single-image or controlled debugging runs.'}
