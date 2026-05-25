@@ -4,7 +4,9 @@ import { configureSam3BatchV2Queue } from '@/lib/queue/batch-queue-v2';
 import {
   buildBatchV2ConceptApplyOptions,
   buildBatchV2ConceptFallbackApplyOptions,
+  estimatePeakGpuMemoryMb,
   filterBatchV2ConceptDetections,
+  getGpuAdmissionCropCount,
   Sam3BatchV2Service,
 } from '@/lib/services/sam3-batch-v2';
 
@@ -108,6 +110,21 @@ describe('sam3-batch-v2', () => {
     });
     expect(detections).toHaveLength(1);
     expect(detections[0].bbox).toEqual([20, 20, 40, 40]);
+  });
+
+  it('does not reject concept propagation using visual-crop memory estimates', () => {
+    const conceptAdmissionCropCount = getGpuAdmissionCropCount('concept_propagation', 10);
+    const visualAdmissionCropCount = getGpuAdmissionCropCount('visual_crop_match', 10);
+
+    expect(conceptAdmissionCropCount).toBe(1);
+    expect(estimatePeakGpuMemoryMb(conceptAdmissionCropCount)).toMatchObject({
+      estimatedMemoryMb: 4608,
+      overBudget: false,
+    });
+    expect(estimatePeakGpuMemoryMb(visualAdmissionCropCount)).toMatchObject({
+      estimatedMemoryMb: 12800,
+      overBudget: true,
+    });
   });
 
   it('falls back to lower-confidence target candidates when strict matching returns zero', async () => {
