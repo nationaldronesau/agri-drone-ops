@@ -140,6 +140,10 @@ const EMPIRICAL_GPU_MEMORY_LOOKUP_MB: Record<number, number> = {
   10: 12800,
 };
 
+export function getGpuAdmissionCropCount(mode: Sam3BatchV2Mode, cropCount: number): number {
+  return mode === 'visual_crop_match' ? cropCount : 1;
+}
+
 export type Sam3BatchV2Stage =
   | 'prepare'
   | 'estimate'
@@ -177,6 +181,7 @@ export interface Sam3BatchV2StageLogEntry {
   errorCode?: string;
   errorMessage?: string;
   cropCount?: number;
+  admissionCropCount?: number;
   operatorCropCount?: number;
   sourceDetectionCropCount?: number;
   modeUsed?: 'box_prompt_match' | 'source_box_match' | 'visual_crops' | 'concept_propagation';
@@ -1104,13 +1109,15 @@ export class Sam3BatchV2Service {
       cropCount: prepared.cropCount,
     });
 
-    const estimate = estimatePeakGpuMemoryMb(prepared.cropCount);
+    const admissionCropCount = getGpuAdmissionCropCount(prepared.mode, prepared.cropCount);
+    const estimate = estimatePeakGpuMemoryMb(admissionCropCount);
 
     await this.appendStageLog(prepared.batchJobId, stageLog, {
       stage: 'estimate',
       status: 'completed',
       attempt: attemptsMade,
       cropCount: prepared.cropCount,
+      admissionCropCount,
       estimatedMemoryMb: estimate.estimatedMemoryMb,
       thresholdMemoryMb: estimate.thresholdMemoryMb,
       durationMs: this.now().getTime() - startedAt,
@@ -1131,6 +1138,7 @@ export class Sam3BatchV2Service {
       status: 'started',
       attempt: attemptsMade,
       cropCount: prepared.cropCount,
+      admissionCropCount: getGpuAdmissionCropCount(prepared.mode, prepared.cropCount),
       estimatedMemoryMb: estimate.estimatedMemoryMb,
       thresholdMemoryMb: estimate.thresholdMemoryMb,
     });
@@ -1142,6 +1150,7 @@ export class Sam3BatchV2Service {
         attempt: attemptsMade,
         errorCode: 'OVER_BUDGET',
         errorMessage: `Rejected at preflight: estimated ${estimate.estimatedMemoryMb}MB exceeds ${estimate.thresholdMemoryMb}MB threshold.`,
+        admissionCropCount: getGpuAdmissionCropCount(prepared.mode, prepared.cropCount),
         estimatedMemoryMb: estimate.estimatedMemoryMb,
         thresholdMemoryMb: estimate.thresholdMemoryMb,
       });
