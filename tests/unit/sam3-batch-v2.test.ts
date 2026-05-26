@@ -15,6 +15,18 @@ import {
 
 describe('sam3-batch-v2', () => {
   const originalFetch = global.fetch;
+  const makeConceptDetection = (index: number, similarity = 0.82) => ({
+    bbox: [index * 10, 10, index * 10 + 6, 18] as [number, number, number, number],
+    confidence: similarity,
+    similarity,
+    polygon: [
+      [index * 10, 10],
+      [index * 10 + 6, 10],
+      [index * 10 + 6, 18],
+      [index * 10, 18],
+    ] as [number, number][],
+    class_name: 'pine sapling',
+  });
 
   beforeEach(() => {
     global.fetch = vi.fn().mockImplementation(async () =>
@@ -578,6 +590,141 @@ describe('sam3-batch-v2', () => {
           bbox: [80, 90, 110, 120],
           confidence: 0.68,
           similarity: 0.68,
+        },
+      ],
+    });
+  });
+
+  it('merges candidates from each source-box concept exemplar before refinement', async () => {
+    const firstExemplarCandidates = Array.from({ length: 30 }, (_, index) =>
+      makeConceptDetection(index, 0.84)
+    );
+    const secondExemplarCandidates = Array.from({ length: 30 }, (_, index) =>
+      makeConceptDetection(index + 30, 0.83)
+    );
+    const applyConceptExemplar = vi
+      .fn()
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          detections: firstExemplarCandidates,
+          processingTimeMs: 8,
+        },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          detections: secondExemplarCandidates,
+          processingTimeMs: 9,
+        },
+      });
+    const segment = vi.fn().mockResolvedValue({
+      success: true,
+      response: {
+        detections: [
+          {
+            bbox: [0, 10, 6, 18],
+            confidence: 0.92,
+            polygon: [
+              [0, 10],
+              [6, 10],
+              [6, 18],
+              [0, 18],
+            ],
+          },
+          {
+            bbox: [300, 10, 306, 18],
+            confidence: 0.88,
+            polygon: [
+              [300, 10],
+              [306, 10],
+              [306, 18],
+              [300, 18],
+            ],
+          },
+        ],
+        count: 2,
+      },
+    });
+    const service = new Sam3BatchV2Service({
+      prisma: {} as never,
+      awsSam3Service: {
+        applyConceptExemplar,
+        refreshStatus: vi.fn().mockResolvedValue({
+          modelLoaded: true,
+          instanceState: 'ready',
+          ipAddress: '127.0.0.1',
+        }),
+        isReady: vi.fn().mockReturnValue(true),
+        resizeImage: vi.fn().mockImplementation(async (imageBuffer: Buffer) => ({
+          buffer: imageBuffer,
+          scaling: { scaleFactor: 1 },
+        })),
+        segment,
+      } as any,
+      acquireGpuLock: vi.fn(),
+      refreshGpuLock: vi.fn(),
+      releaseGpuLock: vi.fn(),
+      sleep: vi.fn(),
+      now: () => new Date('2026-03-31T00:00:00.000Z'),
+    });
+
+    const result = await (service as any).runConceptPropagation(
+      {
+        id: 'asset-target',
+        storageUrl: 'http://localhost/asset-target.jpg',
+        s3Key: null,
+        s3Bucket: null,
+        storageType: 'local',
+        imageWidth: 4000,
+        imageHeight: 3000,
+      },
+      Buffer.from('target-image'),
+      [
+        { exemplarId: 'concept-exemplar-source-box-1', sourceBoxIndex: 0 },
+        { exemplarId: 'concept-exemplar-source-box-2', sourceBoxIndex: 1 },
+      ],
+      'Pine Sapling'
+    );
+
+    expect(applyConceptExemplar).toHaveBeenCalledTimes(2);
+    expect(applyConceptExemplar).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        exemplarId: 'concept-exemplar-source-box-1',
+      })
+    );
+    expect(applyConceptExemplar).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        exemplarId: 'concept-exemplar-source-box-2',
+      })
+    );
+    expect(segment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        boxes: expect.arrayContaining([
+          { x1: 0, y1: 10, x2: 6, y2: 18 },
+          { x1: 300, y1: 10, x2: 306, y2: 18 },
+        ]),
+        className: 'Pine Sapling',
+      })
+    );
+    expect(segment.mock.calls[0][0].boxes).toHaveLength(60);
+    expect(result).toMatchObject({
+      assetId: 'asset-target',
+      outcome: 'success',
+      backendMode: 'concept_ensemble_refined',
+      candidateCount: 60,
+      detections: [
+        {
+          bbox: [0, 10, 6, 18],
+          confidence: 0.84,
+          similarity: 0.84,
+        },
+        {
+          bbox: [300, 10, 306, 18],
+          confidence: 0.83,
+          similarity: 0.83,
         },
       ],
     });
