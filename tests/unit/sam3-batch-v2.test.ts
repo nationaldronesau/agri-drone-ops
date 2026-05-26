@@ -202,6 +202,12 @@ describe('sam3-batch-v2', () => {
       prisma: {} as never,
       awsSam3Service: {
         applyConceptExemplar,
+        refreshStatus: vi.fn().mockResolvedValue({
+          modelLoaded: true,
+          instanceState: 'ready',
+          ipAddress: '127.0.0.1',
+        }),
+        isReady: vi.fn().mockReturnValue(true),
         resizeImage: vi.fn().mockImplementation(async (imageBuffer: Buffer) => ({
           buffer: imageBuffer,
           scaling: { scaleFactor: 1 },
@@ -360,6 +366,12 @@ describe('sam3-batch-v2', () => {
       prisma: {} as never,
       awsSam3Service: {
         applyConceptExemplar,
+        refreshStatus: vi.fn().mockResolvedValue({
+          modelLoaded: true,
+          instanceState: 'ready',
+          ipAddress: '127.0.0.1',
+        }),
+        isReady: vi.fn().mockReturnValue(true),
         resizeImage: vi.fn().mockImplementation(async (imageBuffer: Buffer) => ({
           buffer: imageBuffer,
           scaling: { scaleFactor: 1 },
@@ -491,6 +503,12 @@ describe('sam3-batch-v2', () => {
       prisma: {} as never,
       awsSam3Service: {
         applyConceptExemplar,
+        refreshStatus: vi.fn().mockResolvedValue({
+          modelLoaded: true,
+          instanceState: 'ready',
+          ipAddress: '127.0.0.1',
+        }),
+        isReady: vi.fn().mockReturnValue(true),
         resizeImage: vi.fn().mockImplementation(async (imageBuffer: Buffer) => ({
           buffer: imageBuffer,
           scaling: { scaleFactor: 1 },
@@ -565,7 +583,7 @@ describe('sam3-batch-v2', () => {
     });
   });
 
-  it('falls back to concept candidates when target refinement drifts away from candidates', async () => {
+  it('fails loudly when target refinement drifts away from candidates', async () => {
     const candidate = {
       bbox: [20, 25, 40, 45],
       confidence: 0.82,
@@ -616,6 +634,12 @@ describe('sam3-batch-v2', () => {
       prisma: {} as never,
       awsSam3Service: {
         applyConceptExemplar,
+        refreshStatus: vi.fn().mockResolvedValue({
+          modelLoaded: true,
+          instanceState: 'ready',
+          ipAddress: '127.0.0.1',
+        }),
+        isReady: vi.fn().mockReturnValue(true),
         resizeImage: vi.fn().mockImplementation(async (imageBuffer: Buffer) => ({
           buffer: imageBuffer,
           scaling: { scaleFactor: 1 },
@@ -629,7 +653,7 @@ describe('sam3-batch-v2', () => {
       now: () => new Date('2026-03-31T00:00:00.000Z'),
     });
 
-    const result = await (service as any).runVisualConceptMatch(
+    await expect((service as any).runVisualConceptMatch(
       {
         id: 'asset-target',
         storageUrl: 'http://localhost/asset-target.jpg',
@@ -642,24 +666,17 @@ describe('sam3-batch-v2', () => {
       Buffer.from('target-image'),
       'visual-exemplar-1',
       'Pine Sapling'
-    );
+    )).rejects.toMatchObject({
+      name: 'InferenceFailureError',
+      errorCode: 'SAM3_REFINEMENT_DRIFT',
+    });
 
     expect(segment).toHaveBeenCalledWith(
       expect.objectContaining({
         boxes: [{ x1: 20, y1: 25, x2: 40, y2: 45 }],
+        returnPolygons: true,
       })
     );
-    expect(result).toMatchObject({
-      assetId: 'asset-target',
-      outcome: 'success',
-      detections: [
-        {
-          bbox: [20, 25, 40, 45],
-          confidence: 0.82,
-          similarity: 0.82,
-        },
-      ],
-    });
   });
 
   it('deletes existing annotations before recreating them on retry', async () => {

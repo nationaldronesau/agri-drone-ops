@@ -91,6 +91,7 @@ export interface SAM3SegmentRequest {
   className: string;
   minSize?: number;
   maxSize?: number | null;
+  returnPolygons?: boolean;
 }
 
 // Request for segmentation with visual exemplar crops
@@ -863,6 +864,7 @@ class AWSSAM3Service {
           class_name: request.className,
           min_size: request.minSize ?? 100,
           max_size: request.maxSize ?? null,
+          return_polygons: request.returnPolygons ?? true,
         }),
         signal: AbortSignal.timeout(120000), // 2 minutes timeout
       });
