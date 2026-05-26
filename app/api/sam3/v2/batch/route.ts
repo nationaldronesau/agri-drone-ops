@@ -11,6 +11,7 @@ import { checkRedisConnection } from '@/lib/queue/redis';
 import {
   SAM3_BATCH_V2_MAX_EXEMPLARS,
   SAM3_BATCH_V2_MAX_IMAGES,
+  resolveBatchV2ReviewProfileForMode,
 } from '@/lib/services/sam3-batch-v2';
 import {
   chunkAssetIds,
@@ -216,6 +217,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     ? body.assetIds
     : requestedAssets.map((asset) => asset.id);
   const effectiveMode = resolveBatchV2ModeForAssetCount(body.mode, assetIds.length);
+  const reviewProfile = resolveBatchV2ReviewProfileForMode(effectiveMode);
   const effectiveExemplarCrops =
     effectiveMode === 'visual_crop_match' ? body.exemplarCrops : undefined;
   const exemplarsJson = body.exemplars as unknown as Prisma.InputJsonValue;
@@ -319,6 +321,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       mode: effectiveMode,
       requestedMode: body.mode,
       modeOverridden: effectiveMode !== body.mode,
+      reviewProfile,
       totalImages: assetIds.length,
       processedImages: 0,
       status: 'QUEUED',
@@ -377,6 +380,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     mode: effectiveMode,
     requestedMode: body.mode,
     modeOverridden: effectiveMode !== body.mode,
+    reviewProfile,
     totalImages: assetIds.length,
     status: 'QUEUED',
     queuePosition: queueStats.waiting + 1,
