@@ -243,6 +243,7 @@ export interface Sam3BatchV2StageLogEntry {
   backendWarning?: string;
   detectionCount?: number;
   candidateCount?: number;
+  conceptExemplarCount?: number;
   refinementBoxCount?: number;
   refinementDetectionCount?: number;
   durationMs?: number;
@@ -445,6 +446,11 @@ interface ConceptRefinementResult {
   candidateCount: number;
   refinementBoxCount: number;
   refinementDetectionCount: number;
+}
+
+interface ConceptExemplarRef {
+  exemplarId: string;
+  sourceBoxIndex?: number;
 }
 
 interface GpuAdmissionResult {
@@ -747,6 +753,20 @@ function bestConceptCandidateMatchForBbox(
 
 function conceptCandidateKey(candidate: SAM3ConceptDetection): string {
   return `${candidate.bbox.join(',')}:${conceptDetectionScore(candidate).toFixed(6)}`;
+}
+
+function normalizeConceptExemplarRefs(
+  exemplars: string | ConceptExemplarRef[] | null
+): ConceptExemplarRef[] {
+  if (!exemplars) {
+    return [];
+  }
+
+  if (typeof exemplars === 'string') {
+    return exemplars.trim() ? [{ exemplarId: exemplars }] : [];
+  }
+
+  return exemplars.filter((exemplar) => exemplar.exemplarId.trim().length > 0);
 }
 
 function mapConceptDetectionToAssetDetection(
@@ -1420,7 +1440,7 @@ export class Sam3BatchV2Service {
       totalAssets: prepared.assets.length + prepared.missingAssetIds.length,
     });
 
-    let conceptExemplarId: string | null = null;
+    let conceptExemplars: ConceptExemplarRef[] = [];
     if (prepared.mode === 'concept_propagation') {
       const warmup = await this.awsSam3Service.warmupConceptService();
       if (!warmup.success) {
@@ -1430,25 +1450,11 @@ export class Sam3BatchV2Service {
         );
       }
 
-      const exemplarResult = await this.awsSam3Service.createConceptExemplar({
-        imageBuffer: prepared.sourceImageBuffer,
-        boxes: prepared.exemplars,
-        className: prepared.weedType,
-        imageId: prepared.sourceAssetId,
-      });
-
-      if (!exemplarResult.success || !exemplarResult.data?.exemplarId) {
-        throw createNamedError(
-          'InferenceFailureError',
-          exemplarResult.error || 'Failed to create concept exemplar.'
-        );
-      }
-
-      conceptExemplarId = exemplarResult.data.exemplarId;
+      conceptExemplars = await this.createConceptExemplarEnsemble(prepared);
       await this.prisma.batchJob.update({
         where: { id: batchJobId },
         data: {
-          exemplarId: conceptExemplarId,
+          exemplarId: conceptExemplars[0]?.exemplarId || null,
           sourceAssetId: prepared.sourceAssetId,
         },
       });
@@ -1498,7 +1504,7 @@ export class Sam3BatchV2Service {
         if (prepared.mode === 'visual_crop_match') {
           result = await this.runVisualCropMatch(asset, imageBuffer, prepared);
         } else {
-          result = await this.runConceptPropagation(asset, imageBuffer, conceptExemplarId, prepared.weedType);
+          result = await this.runConceptPropagation(asset, imageBuffer, conceptExemplars, prepared.weedType);
         }
 
         await this.appendStageLog(batchJobId, stageLog, {
@@ -1521,6 +1527,8 @@ export class Sam3BatchV2Service {
           backendMode: result.backendMode,
           backendWarning: result.backendWarning,
           candidateCount: result.candidateCount,
+          conceptExemplarCount:
+            prepared.mode === 'concept_propagation' ? conceptExemplars.length : undefined,
           refinementBoxCount: result.refinementBoxCount,
           refinementDetectionCount: result.refinementDetectionCount,
           durationMs: this.now().getTime() - runStartedAt,
@@ -1745,13 +1753,53 @@ export class Sam3BatchV2Service {
     };
   }
 
+  private async createConceptExemplarEnsemble(
+    prepared: PreparedBatchContext
+  ): Promise<ConceptExemplarRef[]> {
+    const exemplars: ConceptExemplarRef[] = [];
+
+    for (let index = 0; index < prepared.exemplars.length; index += 1) {
+      const sourceBox = prepared.exemplars[index];
+      const exemplarResult = await this.awsSam3Service.createConceptExemplar({
+        imageBuffer: prepared.sourceImageBuffer,
+        boxes: [sourceBox],
+        className: prepared.weedType,
+        imageId: `${prepared.sourceAssetId}-box-${index + 1}`,
+      });
+
+      if (!exemplarResult.success || !exemplarResult.data?.exemplarId) {
+        throw createNamedError(
+          'InferenceFailureError',
+          exemplarResult.error || `Failed to create concept exemplar for source box ${index + 1}.`,
+          exemplarResult.errorCode || 'CONCEPT_EXEMPLAR_CREATE_FAILED'
+        );
+      }
+
+      exemplars.push({
+        exemplarId: exemplarResult.data.exemplarId,
+        sourceBoxIndex: index,
+      });
+    }
+
+    if (exemplars.length === 0) {
+      throw createNamedError(
+        'InferenceFailureError',
+        'Concept propagation requires at least one source-box concept exemplar.',
+        'CONCEPT_EXEMPLAR_MISSING'
+      );
+    }
+
+    return exemplars;
+  }
+
   private async runConceptPropagation(
     asset: AssetRecord,
     imageBuffer: Buffer,
-    conceptExemplarId: string | null,
+    conceptExemplars: string | ConceptExemplarRef[] | null,
     weedType: string
   ): Promise<AssetInferenceResult> {
-    if (!conceptExemplarId) {
+    const exemplarRefs = normalizeConceptExemplarRefs(conceptExemplars);
+    if (exemplarRefs.length === 0) {
       return {
         assetId: asset.id,
         detections: [],
@@ -1765,31 +1813,13 @@ export class Sam3BatchV2Service {
     // enters the pending review gate before export or YOLO training.
     const reviewProfile: Sam3BatchV2ReviewProfile = 'high_recall';
     const conceptOptions = buildBatchV2ConceptApplyOptions(reviewProfile);
-    const result = await this.awsSam3Service.applyConceptExemplar({
-      exemplarId: conceptExemplarId,
-      imageBuffer,
-      imageId: asset.id,
-      options: conceptOptions,
-    });
-
-    if (!result.success || !result.data) {
-      return {
-        assetId: asset.id,
-        detections: [],
-        outcome: classifyInferenceFailure(result.errorCode, result.error),
-        errorCode: result.errorCode || 'CONCEPT_INFERENCE_FAILED',
-        errorMessage: result.error || `Concept propagation failed for ${weedType}.`,
-      };
-    }
-
-    const candidates = await this.getConceptCandidatesWithFallback({
+    const candidates = await this.getConceptCandidatesFromEnsemble({
       asset,
       imageBuffer,
-      exemplarId: conceptExemplarId,
-      primaryDetections: result.data.detections,
+      exemplars: exemplarRefs,
       primaryOptions: conceptOptions,
       reviewProfile,
-      failureCode: 'CONCEPT_FALLBACK_FAILED',
+      failureCode: 'CONCEPT_INFERENCE_FAILED',
     });
     const refinement = await this.refineConceptDetectionsWithBoxPrompts(
       asset,
@@ -1802,11 +1832,113 @@ export class Sam3BatchV2Service {
       assetId: asset.id,
       detections: refinement.detections,
       outcome: refinement.detections.length > 0 ? 'success' : 'zero_detections',
-      backendMode: 'concept_refined',
+      backendMode: 'concept_ensemble_refined',
       candidateCount: refinement.candidateCount,
       refinementBoxCount: refinement.refinementBoxCount,
       refinementDetectionCount: refinement.refinementDetectionCount,
     };
+  }
+
+  private async getConceptCandidatesFromEnsemble({
+    asset,
+    imageBuffer,
+    exemplars,
+    primaryOptions,
+    reviewProfile = 'balanced',
+    failureCode,
+  }: {
+    asset: AssetRecord;
+    imageBuffer: Buffer;
+    exemplars: ConceptExemplarRef[];
+    primaryOptions: SAM3ConceptApplyOptions;
+    reviewProfile?: Sam3BatchV2ReviewProfile;
+    failureCode: string;
+  }): Promise<SAM3ConceptDetection[]> {
+    const minTargetCandidates = getBatchV2MinTargetCandidates(reviewProfile);
+    const maxTargetCandidates = getBatchV2MaxTargetCandidates(reviewProfile);
+    const primaryCandidates = await this.collectConceptCandidatesForExemplars({
+      asset,
+      imageBuffer,
+      exemplars,
+      options: primaryOptions,
+      failureCode,
+    });
+    const mergedPrimaryCandidates = dedupeAndLimitConceptDetections(
+      primaryCandidates,
+      primaryOptions,
+      maxTargetCandidates
+    );
+
+    if (mergedPrimaryCandidates.length >= minTargetCandidates) {
+      return mergedPrimaryCandidates;
+    }
+
+    const fallbackOptions = buildBatchV2ConceptFallbackApplyOptions(reviewProfile);
+    const fallbackCandidates = await this.collectConceptCandidatesForExemplars({
+      asset,
+      imageBuffer,
+      exemplars,
+      options: fallbackOptions,
+      failureCode: 'CONCEPT_FALLBACK_FAILED',
+    });
+    const mergedCandidates = dedupeAndLimitConceptDetections(
+      [...mergedPrimaryCandidates, ...fallbackCandidates],
+      fallbackOptions,
+      maxTargetCandidates
+    );
+
+    if (fallbackCandidates.length > 0) {
+      console.warn(
+        `[SAM3 V2] Target ${asset.id} used ensemble fallback concept threshold ` +
+          `${fallbackOptions.similarityThreshold} after strict threshold ` +
+          `${primaryOptions.similarityThreshold} returned ${mergedPrimaryCandidates.length} ` +
+          `candidate(s), below target floor ${minTargetCandidates}.`
+      );
+    }
+
+    return mergedCandidates;
+  }
+
+  private async collectConceptCandidatesForExemplars({
+    asset,
+    imageBuffer,
+    exemplars,
+    options,
+    failureCode,
+  }: {
+    asset: AssetRecord;
+    imageBuffer: Buffer;
+    exemplars: ConceptExemplarRef[];
+    options: SAM3ConceptApplyOptions;
+    failureCode: string;
+  }): Promise<SAM3ConceptDetection[]> {
+    const candidates: SAM3ConceptDetection[] = [];
+
+    for (const exemplar of exemplars) {
+      const result = await this.awsSam3Service.applyConceptExemplar({
+        exemplarId: exemplar.exemplarId,
+        imageBuffer,
+        imageId: asset.id,
+        options,
+      });
+
+      if (!result.success || !result.data) {
+        const label =
+          typeof exemplar.sourceBoxIndex === 'number'
+            ? `source box ${exemplar.sourceBoxIndex + 1}`
+            : `exemplar ${exemplar.exemplarId}`;
+        throw createNamedError(
+          'InferenceFailureError',
+          `SAM3 concept propagation failed for ${asset.id} using ${label}: ` +
+            `${result.error || 'unknown error'}`,
+          result.errorCode || failureCode
+        );
+      }
+
+      candidates.push(...filterBatchV2ConceptDetections(result.data.detections, options));
+    }
+
+    return candidates;
   }
 
   private async getConceptCandidatesWithFallback({
