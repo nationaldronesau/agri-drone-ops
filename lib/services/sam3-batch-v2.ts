@@ -242,6 +242,9 @@ export interface Sam3BatchV2StageLogEntry {
   backendMode?: string;
   backendWarning?: string;
   detectionCount?: number;
+  candidateCount?: number;
+  refinementBoxCount?: number;
+  refinementDetectionCount?: number;
   durationMs?: number;
   gpuMemoryMb?: number;
   estimatedMemoryMb?: number;
@@ -352,6 +355,7 @@ interface AwsSam3Like {
     className: string;
     minSize?: number;
     maxSize?: number | null;
+    returnPolygons?: boolean;
   }): Promise<{
     success: boolean;
     response: {
@@ -431,6 +435,16 @@ interface AssetInferenceResult {
   errorMessage?: string;
   backendMode?: string;
   backendWarning?: string;
+  candidateCount?: number;
+  refinementBoxCount?: number;
+  refinementDetectionCount?: number;
+}
+
+interface ConceptRefinementResult {
+  detections: AssetInferenceResult['detections'];
+  candidateCount: number;
+  refinementBoxCount: number;
+  refinementDetectionCount: number;
 }
 
 interface GpuAdmissionResult {
@@ -446,10 +460,23 @@ function defaultSleep(ms: number) {
   });
 }
 
-function createNamedError(name: string, message: string) {
+interface NamedError extends Error {
+  errorCode?: string;
+}
+
+function createNamedError(name: string, message: string, errorCode?: string) {
   const error = new Error(message);
   error.name = name;
+  if (errorCode) {
+    (error as NamedError).errorCode = errorCode;
+  }
   return error;
+}
+
+function getErrorCode(error: unknown, fallback: string): string {
+  return error instanceof Error && typeof (error as NamedError).errorCode === 'string'
+    ? (error as NamedError).errorCode!
+    : fallback;
 }
 
 export function parseStageLog(stageLog: unknown): Sam3BatchV2StageLogEntry[] {
@@ -1493,19 +1520,29 @@ export class Sam3BatchV2Service {
           visualCropSource: prepared.mode === 'visual_crop_match' ? prepared.visualCropSource : undefined,
           backendMode: result.backendMode,
           backendWarning: result.backendWarning,
+          candidateCount: result.candidateCount,
+          refinementBoxCount: result.refinementBoxCount,
+          refinementDetectionCount: result.refinementDetectionCount,
           durationMs: this.now().getTime() - runStartedAt,
         });
       } catch (error) {
+        const isInferenceFailure = error instanceof Error && error.name === 'InferenceFailureError';
+        const errorCode = getErrorCode(
+          error,
+          isInferenceFailure ? 'SAM3_INFERENCE_FAILED' : 'ASSET_FETCH_FAILED'
+        );
         result = {
           assetId: asset.id,
           detections: [],
-          outcome: 'prepare_error',
-          errorCode: 'ASSET_FETCH_FAILED',
+          outcome: isInferenceFailure
+            ? classifyInferenceFailure(errorCode, error instanceof Error ? error.message : undefined)
+            : 'prepare_error',
+          errorCode,
           errorMessage: error instanceof Error ? error.message : 'Failed to fetch asset image.',
         };
 
         await this.appendStageLog(batchJobId, stageLog, {
-          stage: 'prepare',
+          stage: isInferenceFailure ? 'run_sam3' : 'prepare',
           status: 'failed',
           attempt: attemptsMade,
           assetId: asset.id,
@@ -1690,7 +1727,7 @@ export class Sam3BatchV2Service {
       reviewProfile,
       failureCode: 'VISUAL_MATCH_EXEMPLAR_FALLBACK_FAILED',
     });
-    const detections = await this.refineConceptDetectionsWithBoxPrompts(
+    const refinement = await this.refineConceptDetectionsWithBoxPrompts(
       asset,
       imageBuffer,
       className,
@@ -1699,8 +1736,12 @@ export class Sam3BatchV2Service {
 
     return {
       assetId: asset.id,
-      detections,
-      outcome: detections.length > 0 ? 'success' : 'zero_detections',
+      detections: refinement.detections,
+      outcome: refinement.detections.length > 0 ? 'success' : 'zero_detections',
+      backendMode: 'concept_refined',
+      candidateCount: refinement.candidateCount,
+      refinementBoxCount: refinement.refinementBoxCount,
+      refinementDetectionCount: refinement.refinementDetectionCount,
     };
   }
 
@@ -1750,7 +1791,7 @@ export class Sam3BatchV2Service {
       reviewProfile,
       failureCode: 'CONCEPT_FALLBACK_FAILED',
     });
-    const detections = await this.refineConceptDetectionsWithBoxPrompts(
+    const refinement = await this.refineConceptDetectionsWithBoxPrompts(
       asset,
       imageBuffer,
       weedType,
@@ -1759,8 +1800,12 @@ export class Sam3BatchV2Service {
 
     return {
       assetId: asset.id,
-      detections,
-      outcome: detections.length > 0 ? 'success' : 'zero_detections',
+      detections: refinement.detections,
+      outcome: refinement.detections.length > 0 ? 'success' : 'zero_detections',
+      backendMode: 'concept_refined',
+      candidateCount: refinement.candidateCount,
+      refinementBoxCount: refinement.refinementBoxCount,
+      refinementDetectionCount: refinement.refinementDetectionCount,
     };
   }
 
@@ -1798,11 +1843,12 @@ export class Sam3BatchV2Service {
 
     if (!fallbackResult.success || !fallbackResult.data) {
       const code = fallbackResult.errorCode || failureCode;
-      const message = fallbackResult.error ? ` ${fallbackResult.error}` : '';
-      console.warn(
-        `[SAM3 V2] Target fallback matching failed for ${asset.id}: ${code}${message}`
+      const message = fallbackResult.error || 'Lower-threshold concept matching failed.';
+      throw createNamedError(
+        'InferenceFailureError',
+        `SAM3 high-recall candidate expansion failed for ${asset.id}: ${message}`,
+        code
       );
-      return dedupeAndLimitConceptDetections(primaryCandidates, primaryOptions, maxTargetCandidates);
     }
 
     const fallbackCandidates = filterBatchV2ConceptDetections(
@@ -1832,10 +1878,17 @@ export class Sam3BatchV2Service {
     imageBuffer: Buffer,
     className: string,
     candidates: SAM3ConceptDetection[]
-  ): Promise<AssetInferenceResult['detections']> {
+  ): Promise<ConceptRefinementResult> {
     if (candidates.length === 0) {
-      return [];
+      return {
+        detections: [],
+        candidateCount: 0,
+        refinementBoxCount: 0,
+        refinementDetectionCount: 0,
+      };
     }
+
+    await this.ensureSam3ReadyForBoxRefinement(asset.id);
 
     const resized = await this.awsSam3Service.resizeImage(imageBuffer);
     const boxes = candidates
@@ -1843,20 +1896,27 @@ export class Sam3BatchV2Service {
       .filter(isValidBox);
 
     if (boxes.length === 0) {
-      return [];
+      throw createNamedError(
+        'InferenceFailureError',
+        `SAM3 box refinement could not build valid boxes for ${asset.id}.`,
+        'SAM3_REFINEMENT_INVALID_BOXES'
+      );
     }
 
     const result = await this.awsSam3Service.segment({
       image: resized.buffer.toString('base64'),
       boxes,
       className,
+      returnPolygons: true,
     });
 
     if (!result.success || !result.response || result.response.detections.length === 0) {
-      console.warn(
-        `[SAM3 V2] Target box refinement failed for ${asset.id}; falling back to concept candidates.`
+      const message = result.error || 'SAM3 box refinement returned no detections.';
+      throw createNamedError(
+        'InferenceFailureError',
+        `SAM3 box refinement failed for ${asset.id}: ${message}`,
+        result.errorCode || 'SAM3_REFINEMENT_FAILED'
       );
-      return candidates.map(mapConceptDetectionToAssetDetection);
     }
 
     const matchedCandidateKeys = new Set<string>();
@@ -1891,14 +1951,54 @@ export class Sam3BatchV2Service {
       .map(mapConceptDetectionToAssetDetection);
 
     if (refinedDetections.length === 0) {
-      console.warn(
+      throw createNamedError(
+        'InferenceFailureError',
         `[SAM3 V2] Target box refinement drifted away from candidates for ${asset.id}; ` +
-          'falling back to concept candidates.'
+          'no refined detection overlapped the source candidates.',
+        'SAM3_REFINEMENT_DRIFT'
       );
-      return candidates.map(mapConceptDetectionToAssetDetection);
     }
 
-    return [...refinedDetections, ...unmatchedCandidates];
+    if (unmatchedCandidates.length > 0) {
+      console.warn(
+        `[SAM3 V2] Target ${asset.id} dropped ${unmatchedCandidates.length} unrefined ` +
+          'concept candidate(s) instead of falling back silently.'
+      );
+    }
+
+    return {
+      detections: refinedDetections,
+      candidateCount: candidates.length,
+      refinementBoxCount: boxes.length,
+      refinementDetectionCount: result.response.detections.length,
+    };
+  }
+
+  private async ensureSam3ReadyForBoxRefinement(assetId: string): Promise<void> {
+    let status: Awaited<ReturnType<AwsSam3Like['refreshStatus']>> | null = null;
+
+    try {
+      status = await this.awsSam3Service.refreshStatus();
+    } catch (error) {
+      throw createNamedError(
+        'InferenceFailureError',
+        `SAM3 readiness check failed before box refinement for ${assetId}: ` +
+          `${error instanceof Error ? error.message : 'unknown error'}`,
+        'SAM3_REFINEMENT_READINESS_FAILED'
+      );
+    }
+
+    const ready = this.awsSam3Service.isReady();
+    if (!ready) {
+      throw createNamedError(
+        'InferenceFailureError',
+        `SAM3 box refinement is not ready for ${assetId} ` +
+          `(state: ${status?.instanceState || 'unknown'}, ` +
+          `modelLoaded: ${String(status?.modelLoaded ?? 'unknown')}, ` +
+          `ipAddress: ${status?.ipAddress || 'none'}).`,
+        'SAM3_REFINEMENT_NOT_READY'
+      );
+    }
   }
 
   private async persistAssetResult(
