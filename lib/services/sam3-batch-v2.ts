@@ -59,6 +59,15 @@ export const SAM3_BATCH_V2_FALLBACK_SIMILARITY_THRESHOLD =
   parseOptionalNumber(process.env.SAM3_CONCEPT_FALLBACK_SIMILARITY_THRESHOLD) ?? 0.5;
 export const SAM3_BATCH_V2_FALLBACK_TOP_K =
   parseOptionalInt(process.env.SAM3_CONCEPT_FALLBACK_TOP_K) ?? 40;
+export type Sam3BatchV2ReviewProfile = 'balanced' | 'high_recall';
+export const SAM3_BATCH_V2_HIGH_RECALL_SIMILARITY_THRESHOLD =
+  parseOptionalNumber(process.env.SAM3_CONCEPT_HIGH_RECALL_SIMILARITY_THRESHOLD) ?? 0.75;
+export const SAM3_BATCH_V2_HIGH_RECALL_TOP_K =
+  parseOptionalInt(process.env.SAM3_CONCEPT_HIGH_RECALL_TOP_K) ?? 180;
+export const SAM3_BATCH_V2_HIGH_RECALL_FALLBACK_SIMILARITY_THRESHOLD =
+  parseOptionalNumber(process.env.SAM3_CONCEPT_HIGH_RECALL_FALLBACK_SIMILARITY_THRESHOLD) ?? 0.65;
+export const SAM3_BATCH_V2_HIGH_RECALL_FALLBACK_TOP_K =
+  parseOptionalInt(process.env.SAM3_CONCEPT_HIGH_RECALL_FALLBACK_TOP_K) ?? 120;
 export const SAM3_BATCH_V2_MIN_TARGET_CANDIDATES = Math.max(
   0,
   parseOptionalInt(process.env.SAM3_CONCEPT_MIN_TARGET_CANDIDATES) ?? 25
@@ -67,6 +76,15 @@ export const SAM3_BATCH_V2_MAX_TARGET_CANDIDATES = Math.max(
   SAM3_BATCH_V2_MIN_TARGET_CANDIDATES,
   parseOptionalInt(process.env.SAM3_CONCEPT_MAX_TARGET_CANDIDATES) ??
     SAM3_BATCH_V2_DEFAULT_TOP_K
+);
+export const SAM3_BATCH_V2_HIGH_RECALL_MIN_TARGET_CANDIDATES = Math.max(
+  0,
+  parseOptionalInt(process.env.SAM3_CONCEPT_HIGH_RECALL_MIN_TARGET_CANDIDATES) ?? 50
+);
+export const SAM3_BATCH_V2_HIGH_RECALL_MAX_TARGET_CANDIDATES = Math.max(
+  SAM3_BATCH_V2_HIGH_RECALL_MIN_TARGET_CANDIDATES,
+  parseOptionalInt(process.env.SAM3_CONCEPT_HIGH_RECALL_MAX_TARGET_CANDIDATES) ??
+    SAM3_BATCH_V2_HIGH_RECALL_TOP_K
 );
 export const SAM3_BATCH_V2_MIN_REFINEMENT_IOU = Math.max(
   0,
@@ -83,22 +101,56 @@ export const SAM3_BATCH_V2_SOURCE_DETECTION_MIN_ANCHOR_OVERLAP = Math.max(
     parseOptionalNumber(process.env.SAM3_SOURCE_DETECTION_MIN_ANCHOR_OVERLAP) ?? 0.2
   )
 );
-export function buildBatchV2ConceptApplyOptions(): SAM3ConceptApplyOptions {
+export function resolveBatchV2ReviewProfileForMode(
+  mode: Sam3BatchV2Mode
+): Sam3BatchV2ReviewProfile {
+  return mode === 'concept_propagation' ? 'high_recall' : 'balanced';
+}
+
+export function getBatchV2MinTargetCandidates(
+  profile: Sam3BatchV2ReviewProfile = 'balanced'
+): number {
+  return profile === 'high_recall'
+    ? SAM3_BATCH_V2_HIGH_RECALL_MIN_TARGET_CANDIDATES
+    : SAM3_BATCH_V2_MIN_TARGET_CANDIDATES;
+}
+
+export function getBatchV2MaxTargetCandidates(
+  profile: Sam3BatchV2ReviewProfile = 'balanced'
+): number {
+  return profile === 'high_recall'
+    ? SAM3_BATCH_V2_HIGH_RECALL_MAX_TARGET_CANDIDATES
+    : SAM3_BATCH_V2_MAX_TARGET_CANDIDATES;
+}
+
+export function buildBatchV2ConceptApplyOptions(
+  profile: Sam3BatchV2ReviewProfile = 'balanced'
+): SAM3ConceptApplyOptions {
+  const highRecall = profile === 'high_recall';
   return {
     returnPolygons: true,
-    similarityThreshold: SAM3_BATCH_V2_DEFAULT_SIMILARITY_THRESHOLD,
-    topK: SAM3_BATCH_V2_DEFAULT_TOP_K,
+    similarityThreshold: highRecall
+      ? SAM3_BATCH_V2_HIGH_RECALL_SIMILARITY_THRESHOLD
+      : SAM3_BATCH_V2_DEFAULT_SIMILARITY_THRESHOLD,
+    topK: highRecall ? SAM3_BATCH_V2_HIGH_RECALL_TOP_K : SAM3_BATCH_V2_DEFAULT_TOP_K,
     minBoxSize: SAM3_BATCH_V2_DEFAULT_MIN_BOX_SIZE,
     maxBoxSize: SAM3_BATCH_V2_DEFAULT_MAX_BOX_SIZE,
     nmsThreshold: SAM3_BATCH_V2_DEFAULT_NMS_THRESHOLD,
   };
 }
 
-export function buildBatchV2ConceptFallbackApplyOptions(): SAM3ConceptApplyOptions {
+export function buildBatchV2ConceptFallbackApplyOptions(
+  profile: Sam3BatchV2ReviewProfile = 'balanced'
+): SAM3ConceptApplyOptions {
+  const highRecall = profile === 'high_recall';
   return {
     returnPolygons: true,
-    similarityThreshold: SAM3_BATCH_V2_FALLBACK_SIMILARITY_THRESHOLD,
-    topK: SAM3_BATCH_V2_FALLBACK_TOP_K,
+    similarityThreshold: highRecall
+      ? SAM3_BATCH_V2_HIGH_RECALL_FALLBACK_SIMILARITY_THRESHOLD
+      : SAM3_BATCH_V2_FALLBACK_SIMILARITY_THRESHOLD,
+    topK: highRecall
+      ? SAM3_BATCH_V2_HIGH_RECALL_FALLBACK_TOP_K
+      : SAM3_BATCH_V2_FALLBACK_TOP_K,
     minBoxSize: SAM3_BATCH_V2_DEFAULT_MIN_BOX_SIZE,
     maxBoxSize: SAM3_BATCH_V2_DEFAULT_MAX_BOX_SIZE,
     nmsThreshold: SAM3_BATCH_V2_DEFAULT_NMS_THRESHOLD,
@@ -185,6 +237,7 @@ export interface Sam3BatchV2StageLogEntry {
   operatorCropCount?: number;
   sourceDetectionCropCount?: number;
   modeUsed?: 'box_prompt_match' | 'source_box_match' | 'visual_crops' | 'concept_propagation';
+  reviewProfile?: Sam3BatchV2ReviewProfile;
   visualCropSource?: 'operator' | 'operator_crops' | 'server_built_crops' | 'source_detections' | 'concept_exemplar';
   backendMode?: string;
   backendWarning?: string;
@@ -623,7 +676,7 @@ function bboxIou(
 function dedupeAndLimitConceptDetections(
   detections: SAM3ConceptDetection[],
   options: SAM3ConceptApplyOptions,
-  limit = SAM3_BATCH_V2_MAX_TARGET_CANDIDATES
+  limit = getBatchV2MaxTargetCandidates()
 ): SAM3ConceptDetection[] {
   const nmsThreshold =
     typeof options.nmsThreshold === 'number'
@@ -1324,12 +1377,14 @@ export class Sam3BatchV2Service {
   ): Promise<AssetInferenceResult[]> {
     const results: AssetInferenceResult[] = [];
     const batchJobId = prepared.batchJobId;
+    const reviewProfile = resolveBatchV2ReviewProfileForMode(prepared.mode);
 
     await this.appendStageLog(batchJobId, stageLog, {
       stage: 'run_sam3',
       status: 'started',
       attempt: attemptsMade,
       totalAssets: prepared.assets.length + prepared.missingAssetIds.length,
+      reviewProfile,
     });
     await this.appendStageLog(batchJobId, stageLog, {
       stage: 'persist',
@@ -1432,6 +1487,7 @@ export class Sam3BatchV2Service {
             prepared.mode === 'visual_crop_match'
               ? 'visual_crops'
               : 'concept_propagation',
+          reviewProfile,
           cropCount: prepared.mode === 'visual_crop_match' ? prepared.exemplarCrops.length : undefined,
           operatorCropCount: prepared.mode === 'visual_crop_match' ? prepared.operatorCropCount : undefined,
           visualCropSource: prepared.mode === 'visual_crop_match' ? prepared.visualCropSource : undefined,
@@ -1606,7 +1662,8 @@ export class Sam3BatchV2Service {
     exemplarId: string,
     className: string
   ): Promise<AssetInferenceResult> {
-    const conceptOptions = buildBatchV2ConceptApplyOptions();
+    const reviewProfile: Sam3BatchV2ReviewProfile = 'balanced';
+    const conceptOptions = buildBatchV2ConceptApplyOptions(reviewProfile);
     const result = await this.awsSam3Service.applyConceptExemplar({
       exemplarId,
       imageBuffer,
@@ -1630,6 +1687,7 @@ export class Sam3BatchV2Service {
       exemplarId,
       primaryDetections: result.data.detections,
       primaryOptions: conceptOptions,
+      reviewProfile,
       failureCode: 'VISUAL_MATCH_EXEMPLAR_FALLBACK_FAILED',
     });
     const detections = await this.refineConceptDetectionsWithBoxPrompts(
@@ -1662,7 +1720,10 @@ export class Sam3BatchV2Service {
       };
     }
 
-    const conceptOptions = buildBatchV2ConceptApplyOptions();
+    // Dataset propagation is intentionally high recall: every candidate still
+    // enters the pending review gate before export or YOLO training.
+    const reviewProfile: Sam3BatchV2ReviewProfile = 'high_recall';
+    const conceptOptions = buildBatchV2ConceptApplyOptions(reviewProfile);
     const result = await this.awsSam3Service.applyConceptExemplar({
       exemplarId: conceptExemplarId,
       imageBuffer,
@@ -1686,6 +1747,7 @@ export class Sam3BatchV2Service {
       exemplarId: conceptExemplarId,
       primaryDetections: result.data.detections,
       primaryOptions: conceptOptions,
+      reviewProfile,
       failureCode: 'CONCEPT_FALLBACK_FAILED',
     });
     const detections = await this.refineConceptDetectionsWithBoxPrompts(
@@ -1708,6 +1770,7 @@ export class Sam3BatchV2Service {
     exemplarId,
     primaryDetections,
     primaryOptions,
+    reviewProfile = 'balanced',
     failureCode,
   }: {
     asset: AssetRecord;
@@ -1715,14 +1778,17 @@ export class Sam3BatchV2Service {
     exemplarId: string;
     primaryDetections: SAM3ConceptDetection[];
     primaryOptions: SAM3ConceptApplyOptions;
+    reviewProfile?: Sam3BatchV2ReviewProfile;
     failureCode: string;
   }): Promise<SAM3ConceptDetection[]> {
+    const minTargetCandidates = getBatchV2MinTargetCandidates(reviewProfile);
+    const maxTargetCandidates = getBatchV2MaxTargetCandidates(reviewProfile);
     const primaryCandidates = filterBatchV2ConceptDetections(primaryDetections, primaryOptions);
-    if (primaryCandidates.length >= SAM3_BATCH_V2_MIN_TARGET_CANDIDATES) {
-      return dedupeAndLimitConceptDetections(primaryCandidates, primaryOptions);
+    if (primaryCandidates.length >= minTargetCandidates) {
+      return dedupeAndLimitConceptDetections(primaryCandidates, primaryOptions, maxTargetCandidates);
     }
 
-    const fallbackOptions = buildBatchV2ConceptFallbackApplyOptions();
+    const fallbackOptions = buildBatchV2ConceptFallbackApplyOptions(reviewProfile);
     const fallbackResult = await this.awsSam3Service.applyConceptExemplar({
       exemplarId,
       imageBuffer,
@@ -1736,7 +1802,7 @@ export class Sam3BatchV2Service {
       console.warn(
         `[SAM3 V2] Target fallback matching failed for ${asset.id}: ${code}${message}`
       );
-      return dedupeAndLimitConceptDetections(primaryCandidates, primaryOptions);
+      return dedupeAndLimitConceptDetections(primaryCandidates, primaryOptions, maxTargetCandidates);
     }
 
     const fallbackCandidates = filterBatchV2ConceptDetections(
@@ -1745,7 +1811,8 @@ export class Sam3BatchV2Service {
     );
     const mergedCandidates = dedupeAndLimitConceptDetections(
       [...primaryCandidates, ...fallbackCandidates],
-      fallbackOptions
+      fallbackOptions,
+      maxTargetCandidates
     );
 
     if (fallbackCandidates.length > 0) {
@@ -1753,7 +1820,7 @@ export class Sam3BatchV2Service {
         `[SAM3 V2] Target ${asset.id} used fallback concept threshold ` +
           `${fallbackOptions.similarityThreshold} after strict threshold ` +
           `${primaryOptions.similarityThreshold} returned ${primaryCandidates.length} ` +
-          `candidate(s), below target floor ${SAM3_BATCH_V2_MIN_TARGET_CANDIDATES}.`
+          `candidate(s), below target floor ${minTargetCandidates}.`
       );
     }
 
