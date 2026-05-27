@@ -446,6 +446,8 @@ interface ConceptRefinementResult {
   candidateCount: number;
   refinementBoxCount: number;
   refinementDetectionCount: number;
+  usedCandidateFallback?: boolean;
+  backendWarning?: string;
 }
 
 interface ConceptExemplarRef {
@@ -1746,7 +1748,8 @@ export class Sam3BatchV2Service {
       assetId: asset.id,
       detections: refinement.detections,
       outcome: refinement.detections.length > 0 ? 'success' : 'zero_detections',
-      backendMode: 'concept_refined',
+      backendMode: refinement.usedCandidateFallback ? 'concept_candidates_unrefined' : 'concept_refined',
+      backendWarning: refinement.backendWarning,
       candidateCount: refinement.candidateCount,
       refinementBoxCount: refinement.refinementBoxCount,
       refinementDetectionCount: refinement.refinementDetectionCount,
@@ -1832,7 +1835,10 @@ export class Sam3BatchV2Service {
       assetId: asset.id,
       detections: refinement.detections,
       outcome: refinement.detections.length > 0 ? 'success' : 'zero_detections',
-      backendMode: 'concept_ensemble_refined',
+      backendMode: refinement.usedCandidateFallback
+        ? 'concept_ensemble_candidates_unrefined'
+        : 'concept_ensemble_refined',
+      backendWarning: refinement.backendWarning,
       candidateCount: refinement.candidateCount,
       refinementBoxCount: refinement.refinementBoxCount,
       refinementDetectionCount: refinement.refinementDetectionCount,
@@ -2020,34 +2026,62 @@ export class Sam3BatchV2Service {
       };
     }
 
-    await this.ensureSam3ReadyForBoxRefinement(asset.id);
+    let resized: Awaited<ReturnType<AwsSam3Like['resizeImage']>>;
+    let boxes: BoxCoordinate[];
 
-    const resized = await this.awsSam3Service.resizeImage(imageBuffer);
-    const boxes = candidates
-      .map((candidate) => bboxToBoxCoordinate(candidate.bbox, resized.scaling.scaleFactor))
-      .filter(isValidBox);
-
-    if (boxes.length === 0) {
-      throw createNamedError(
-        'InferenceFailureError',
-        `SAM3 box refinement could not build valid boxes for ${asset.id}.`,
-        'SAM3_REFINEMENT_INVALID_BOXES'
+    try {
+      await this.ensureSam3ReadyForBoxRefinement(asset.id);
+      resized = await this.awsSam3Service.resizeImage(imageBuffer);
+      boxes = candidates
+        .map((candidate) => bboxToBoxCoordinate(candidate.bbox, resized.scaling.scaleFactor))
+        .filter(isValidBox);
+    } catch (error) {
+      return this.buildConceptCandidateFallbackResult(
+        asset.id,
+        candidates,
+        0,
+        0,
+        error instanceof Error ? error.message : 'SAM3 box refinement could not prepare candidates.'
       );
     }
 
-    const result = await this.awsSam3Service.segment({
-      image: resized.buffer.toString('base64'),
-      boxes,
-      className,
-      returnPolygons: true,
-    });
+    if (boxes.length === 0) {
+      return this.buildConceptCandidateFallbackResult(
+        asset.id,
+        candidates,
+        0,
+        0,
+        'SAM3 box refinement could not build valid boxes.'
+      );
+    }
+
+    let result: Awaited<ReturnType<AwsSam3Like['segment']>>;
+
+    try {
+      result = await this.awsSam3Service.segment({
+        image: resized.buffer.toString('base64'),
+        boxes,
+        className,
+        returnPolygons: true,
+      });
+    } catch (error) {
+      return this.buildConceptCandidateFallbackResult(
+        asset.id,
+        candidates,
+        boxes.length,
+        0,
+        error instanceof Error ? error.message : 'SAM3 box refinement request failed.'
+      );
+    }
 
     if (!result.success || !result.response || result.response.detections.length === 0) {
       const message = result.error || 'SAM3 box refinement returned no detections.';
-      throw createNamedError(
-        'InferenceFailureError',
-        `SAM3 box refinement failed for ${asset.id}: ${message}`,
-        result.errorCode || 'SAM3_REFINEMENT_FAILED'
+      return this.buildConceptCandidateFallbackResult(
+        asset.id,
+        candidates,
+        boxes.length,
+        result.response?.detections.length ?? 0,
+        message
       );
     }
 
@@ -2103,6 +2137,30 @@ export class Sam3BatchV2Service {
       candidateCount: candidates.length,
       refinementBoxCount: boxes.length,
       refinementDetectionCount: result.response.detections.length,
+    };
+  }
+
+  private buildConceptCandidateFallbackResult(
+    assetId: string,
+    candidates: SAM3ConceptDetection[],
+    refinementBoxCount: number,
+    refinementDetectionCount: number,
+    reason: string
+  ): ConceptRefinementResult {
+    const detections = candidates.map(mapConceptDetectionToAssetDetection);
+    const backendWarning =
+      `SAM3 box refinement failed for ${assetId}; saved ${detections.length} ` +
+      `unrefined concept candidate(s) as pending review items: ${reason}`;
+
+    console.warn(`[SAM3 V2] ${backendWarning}`);
+
+    return {
+      detections,
+      candidateCount: candidates.length,
+      refinementBoxCount,
+      refinementDetectionCount,
+      usedCandidateFallback: true,
+      backendWarning,
     };
   }
 

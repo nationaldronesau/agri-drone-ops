@@ -730,6 +730,94 @@ describe('sam3-batch-v2', () => {
     });
   });
 
+  it('saves concept candidate polygons for review when box refinement fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const candidates = Array.from({ length: 50 }, (_, index) =>
+      makeConceptDetection(index, 0.84)
+    );
+    const applyConceptExemplar = vi.fn().mockResolvedValue({
+      success: true,
+      data: {
+        detections: candidates,
+        processingTimeMs: 8,
+      },
+    });
+    const segment = vi.fn().mockResolvedValue({
+      success: false,
+      response: null,
+      error: 'SAM3 API error: 500 - Internal Server Error',
+      errorCode: 'API_ERROR',
+    });
+    const service = new Sam3BatchV2Service({
+      prisma: {} as never,
+      awsSam3Service: {
+        applyConceptExemplar,
+        refreshStatus: vi.fn().mockResolvedValue({
+          modelLoaded: true,
+          instanceState: 'ready',
+          ipAddress: '127.0.0.1',
+        }),
+        isReady: vi.fn().mockReturnValue(true),
+        resizeImage: vi.fn().mockImplementation(async (imageBuffer: Buffer) => ({
+          buffer: imageBuffer,
+          scaling: { scaleFactor: 1 },
+        })),
+        segment,
+      } as any,
+      acquireGpuLock: vi.fn(),
+      refreshGpuLock: vi.fn(),
+      releaseGpuLock: vi.fn(),
+      sleep: vi.fn(),
+      now: () => new Date('2026-03-31T00:00:00.000Z'),
+    });
+
+    const result = await (service as any).runConceptPropagation(
+      {
+        id: 'asset-target',
+        storageUrl: 'http://localhost/asset-target.jpg',
+        s3Key: null,
+        s3Bucket: null,
+        storageType: 'local',
+        imageWidth: 4000,
+        imageHeight: 3000,
+      },
+      Buffer.from('target-image'),
+      'concept-exemplar-1',
+      'Pine Sapling'
+    );
+
+    expect(segment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        boxes: expect.arrayContaining([{ x1: 0, y1: 10, x2: 6, y2: 18 }]),
+        returnPolygons: true,
+      })
+    );
+    expect(result).toMatchObject({
+      assetId: 'asset-target',
+      outcome: 'success',
+      backendMode: 'concept_ensemble_candidates_unrefined',
+      backendWarning: expect.stringContaining('saved 50 unrefined concept candidate(s)'),
+      candidateCount: 50,
+      refinementBoxCount: 50,
+      refinementDetectionCount: 0,
+    });
+    expect(result.detections).toHaveLength(50);
+    expect(result.detections[0]).toMatchObject({
+      bbox: [0, 10, 6, 18],
+      polygon: [
+        [0, 10],
+        [6, 10],
+        [6, 18],
+        [0, 18],
+      ],
+      confidence: 0.84,
+      similarity: 0.84,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('saved 50 unrefined concept candidate(s)')
+    );
+  });
+
   it('fails loudly when target refinement drifts away from candidates', async () => {
     const candidate = {
       bbox: [20, 25, 40, 45],
