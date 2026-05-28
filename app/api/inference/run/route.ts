@@ -9,7 +9,10 @@ import { getAuthenticatedUser, checkProjectAccess } from '@/lib/auth/api-auth';
 import { checkRedisConnection } from '@/lib/queue/redis';
 import { enqueueInferenceJob } from '@/lib/queue/inference-queue';
 import { processInferenceJob } from '@/lib/services/inference';
-import { formatModelId } from '@/lib/services/yolo';
+import {
+  isPineSaplingYoloModelId,
+  resolveYoloServiceModelName,
+} from '@/lib/services/yolo';
 import { S3Service } from '@/lib/services/s3';
 
 const MAX_SYNC_IMAGES = 50;
@@ -101,8 +104,6 @@ export async function POST(request: NextRequest) {
       where: { id: projectId },
       select: { inferenceBackend: true, activeModelId: true },
     });
-    const backendPreference = (project?.inferenceBackend || 'AUTO').toLowerCase();
-
     const effectiveModelId = requestedModelId || project?.activeModelId;
     if (!effectiveModelId) {
       return NextResponse.json(
@@ -131,6 +132,10 @@ export async function POST(request: NextRequest) {
     if (!model) {
       return NextResponse.json({ error: 'Model not found' }, { status: 404 });
     }
+
+    const backendPreference = isPineSaplingYoloModelId(effectiveModelId)
+      ? 'local'
+      : (project?.inferenceBackend || 'AUTO').toLowerCase();
 
     if (['TRAINING', 'ARCHIVED', 'FAILED'].includes(model.status)) {
       return NextResponse.json(
@@ -225,7 +230,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!preview) {
+    if (!preview && !isPineSaplingYoloModelId(effectiveModelId)) {
       const weightsReady = await ensureCanonicalWeights(model);
       if (!weightsReady.ok) {
         console.error('Failed to prepare model weights:', weightsReady.error);
@@ -236,7 +241,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const modelName = formatModelId(model.name, model.version);
+    const modelName = resolveYoloServiceModelName(model);
 
     const processingJob = await prisma.processingJob.create({
       data: {
