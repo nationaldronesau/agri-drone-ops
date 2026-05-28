@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { YOLOService } from '@/lib/services/yolo';
+import {
+  PINE_SAPLING_YOLO_MODEL_ID,
+  PINE_SAPLING_YOLO_MODEL_NAME,
+  YOLOService,
+  resolveYoloServiceModelName,
+} from '@/lib/services/yolo';
 
 describe('yolo training service', () => {
   const originalFetch = global.fetch;
@@ -72,5 +77,25 @@ describe('yolo training service', () => {
       statusCode: 503,
       message: 'Failed to connect to YOLO service: connect ECONNREFUSED',
     });
+  });
+
+  it('maps the deployed pine sapling DB model to the registered YOLO service model name', () => {
+    expect(
+      resolveYoloServiceModelName({
+        id: PINE_SAPLING_YOLO_MODEL_ID,
+        name: 'Test Pine Saplings',
+        version: 1,
+      })
+    ).toBe(PINE_SAPLING_YOLO_MODEL_NAME);
+  });
+
+  it('keeps the generic name-version mapping for other YOLO models', () => {
+    expect(
+      resolveYoloServiceModelName({
+        id: 'other-model',
+        name: 'lantana',
+        version: 3,
+      })
+    ).toBe('lantana-v3');
   });
 });

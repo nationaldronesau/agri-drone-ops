@@ -11,6 +11,14 @@ const YOLO_DISCOVERY_TTL_MS = Number.parseInt(
   10
 );
 
+export const PINE_SAPLING_YOLO_MODEL_ID =
+  process.env.PINE_SAPLING_YOLO_MODEL_ID || 'cmpp43ahk0001n5wgzn77vjrf';
+export const PINE_SAPLING_PROJECT_ID =
+  process.env.PINE_SAPLING_PROJECT_ID || 'cmo6ng4fp0001pm2zbo3341te';
+export const PINE_SAPLING_YOLO_MODEL_NAME =
+  process.env.PINE_SAPLING_YOLO_MODEL_NAME || 'pine-saplings-yolo11n-seg-glasshouse-v1';
+export const PINE_SAPLING_CLASS_NAME = 'Pine Sapling';
+
 export interface TrainingConfig {
   dataset_s3_path: string;
   model_name: string;
@@ -577,6 +585,22 @@ export default YOLOService;
 
 export function formatModelId(name: string, version: number): string {
   return `${name}-v${version}`;
+}
+
+export function isPineSaplingYoloModelId(modelId: string | null | undefined): boolean {
+  return modelId === PINE_SAPLING_YOLO_MODEL_ID;
+}
+
+export function resolveYoloServiceModelName(model: {
+  id?: string | null;
+  name: string;
+  version: number;
+}): string {
+  if (isPineSaplingYoloModelId(model.id)) {
+    return PINE_SAPLING_YOLO_MODEL_NAME;
+  }
+
+  return formatModelId(model.name, model.version);
 }
 
 export function parseModelId(modelId: string): { name: string; version?: number } {
