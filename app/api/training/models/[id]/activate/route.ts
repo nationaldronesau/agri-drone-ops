@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { getAuthenticatedUser, checkProjectAccess } from '@/lib/auth/api-auth';
-import { formatModelId } from '@/lib/services/yolo';
+import { resolveYoloServiceModelName } from '@/lib/services/yolo';
 import { yoloInferenceClient } from '@/lib/services/yolo-inference';
 import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
 import { ModelStatus } from '@prisma/client';
@@ -53,7 +53,7 @@ export async function POST(
       return NextResponse.json({ error: 'Model not found' }, { status: 404 });
     }
 
-    const modelId = formatModelId(model.name, model.version);
+    const modelId = resolveYoloServiceModelName(model);
 
     try {
       const gpuResult = await sam3Orchestrator.ensureGPUAvailable();
