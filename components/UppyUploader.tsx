@@ -30,8 +30,11 @@ export interface QueuedDetectionSummary {
   started: boolean;
   status?: string;
   jobId?: string;
+  jobIds?: string[];
   totalImages?: number;
   skippedImages?: number;
+  duplicateImages?: number;
+  skippedReason?: string;
   error?: string;
   source?: string;
 }
@@ -121,8 +124,47 @@ function buildUploadSummary(files: ProcessedUploadFile[]) {
   };
 }
 
+function aggregateAutoInferenceSummaries(
+  chunkResponses: UploadApiResponse[],
+): AutoInferenceSummary | undefined {
+  const summaries = chunkResponses
+    .map((chunkResponse) => chunkResponse.autoInference)
+    .filter((summary): summary is AutoInferenceSummary => Boolean(summary));
+
+  if (summaries.length === 0) return undefined;
+
+  const jobIds = summaries
+    .map((summary) => summary.jobId)
+    .filter((jobId): jobId is string => Boolean(jobId));
+  const errors = summaries
+    .map((summary) => summary.error)
+    .filter((error): error is string => Boolean(error));
+
+  return {
+    started: summaries.some((summary) => summary.started),
+    status: summaries.some((summary) => summary.status === "queued")
+      ? "queued"
+      : summaries.some((summary) => summary.status === "completed")
+        ? "completed"
+        : summaries.find((summary) => summary.status)?.status,
+    jobId: jobIds[0],
+    jobIds: jobIds.length > 0 ? jobIds : undefined,
+    totalImages: summaries.reduce((sum, summary) => sum + (summary.totalImages || 0), 0),
+    processedImages: summaries.reduce((sum, summary) => sum + (summary.processedImages || 0), 0),
+    detectionsFound: summaries.reduce((sum, summary) => sum + (summary.detectionsFound || 0), 0),
+    skippedImages: summaries.reduce((sum, summary) => sum + (summary.skippedImages || 0), 0),
+    duplicateImages: summaries.reduce((sum, summary) => sum + (summary.duplicateImages || 0), 0),
+    skippedReason: summaries.find((summary) => summary.skippedReason)?.skippedReason,
+    modelName: summaries.find((summary) => summary.modelName)?.modelName,
+    backend: summaries.find((summary) => summary.backend)?.backend,
+    source: summaries.find((summary) => summary.source)?.source,
+    error: errors.length > 0 ? errors.join("; ") : undefined,
+  };
+}
+
 interface UppyUploaderProps {
   projectId: string | null;
+  runActiveModel?: boolean;
   runDetection: boolean;
   detectionModels?: string[]; // Legacy: hardcoded model keys
   dynamicModels?: DynamicModel[]; // New: dynamic models from workspace
@@ -140,6 +182,7 @@ interface UppyUploaderProps {
  */
 export function UppyUploader({
   projectId,
+  runActiveModel,
   runDetection,
   detectionModels = [],
   dynamicModels = [],
@@ -155,6 +198,7 @@ export function UppyUploader({
   const uppyRef = useRef<Uppy | null>(null);
   const latestSettingsRef = useRef({
     projectId,
+    runActiveModel,
     runDetection,
     detectionModels,
     dynamicModels,
@@ -173,6 +217,7 @@ export function UppyUploader({
   useEffect(() => {
     latestSettingsRef.current = {
       projectId,
+      runActiveModel,
       runDetection,
       detectionModels,
       dynamicModels,
@@ -181,7 +226,7 @@ export function UppyUploader({
       cameraProfileId,
       disabled,
     };
-  }, [projectId, runDetection, detectionModels, dynamicModels, flightSession, cameraFov, cameraProfileId, disabled]);
+  }, [projectId, runActiveModel, runDetection, detectionModels, dynamicModels, flightSession, cameraFov, cameraProfileId, disabled]);
 
   useEffect(() => {
     callbacksRef.current = {
@@ -427,6 +472,7 @@ export function UppyUploader({
           settings.runDetection &&
           (filesPayload.length >= BULK_DETECTION_FILE_COUNT_THRESHOLD ||
             totalBytes >= BULK_DETECTION_TOTAL_BYTES_THRESHOLD);
+        const hasActiveModelOverride = typeof settings.runActiveModel === "boolean";
 
         const chunkedFiles = chunkArray(filesPayload, FINALIZATION_CHUNK_SIZE);
         const chunkResponses: UploadApiResponse[] = [];
@@ -450,7 +496,13 @@ export function UppyUploader({
               flightSession: settings.flightSession || undefined,
               cameraFov: settings.cameraFov,
               cameraProfileId: settings.cameraProfileId,
-              disableAutoInference: useQueuedRoboflowDetection,
+              runActiveModel:
+                hasActiveModelOverride && !useQueuedRoboflowDetection
+                  ? settings.runActiveModel
+                  : undefined,
+              disableAutoInference:
+                useQueuedRoboflowDetection ||
+                (hasActiveModelOverride && settings.runActiveModel === false),
             }),
           });
 
@@ -473,9 +525,7 @@ export function UppyUploader({
           message: `Processed ${aggregatedFiles.filter((file) => file.success !== false).length} of ${aggregatedFiles.length} files`,
           files: aggregatedFiles,
           summary: buildUploadSummary(aggregatedFiles),
-          autoInference:
-            chunkResponses.find((chunkResponse) => chunkResponse.autoInference)
-              ?.autoInference || undefined,
+          autoInference: aggregateAutoInferenceSummaries(chunkResponses),
         };
 
         if (useQueuedRoboflowDetection) {
