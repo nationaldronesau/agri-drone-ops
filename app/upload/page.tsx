@@ -85,6 +85,27 @@ function getModelLabel(model: TrainedModel | null): string {
   return /yolo/i.test(name) ? `${name} v${model.version}` : `${name} YOLO11 v${model.version}`;
 }
 
+function formatClassName(value: string): string {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function getDetectionIntentLabel(model: TrainedModel | null): string {
+  if (!model) return "Upload and run active model";
+
+  const classes = (model.classes || []).map(formatClassName).filter(Boolean);
+  const hasSaplingClass = classes.some((className) =>
+    /pine|sapling/.test(className)
+  );
+
+  if (hasSaplingClass) return "Upload and find pine saplings";
+  if (classes.length === 1) return `Upload and find ${classes[0]}`;
+  return "Upload and run active model";
+}
+
 function getAutoInferenceJobIds(response: UploadApiResponse | null): string[] {
   const summary = response?.autoInference;
   if (!summary) return [];
@@ -338,28 +359,58 @@ function UploadPageContent() {
     (runActiveModel && !activeModelReady) ||
     !advancedDetectionReady;
   const activeModelName = getModelLabel(activeModel);
+  const detectionIntentLabel = getDetectionIntentLabel(activeModel);
+  const activeModelBackend = selectedProjectData?.inferenceBackend || "AUTO";
   const autoInferenceJobIds = getAutoInferenceJobIds(uploadResponse);
   const autoInference = uploadResponse?.autoInference;
   const successfulUploadCount =
     uploadResponse?.files.filter((file) => file.success !== false).length || 0;
+  const firstUploadedAssetId = uploadResponse?.files.find(
+    (file) => file.success !== false && file.id
+  )?.id;
+  const imagesHref = selectedProject ? `/images?project=${selectedProject}` : "/images";
+  const annotateHref = firstUploadedAssetId
+    ? `/annotate/${firstUploadedAssetId}`
+    : imagesHref;
 
   return (
     <div className="p-6 lg:p-8">
       <div className="mx-auto max-w-5xl space-y-6">
           <Card>
             <CardHeader className="space-y-4">
-              <div>
-                <CardTitle className="text-2xl">Upload, Run Model, Review</CardTitle>
-                <CardDescription>
-                  Upload imagery safely first, then optionally run the project&apos;s active
-                  detection model and send candidates to review.
-                </CardDescription>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <CardTitle className="text-2xl">Upload Images</CardTitle>
+                  <CardDescription>
+                    Pick a project, choose whether to run its active model, then upload.
+                    Anything the model finds waits for review.
+                  </CardDescription>
+                </div>
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 lg:max-w-sm">
+                  <p className="font-semibold">Safe default</p>
+                  <p className="mt-1 text-emerald-800">
+                    Uploads finish before inference starts. Candidate detections are never
+                    approved automatically.
+                  </p>
+                </div>
               </div>
               <div className="grid gap-2 sm:grid-cols-3">
                 {[
-                  { label: "Upload", icon: Upload },
-                  { label: "Run model", icon: Brain },
-                  { label: "Review", icon: Eye },
+                  {
+                    label: "Upload",
+                    description: "Store the images first",
+                    icon: Upload,
+                  },
+                  {
+                    label: "Run model",
+                    description: "Optional background job",
+                    icon: Brain,
+                  },
+                  {
+                    label: "Review",
+                    description: "Approve before counts/export",
+                    icon: Eye,
+                  },
                 ].map((step, index) => {
                   const StepIcon = step.icon;
                   return (
@@ -375,6 +426,7 @@ function UploadPageContent() {
                           Step {index + 1}
                         </p>
                         <p className="text-sm font-medium text-slate-900">{step.label}</p>
+                        <p className="text-xs text-slate-500">{step.description}</p>
                       </div>
                     </div>
                   );
@@ -417,30 +469,51 @@ function UploadPageContent() {
                   )}
                 </div>
               )}
-              <section className="grid gap-6 md:grid-cols-2">
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="project">Select Project</Label>
-                    <Select
-                      value={selectedProject}
-                      onValueChange={setSelectedProject}
-                    >
-                      <SelectTrigger id="project">
-                        <SelectValue placeholder="Choose a project" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {projects.map((project) => (
-                          <SelectItem key={project.id} value={project.id}>
-                            {project.name}
-                            {project.location ? ` – ${project.location}` : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+              <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
+                <div className="rounded-lg border border-slate-200 bg-white p-4">
+                  <div className="mb-4">
+                    <h3 className="text-base font-semibold text-slate-900">1. Choose project</h3>
+                    <p className="text-sm text-slate-500">
+                      The project controls the active model and keeps uploads organized.
+                    </p>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="project">Project</Label>
+                      <Select
+                        value={selectedProject}
+                        onValueChange={setSelectedProject}
+                      >
+                        <SelectTrigger id="project">
+                          <SelectValue placeholder="Choose a project" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {projects.map((project) => (
+                            <SelectItem key={project.id} value={project.id}>
+                              {project.name}
+                              {project.location ? ` - ${project.location}` : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="flightSession">Flight session</Label>
+                      <Input
+                        id="flightSession"
+                        placeholder="e.g. Morning Survey A"
+                        value={flightSession}
+                        onChange={(event) => setFlightSession(event.target.value)}
+                      />
+                      <p className="text-xs text-gray-500">
+                        Optional. Used to group this upload batch.
+                      </p>
+                    </div>
                   </div>
 
                   {projects.length === 0 && (
-                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                    <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
                       <p className="mb-2 font-medium">No projects found</p>
                       <p className="mb-3 text-xs text-amber-800">
                         Create a project first so we can organize your uploads.
@@ -452,24 +525,63 @@ function UploadPageContent() {
                       </Link>
                     </div>
                   )}
+                </div>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="flightSession">
-                      Flight Session (optional)
-                    </Label>
-                    <Input
-                      id="flightSession"
-                      placeholder="e.g. Morning Survey A"
-                      value={flightSession}
-                      onChange={(event) => setFlightSession(event.target.value)}
-                    />
-                    <p className="text-xs text-gray-500">
-                      Used in the S3 key path to keep uploads organised.
-                    </p>
+                <div
+                  className={`rounded-lg border p-4 ${
+                    activeModelReady
+                      ? "border-emerald-200 bg-emerald-50"
+                      : "border-amber-200 bg-amber-50"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">
+                        This project will use
+                      </p>
+                      <p className="mt-1 text-lg font-semibold text-slate-950">
+                        {activeModelName}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-600">
+                        Backend: {activeModelBackend}
+                      </p>
+                    </div>
+                    {activeModelLoading ? (
+                      <Loader2 className="h-5 w-5 animate-spin text-slate-500" />
+                    ) : (
+                      <ShieldCheck
+                        className={`h-6 w-6 ${activeModelReady ? "text-emerald-600" : "text-amber-500"}`}
+                      />
+                    )}
                   </div>
+                  {!activeModelReady && selectedProjectData?.activeModelId ? (
+                    <p className="mt-3 rounded-md border border-amber-300 bg-white/70 px-3 py-2 text-xs text-amber-900">
+                      The active model is set but not ready yet. Upload only is still safe.
+                    </p>
+                  ) : null}
+                  {!selectedProjectData?.activeModelId ? (
+                    <p className="mt-3 rounded-md border border-amber-300 bg-white/70 px-3 py-2 text-xs text-amber-900">
+                      No active model is set for this project. Upload only is available, or use
+                      the advanced fallback below.
+                    </p>
+                  ) : null}
+                  {activeModelReady ? (
+                    <p className="mt-3 text-sm text-emerald-900">
+                      Operators can run this model after upload. Results go to review as pending
+                      candidates.
+                    </p>
+                  ) : null}
+                </div>
+              </section>
 
+              <details className="rounded-lg border border-slate-200 bg-white">
+                <summary className="flex cursor-pointer items-center gap-2 p-4 text-sm font-semibold text-slate-900 hover:bg-slate-50">
+                  <Settings className="h-4 w-4 text-slate-500" />
+                  Advanced capture settings
+                </summary>
+                <div className="grid gap-4 border-t border-slate-200 p-4 md:grid-cols-2">
                   <div className="space-y-2">
-                    <Label htmlFor="cameraProfile">Camera Profile (optional)</Label>
+                    <Label htmlFor="cameraProfile">Camera profile</Label>
                     <Select
                       value={selectedCameraProfileId}
                       onValueChange={setSelectedCameraProfileId}
@@ -482,20 +594,18 @@ function UploadPageContent() {
                         {cameraProfiles.map((profile) => (
                           <SelectItem key={profile.id} value={profile.id}>
                             {profile.name}
-                            {profile.fov ? ` – ${profile.fov}°` : ""}
+                            {profile.fov ? ` - ${profile.fov}°` : ""}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-gray-500">
-                      Applies calibrated focal length + optical center from DJI metadata.
+                      Applies calibrated focal length and optical center from DJI metadata.
                     </p>
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="cameraFov">
-                      Camera FOV Override (optional)
-                    </Label>
+                    <Label htmlFor="cameraFov">Camera FOV override</Label>
                     <Input
                       id="cameraFov"
                       type="number"
@@ -507,109 +617,123 @@ function UploadPageContent() {
                       onChange={(event) => setCameraFovInput(event.target.value)}
                     />
                     <p className="text-xs text-gray-500">
-                      Overrides DJI metadata when present. Helps fix FOV mismatch issues.
+                      Only use this when DJI metadata is missing or known to be wrong.
                     </p>
                   </div>
                 </div>
+              </details>
 
-                <div className="space-y-4">
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-semibold text-slate-900">Active detection model</p>
-                        <p className="mt-1 text-sm text-slate-600">{activeModelName}</p>
-                        <p className="mt-1 text-xs text-slate-500">
-                          Backend: {selectedProjectData?.inferenceBackend || "AUTO"}
-                        </p>
-                      </div>
-                      {activeModelLoading ? (
-                        <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
-                      ) : (
-                        <ShieldCheck
-                          className={`h-5 w-5 ${activeModelReady ? "text-emerald-600" : "text-slate-300"}`}
-                        />
-                      )}
-                    </div>
-                    {!activeModelReady && selectedProjectData?.activeModelId ? (
-                      <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                        The active model is not ready for inference yet.
-                      </p>
-                    ) : null}
-                    {!selectedProjectData?.activeModelId ? (
-                      <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                        Set an active YOLO model in Training before running inference after upload.
-                      </p>
-                    ) : null}
-                  </div>
-
-                  <div className="rounded-lg border border-slate-200 bg-white p-4">
-                    <Label className="text-sm font-semibold text-slate-900">Upload action</Label>
-                    <div className="mt-3 grid gap-2">
-                      <Button
-                        type="button"
-                        variant={uploadMode === "upload-only" ? "default" : "outline"}
-                        className="justify-start"
-                        onClick={() => setUploadMode("upload-only")}
-                      >
-                        <Upload className="mr-2 h-4 w-4" />
-                        Upload only
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={uploadMode === "run-active" ? "default" : "outline"}
-                        className="justify-start"
-                        onClick={() => {
-                          setRunDetection(false);
-                          setUploadMode("run-active");
-                        }}
-                        disabled={!selectedProjectData?.activeModelId}
-                      >
-                        <Brain className="mr-2 h-4 w-4" />
-                        Run active model after upload
-                      </Button>
-                    </div>
-                    <p className="mt-3 text-xs text-slate-500">
-                      Upload always completes first. Model runs are retryable and detections stay
-                      pending until review accepts them.
-                    </p>
-                  </div>
-
-                  <details className="rounded-lg border border-slate-200 bg-white">
-                    <summary className="flex cursor-pointer items-center gap-2 p-4 text-sm font-semibold text-slate-900 hover:bg-slate-50">
-                      <Settings className="h-4 w-4 text-slate-500" />
-                      Advanced model fallback
-                    </summary>
-                    <div className="space-y-4 border-t border-slate-200 p-4">
-                      <div className="flex items-center space-x-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                        <Checkbox
-                          id="runDetection"
-                          checked={runDetection}
-                          onCheckedChange={(checked) =>
-                            handleAdvancedFallbackChange(Boolean(checked))
-                          }
-                        />
-                        <Label
-                          htmlFor="runDetection"
-                          className="flex cursor-pointer items-center text-sm"
-                        >
-                          <Brain className="mr-2 h-4 w-4 text-slate-600" />
-                          Use Roboflow/dynamic models for this upload
-                        </Label>
-                      </div>
-
-                      {runDetection && (
-                        <ModelSelector
-                          selectedModels={selectedModelIds}
-                          onSelectionChange={setSelectedModelIds}
-                          onModelsLoaded={handleModelsLoaded}
-                          onLoadError={handleModelsError}
-                          disabled={!selectedProject}
-                        />
-                      )}
-                    </div>
-                  </details>
+              <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <div className="mb-4">
+                  <h3 className="text-base font-semibold text-slate-900">
+                    2. Choose upload action
+                  </h3>
+                  <p className="text-sm text-slate-500">
+                    Most operators only need one of these two choices.
+                  </p>
                 </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <button
+                    type="button"
+                    className={`flex min-h-[118px] w-full items-start gap-2 rounded-lg border bg-white p-3 text-left transition sm:gap-3 sm:p-4 ${
+                      uploadMode === "upload-only"
+                        ? "border-slate-900 ring-2 ring-slate-200"
+                        : "border-slate-200 hover:border-slate-300"
+                    }`}
+                    onClick={() => setUploadMode("upload-only")}
+                  >
+                    <Upload className="mt-1 h-5 w-5 shrink-0 text-slate-700" />
+                    <span className="min-w-0">
+                      <span className="block font-semibold text-slate-950">
+                        Upload images only
+                      </span>
+                      <span className="mt-1 block text-sm text-slate-600">
+                        Safest choice when you only want the files stored and organized.
+                      </span>
+                    </span>
+                    {uploadMode === "upload-only" ? (
+                      <CheckCircle2 className="ml-auto h-5 w-5 shrink-0 text-slate-900" />
+                    ) : null}
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`flex min-h-[118px] w-full items-start gap-2 rounded-lg border bg-white p-3 text-left transition sm:gap-3 sm:p-4 ${
+                      uploadMode === "run-active"
+                        ? "border-emerald-500 ring-2 ring-emerald-100"
+                        : "border-slate-200 hover:border-emerald-300"
+                    } ${
+                      !selectedProjectData?.activeModelId
+                        ? "cursor-not-allowed opacity-60"
+                        : ""
+                    }`}
+                    onClick={() => {
+                      setRunDetection(false);
+                      setUploadMode("run-active");
+                    }}
+                    disabled={!selectedProjectData?.activeModelId}
+                  >
+                    <Brain className="mt-1 h-5 w-5 shrink-0 text-emerald-700" />
+                    <span className="min-w-0">
+                      <span className="block font-semibold text-slate-950">
+                        {detectionIntentLabel}
+                      </span>
+                      <span className="mt-1 block text-sm text-slate-600">
+                        Runs after upload and sends all detections to review.
+                      </span>
+                    </span>
+                    {uploadMode === "run-active" ? (
+                      <CheckCircle2 className="ml-auto h-5 w-5 shrink-0 text-emerald-600" />
+                    ) : null}
+                  </button>
+                </div>
+                <p className="mt-3 text-xs text-slate-500">
+                  Upload always completes first. Model runs are retryable, and detections stay
+                  pending until review accepts them.
+                </p>
               </section>
+
+              <details
+                className="rounded-lg border border-slate-200 bg-white"
+                open={Boolean(selectedProjectData && !selectedProjectData.activeModelId)}
+              >
+                <summary className="flex cursor-pointer items-center gap-2 p-4 text-sm font-semibold text-slate-900 hover:bg-slate-50">
+                  <Settings className="h-4 w-4 text-slate-500" />
+                  Advanced model fallback
+                </summary>
+                <div className="space-y-4 border-t border-slate-200 p-4">
+                  <p className="text-sm text-slate-600">
+                    Use this only when the project does not have an active model, or when a
+                    specialist needs to run a Roboflow/dynamic model for comparison.
+                  </p>
+                  <div className="flex items-center space-x-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <Checkbox
+                      id="runDetection"
+                      checked={runDetection}
+                      onCheckedChange={(checked) =>
+                        handleAdvancedFallbackChange(Boolean(checked))
+                      }
+                    />
+                    <Label
+                      htmlFor="runDetection"
+                      className="flex cursor-pointer items-center text-sm"
+                    >
+                      <Brain className="mr-2 h-4 w-4 text-slate-600" />
+                      Use Roboflow/dynamic models for this upload
+                    </Label>
+                  </div>
+
+                  {runDetection && (
+                    <ModelSelector
+                      selectedModels={selectedModelIds}
+                      onSelectionChange={setSelectedModelIds}
+                      onModelsLoaded={handleModelsLoaded}
+                      onLoadError={handleModelsError}
+                      disabled={!selectedProject}
+                    />
+                  )}
+                </div>
+              </details>
 
               {!selectedProject && (
                 <div className="flex items-center space-x-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
@@ -637,15 +761,11 @@ function UploadPageContent() {
                   <div>
                     <h3 className="flex items-center text-lg font-semibold">
                       <Upload className="mr-2 h-4 w-4 text-green-600" />
-                      Direct-to-S3 Uploads
+                      3. Drop drone images here
                     </h3>
                     <p className="text-sm text-gray-500">
-                      Files are sent straight to S3 using multipart uploads, then
-                      finalized server-side.
-                    </p>
-                    <p className="text-xs text-gray-400">
-                      Step 1 uploads to S3; Step 2 reads EXIF; Step 3 runs the active model only
-                      when selected.
+                      Files are saved first. If you chose a model run, it starts after the
+                      upload batch is complete.
                     </p>
                   </div>
                 </div>
@@ -668,8 +788,8 @@ function UploadPageContent() {
 
               {processing && (
                 <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
-                  Processing uploaded files... upload finalization runs first; model inference starts
-                  only after the uploaded assets are saved.
+                  Saving uploaded files first. Model inference will start after the uploaded
+                  assets are saved.
                 </div>
               )}
 
@@ -790,17 +910,22 @@ function UploadPageContent() {
                       </div>
                     )}
 
-                  {/* Next Steps */}
-                  <section className="rounded-lg border-2 border-green-300 bg-gradient-to-r from-green-50 to-blue-50 p-6">
-                    <h3 className="mb-4 text-lg font-semibold text-gray-800">
-                      What would you like to do next?
-                    </h3>
-                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                      {autoInferenceJobIds.length > 0 && autoInference?.status === "completed" && (
+                  <section className="rounded-lg border border-slate-200 bg-white p-6">
+                    <div className="mb-4 flex flex-col gap-1">
+                      <h3 className="text-lg font-semibold text-gray-900">
+                        Next step
+                      </h3>
+                      <p className="text-sm text-gray-500">
+                        One primary action is shown first. Other tools are still available below.
+                      </p>
+                    </div>
+
+                    <div className="space-y-4">
+                      {autoInferenceJobIds.length > 0 && autoInference?.status === "completed" ? (
                         <Button
                           type="button"
                           variant="outline"
-                          className="h-auto w-full justify-start gap-3 border-2 border-amber-200 bg-white p-4 hover:border-amber-400 hover:bg-amber-50"
+                          className="h-auto w-full justify-start gap-4 border-2 border-amber-300 bg-amber-50 p-5 hover:border-amber-500 hover:bg-amber-100"
                           onClick={handleStartReview}
                           disabled={reviewStarting}
                         >
@@ -810,35 +935,62 @@ function UploadPageContent() {
                             <Eye className="h-5 w-5 text-amber-600" />
                           )}
                           <div className="text-left">
-                            <div className="font-semibold text-amber-700">Review candidates</div>
-                            <div className="text-xs text-gray-500">Accept, reject, or correct</div>
+                            <div className="text-base font-semibold text-amber-800">
+                              Review candidate detections
+                            </div>
+                            <div className="text-sm text-amber-700">
+                              Accept, reject, or correct before counts and exports.
+                            </div>
                           </div>
                           <ArrowRight className="ml-auto h-4 w-4 text-amber-400" />
                         </Button>
-                      )}
-                      {autoInferenceJobIds.length > 0 && autoInference?.status === "queued" && (
+                      ) : null}
+
+                      {autoInferenceJobIds.length > 0 && autoInference?.status === "queued" ? (
                         <Link href="/training#inference">
                           <Button
                             variant="outline"
-                            className="h-auto w-full justify-start gap-3 border-2 border-amber-200 bg-white p-4 hover:border-amber-400 hover:bg-amber-50"
+                            className="h-auto w-full justify-start gap-4 border-2 border-blue-300 bg-blue-50 p-5 hover:border-blue-500 hover:bg-blue-100"
                           >
-                            <Clock className="h-5 w-5 text-amber-600" />
+                            <Clock className="h-5 w-5 text-blue-600" />
                             <div className="text-left">
-                              <div className="font-semibold text-amber-700">Track model run</div>
-                              <div className="text-xs text-gray-500">Review when complete</div>
+                              <div className="text-base font-semibold text-blue-800">
+                                Track model run
+                              </div>
+                              <div className="text-sm text-blue-700">
+                                Review candidates when inference completes.
+                              </div>
                             </div>
-                            <ArrowRight className="ml-auto h-4 w-4 text-amber-400" />
+                            <ArrowRight className="ml-auto h-4 w-4 text-blue-400" />
+                          </Button>
+                        </Link>
+                      ) : null}
+
+                      {(!autoInference || !autoInference.started) && (
+                        <Link href={imagesHref}>
+                          <Button
+                            variant="outline"
+                            className="h-auto w-full justify-start gap-4 border-2 border-blue-300 bg-blue-50 p-5 hover:border-blue-500 hover:bg-blue-100"
+                          >
+                            <Images className="h-5 w-5 text-blue-600" />
+                            <div className="text-left">
+                              <div className="text-base font-semibold text-blue-800">
+                                View uploaded images
+                              </div>
+                              <div className="text-sm text-blue-700">
+                                Browse this project&apos;s new upload batch.
+                              </div>
+                            </div>
+                            <ArrowRight className="ml-auto h-4 w-4 text-blue-400" />
                           </Button>
                         </Link>
                       )}
-                      <Link href={
-                        uploadResponse.files.find(f => f.success !== false && f.id)?.id
-                          ? `/annotate/${uploadResponse.files.find(f => f.success !== false && f.id)?.id}`
-                          : `/images${selectedProject ? `?project=${selectedProject}` : ''}`
-                      }>
+
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <Link href={annotateHref}>
                         <Button
                           variant="outline"
-                          className="h-auto w-full justify-start gap-3 border-2 border-purple-200 bg-white p-4 hover:border-purple-400 hover:bg-purple-50"
+                          className="h-auto w-full justify-start gap-3 bg-white p-4 hover:bg-slate-50"
                         >
                           <Tags className="h-5 w-5 text-purple-600" />
                           <div className="text-left">
@@ -848,10 +1000,10 @@ function UploadPageContent() {
                           <ArrowRight className="ml-auto h-4 w-4 text-purple-400" />
                         </Button>
                       </Link>
-                      <Link href="/images">
+                      <Link href={imagesHref}>
                         <Button
                           variant="outline"
-                          className="h-auto w-full justify-start gap-3 border-2 border-blue-200 bg-white p-4 hover:border-blue-400 hover:bg-blue-50"
+                          className="h-auto w-full justify-start gap-3 bg-white p-4 hover:bg-slate-50"
                         >
                           <Images className="h-5 w-5 text-blue-600" />
                           <div className="text-left">
@@ -864,7 +1016,7 @@ function UploadPageContent() {
                       <Link href={selectedProject ? `/map?project=${selectedProject}` : "/map"}>
                         <Button
                           variant="outline"
-                          className="h-auto w-full justify-start gap-3 border-2 border-green-200 bg-white p-4 hover:border-green-400 hover:bg-green-50"
+                          className="h-auto w-full justify-start gap-3 bg-white p-4 hover:bg-slate-50"
                         >
                           <Map className="h-5 w-5 text-green-600" />
                           <div className="text-left">
@@ -874,6 +1026,7 @@ function UploadPageContent() {
                           <ArrowRight className="ml-auto h-4 w-4 text-green-400" />
                         </Button>
                       </Link>
+                      </div>
                     </div>
                   </section>
 
@@ -921,7 +1074,7 @@ function UploadPageContent() {
               )}
 
               <section className="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
-                <h4 className="mb-2 font-semibold">Safe Upload Notes</h4>
+                <h4 className="mb-2 font-semibold">What stays safe</h4>
                 <ul className="space-y-1">
                   <li>• Ensure your drone captures GPS metadata in each image.</li>
                   <li>• Keep uploads under 500MB per file for best performance.</li>
