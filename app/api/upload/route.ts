@@ -10,7 +10,10 @@ import {
   ROBOFLOW_MODELS,
   roboflowService,
 } from "@/lib/services/roboflow";
-import { formatModelId } from "@/lib/services/yolo";
+import {
+  isPineSaplingYoloModelId,
+  resolveYoloServiceModelName,
+} from "@/lib/services/yolo";
 import { processInferenceJob } from "@/lib/services/inference";
 import { checkRedisConnection } from "@/lib/queue/redis";
 import { enqueueInferenceJob } from "@/lib/queue/inference-queue";
@@ -271,6 +274,9 @@ export async function POST(request: NextRequest) {
           processedImages?: number;
           detectionsFound?: number;
           skippedImages?: number;
+          modelName?: string;
+          backend?: string;
+          source?: string;
           error?: string;
         }
       | undefined;
@@ -888,8 +894,10 @@ export async function POST(request: NextRequest) {
             error: `Active YOLO model status ${model.status} is not ready for inference.`,
           };
         } else {
-          const modelName = formatModelId(model.name, model.version);
-          const backendPreference = (projectSettings.inferenceBackend || 'AUTO').toLowerCase();
+          const modelName = resolveYoloServiceModelName(model);
+          const backendPreference = isPineSaplingYoloModelId(model.id)
+            ? "local"
+            : (projectSettings.inferenceBackend || "AUTO").toLowerCase();
           const processingJob = await prisma.processingJob.create({
             data: {
               projectId,
@@ -925,7 +933,7 @@ export async function POST(request: NextRequest) {
               skippedImages: autoInferenceSkipped,
               duplicateImages: 0,
               skippedReason: "missing_gps_or_dimensions",
-              backend: backendPreference as 'local' | 'roboflow' | 'auto',
+              backend: backendPreference as "local" | "roboflow" | "auto",
             });
 
             autoInferenceSummary = {
@@ -936,6 +944,9 @@ export async function POST(request: NextRequest) {
               processedImages: result.processedImages,
               detectionsFound: result.detectionsFound,
               skippedImages: autoInferenceSkipped,
+              modelName,
+              backend: backendPreference,
+              source: "auto_upload",
             };
           } else {
             const redisAvailable = await checkRedisConnection();
@@ -962,7 +973,7 @@ export async function POST(request: NextRequest) {
                 assetIds: autoInferenceAssetIds,
                 confidence: AUTO_INFERENCE_CONFIDENCE,
                 saveDetections: true,
-                backend: backendPreference as 'local' | 'roboflow' | 'auto',
+                backend: backendPreference as "local" | "roboflow" | "auto",
               });
               autoInferenceSummary = {
                 started: true,
@@ -970,6 +981,9 @@ export async function POST(request: NextRequest) {
                 jobId: processingJob.id,
                 totalImages: autoInferenceAssetIds.length,
                 skippedImages: autoInferenceSkipped,
+                modelName,
+                backend: backendPreference,
+                source: "auto_upload",
               };
             }
           }
