@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Sparkles,
   Target,
+  Upload,
   Wand2,
 } from "lucide-react";
 
@@ -160,6 +161,40 @@ export function TrainingWorkspace() {
             {error}
           </div>
         ) : null}
+
+        <section className="rounded-lg border border-slate-200 bg-white p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-950">
+                Upload &gt; Run Model &gt; Review
+              </h2>
+              <p className="mt-1 max-w-3xl text-sm text-slate-600">
+                Select a project, upload images, optionally run the project&apos;s active YOLO model,
+                then review candidate detections before they count as accepted labels.
+              </p>
+            </div>
+            <Button asChild className="bg-gradient-to-r from-green-500 to-blue-500 text-white">
+              <Link href="/upload">
+                <Upload className="mr-2 h-4 w-4" />
+                Upload images
+              </Link>
+            </Button>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-semibold uppercase text-slate-500">1. Upload</p>
+              <p className="mt-1 text-sm text-slate-700">S3 upload and asset creation complete first.</p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-semibold uppercase text-slate-500">2. Run model</p>
+              <p className="mt-1 text-sm text-slate-700">Active project model runs as a retryable job.</p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-semibold uppercase text-slate-500">3. Review</p>
+              <p className="mt-1 text-sm text-slate-700">YOLO boxes and centres remain pending until accepted.</p>
+            </div>
+          </div>
+        </section>
 
         <section className="grid gap-3 md:grid-cols-3">
           <Card>

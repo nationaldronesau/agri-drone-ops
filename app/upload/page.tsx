@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState, Suspense } from "react";
+import { useCallback, useEffect, useMemo, useState, Suspense } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Card,
   CardContent,
@@ -21,7 +21,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AlertCircle, Brain, Upload, Map, Images, Tags, ArrowRight, CheckCircle2 } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowRight,
+  Brain,
+  CheckCircle2,
+  Clock,
+  Eye,
+  Images,
+  Loader2,
+  Map,
+  Settings,
+  ShieldCheck,
+  Tags,
+  Upload,
+} from "lucide-react";
 import { UppyUploader, type UploadApiResponse } from "@/components/UppyUploader";
 import { ModelSelector, type RoboflowModel } from "@/components/detection/ModelSelector";
 
@@ -31,6 +45,10 @@ interface Project {
   location: string | null;
   purpose: string;
   cameraProfileId?: string | null;
+  activeModelId?: string | null;
+  autoInferenceEnabled?: boolean;
+  inferenceBackend?: "LOCAL" | "ROBOFLOW" | "AUTO" | null;
+  _count?: { assets: number };
 }
 
 interface CameraProfile {
@@ -46,12 +64,41 @@ interface CameraProfile {
   opticalCenterY?: number | null;
 }
 
+interface TrainedModel {
+  id: string;
+  name: string;
+  version: number;
+  displayName?: string | null;
+  status: string;
+  isActive?: boolean;
+  classes?: string[];
+  mAP50?: number | null;
+}
+
+type UploadMode = "upload-only" | "run-active";
+
+const READY_MODEL_STATUSES = new Set(["READY", "ACTIVE"]);
+
+function getModelLabel(model: TrainedModel | null): string {
+  if (!model) return "No active model";
+  const name = model.displayName || model.name;
+  return /yolo/i.test(name) ? `${name} v${model.version}` : `${name} YOLO11 v${model.version}`;
+}
+
+function getAutoInferenceJobIds(response: UploadApiResponse | null): string[] {
+  const summary = response?.autoInference;
+  if (!summary) return [];
+  if (summary.jobIds && summary.jobIds.length > 0) return summary.jobIds;
+  return summary.jobId ? [summary.jobId] : [];
+}
+
 async function getApiErrorMessage(response: Response, fallback: string): Promise<string> {
   const data = (await response.json().catch(() => null)) as { error?: string } | null;
   return data?.error || fallback;
 }
 
 function UploadPageContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const projectParam = searchParams.get("project");
   const [projects, setProjects] = useState<Project[]>([]);
@@ -60,11 +107,17 @@ function UploadPageContent() {
   const [cameraProfiles, setCameraProfiles] = useState<CameraProfile[]>([]);
   const [selectedCameraProfileId, setSelectedCameraProfileId] = useState<string>("none");
   const [cameraFovInput, setCameraFovInput] = useState<string>("");
-  const [runDetection, setRunDetection] = useState<boolean>(true);
+  const [uploadMode, setUploadMode] = useState<UploadMode>("upload-only");
+  const [runDetection, setRunDetection] = useState<boolean>(false);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [availableModels, setAvailableModels] = useState<RoboflowModel[]>([]);
+  const [activeModel, setActiveModel] = useState<TrainedModel | null>(null);
+  const [activeModelLoading, setActiveModelLoading] = useState<boolean>(false);
+  const [activeModelError, setActiveModelError] = useState<string | null>(null);
   const [processing, setProcessing] = useState<boolean>(false);
   const [processingError, setProcessingError] = useState<string | null>(null);
+  const [reviewStarting, setReviewStarting] = useState<boolean>(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
   const [projectsError, setProjectsError] = useState<string | null>(null);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [cameraProfilesError, setCameraProfilesError] = useState<string | null>(null);
@@ -77,6 +130,18 @@ function UploadPageContent() {
     cameraFovInput.trim().length > 0 && Number.isFinite(parsedCameraFov)
       ? parsedCameraFov
       : undefined;
+  const selectedProjectData = useMemo(
+    () => projects.find((project) => project.id === selectedProject) || null,
+    [projects, selectedProject]
+  );
+  const activeModelReady = Boolean(
+    activeModel && READY_MODEL_STATUSES.has(activeModel.status)
+  );
+  const runActiveModel = uploadMode === "run-active" && !runDetection;
+  const selectedModelsData = availableModels.filter((model) =>
+    selectedModelIds.includes(model.id)
+  );
+  const advancedDetectionReady = !runDetection || selectedModelsData.length > 0;
 
   useEffect(() => {
     const loadProjects = async () => {
@@ -137,10 +202,66 @@ function UploadPageContent() {
     }
   }, [projects, selectedProject]);
 
-  // Get selected models data for the UppyUploader
-  const selectedModelsData = availableModels.filter((m) =>
-    selectedModelIds.includes(m.id)
-  );
+  useEffect(() => {
+    setActiveModel(null);
+    setActiveModelError(null);
+
+    if (!selectedProjectData) {
+      setUploadMode("upload-only");
+      setActiveModelLoading(false);
+      return;
+    }
+
+    if (!selectedProjectData.activeModelId) {
+      setUploadMode("upload-only");
+      setActiveModelLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+
+    const loadActiveModel = async () => {
+      setActiveModelLoading(true);
+      try {
+        const response = await fetch(
+          `/api/training/models?projectId=${encodeURIComponent(selectedProjectData.id)}&limit=50`,
+          { signal: controller.signal }
+        );
+        if (!response.ok) {
+          throw new Error(await getApiErrorMessage(response, "Failed to load active model"));
+        }
+
+        const data = await response.json();
+        const models = Array.isArray(data.models) ? (data.models as TrainedModel[]) : [];
+        const activeModelId =
+          typeof data.activeModelId === "string"
+            ? data.activeModelId
+            : selectedProjectData.activeModelId;
+        const nextActiveModel =
+          models.find((model) => model.id === activeModelId || model.isActive) || null;
+
+        setActiveModel(nextActiveModel);
+        setUploadMode(
+          selectedProjectData.autoInferenceEnabled && nextActiveModel
+            ? "run-active"
+            : "upload-only"
+        );
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        console.error("Failed to load active model:", error);
+        setActiveModelError(
+          error instanceof Error ? error.message : "Unable to load the active model."
+        );
+        setUploadMode("upload-only");
+      } finally {
+        setActiveModelLoading(false);
+      }
+    };
+
+    void loadActiveModel();
+
+    return () => controller.abort();
+  }, [selectedProjectData]);
 
   const handleProcessingStart = useCallback(() => {
     setProcessing(true);
@@ -167,20 +288,102 @@ function UploadPageContent() {
     setModelsError(message);
   }, []);
 
+  const handleAdvancedFallbackChange = useCallback((checked: boolean) => {
+    setRunDetection(checked);
+    if (checked) {
+      setUploadMode("upload-only");
+    }
+  }, []);
+
+  const handleStartReview = useCallback(async () => {
+    const inferenceJobIds = getAutoInferenceJobIds(uploadResponse);
+    if (!selectedProject || inferenceJobIds.length === 0) return;
+
+    setReviewStarting(true);
+    setReviewError(null);
+    try {
+      const response = await fetch("/api/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: selectedProject,
+          workflowType: "yolo_inference",
+          targetType: "both",
+          inferenceJobIds,
+          confidenceThreshold: 0.25,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.error || "Failed to create review session");
+      }
+
+      const sessionId = data?.session?.id;
+      if (!sessionId) {
+        throw new Error("Review session missing from response");
+      }
+
+      router.push(`/review?sessionId=${sessionId}`);
+    } catch (error) {
+      setReviewError(
+        error instanceof Error ? error.message : "Failed to open review."
+      );
+    } finally {
+      setReviewStarting(false);
+    }
+  }, [router, selectedProject, uploadResponse]);
+
+  const uploadDisabled =
+    !selectedProject ||
+    (runActiveModel && !activeModelReady) ||
+    !advancedDetectionReady;
+  const activeModelName = getModelLabel(activeModel);
+  const autoInferenceJobIds = getAutoInferenceJobIds(uploadResponse);
+  const autoInference = uploadResponse?.autoInference;
+  const successfulUploadCount =
+    uploadResponse?.files.filter((file) => file.success !== false).length || 0;
+
   return (
     <div className="p-6 lg:p-8">
       <div className="mx-auto max-w-5xl space-y-6">
           <Card>
-            <CardHeader>
-              <CardTitle className="text-2xl">Upload Drone Images</CardTitle>
-              <CardDescription>
-                Upload imagery directly from the browser to S3, then run EXIF
-                parsing and optional AI detection on the backend.
-              </CardDescription>
+            <CardHeader className="space-y-4">
+              <div>
+                <CardTitle className="text-2xl">Upload, Run Model, Review</CardTitle>
+                <CardDescription>
+                  Upload imagery safely first, then optionally run the project&apos;s active
+                  detection model and send candidates to review.
+                </CardDescription>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {[
+                  { label: "Upload", icon: Upload },
+                  { label: "Run model", icon: Brain },
+                  { label: "Review", icon: Eye },
+                ].map((step, index) => {
+                  const StepIcon = step.icon;
+                  return (
+                    <div
+                      key={step.label}
+                      className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+                    >
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-slate-700">
+                        <StepIcon className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Step {index + 1}
+                        </p>
+                        <p className="text-sm font-medium text-slate-900">{step.label}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </CardHeader>
 
             <CardContent className="space-y-6">
-              {(projectsError || modelsError || cameraProfilesError) && (
+              {(projectsError || modelsError || cameraProfilesError || activeModelError || reviewError) && (
                 <div className="space-y-2">
                   {projectsError && (
                     <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
@@ -198,6 +401,18 @@ function UploadPageContent() {
                     <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
                       <AlertCircle className="h-4 w-4" />
                       <span>{cameraProfilesError}</span>
+                    </div>
+                  )}
+                  {activeModelError && (
+                    <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                      <AlertCircle className="h-4 w-4" />
+                      <span>{activeModelError}</span>
+                    </div>
+                  )}
+                  {reviewError && (
+                    <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                      <AlertCircle className="h-4 w-4" />
+                      <span>{reviewError}</span>
                     </div>
                   )}
                 </div>
@@ -298,32 +513,101 @@ function UploadPageContent() {
                 </div>
 
                 <div className="space-y-4">
-                  <div className="flex items-center space-x-2 rounded-lg border border-green-200 bg-green-50 p-4">
-                    <Checkbox
-                      id="runDetection"
-                      checked={runDetection}
-                      onCheckedChange={(checked) =>
-                        setRunDetection(Boolean(checked))
-                      }
-                    />
-                    <Label
-                      htmlFor="runDetection"
-                      className="flex cursor-pointer items-center"
-                    >
-                      <Brain className="mr-2 h-4 w-4 text-green-600" />
-                      Run AI weed detection after upload
-                    </Label>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">Active detection model</p>
+                        <p className="mt-1 text-sm text-slate-600">{activeModelName}</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Backend: {selectedProjectData?.inferenceBackend || "AUTO"}
+                        </p>
+                      </div>
+                      {activeModelLoading ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+                      ) : (
+                        <ShieldCheck
+                          className={`h-5 w-5 ${activeModelReady ? "text-emerald-600" : "text-slate-300"}`}
+                        />
+                      )}
+                    </div>
+                    {!activeModelReady && selectedProjectData?.activeModelId ? (
+                      <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                        The active model is not ready for inference yet.
+                      </p>
+                    ) : null}
+                    {!selectedProjectData?.activeModelId ? (
+                      <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                        Set an active YOLO model in Training before running inference after upload.
+                      </p>
+                    ) : null}
                   </div>
 
-                  {runDetection && (
-                    <ModelSelector
-                      selectedModels={selectedModelIds}
-                      onSelectionChange={setSelectedModelIds}
-                      onModelsLoaded={handleModelsLoaded}
-                      onLoadError={handleModelsError}
-                      disabled={!selectedProject}
-                    />
-                  )}
+                  <div className="rounded-lg border border-slate-200 bg-white p-4">
+                    <Label className="text-sm font-semibold text-slate-900">Upload action</Label>
+                    <div className="mt-3 grid gap-2">
+                      <Button
+                        type="button"
+                        variant={uploadMode === "upload-only" ? "default" : "outline"}
+                        className="justify-start"
+                        onClick={() => setUploadMode("upload-only")}
+                      >
+                        <Upload className="mr-2 h-4 w-4" />
+                        Upload only
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={uploadMode === "run-active" ? "default" : "outline"}
+                        className="justify-start"
+                        onClick={() => {
+                          setRunDetection(false);
+                          setUploadMode("run-active");
+                        }}
+                        disabled={!selectedProjectData?.activeModelId}
+                      >
+                        <Brain className="mr-2 h-4 w-4" />
+                        Run active model after upload
+                      </Button>
+                    </div>
+                    <p className="mt-3 text-xs text-slate-500">
+                      Upload always completes first. Model runs are retryable and detections stay
+                      pending until review accepts them.
+                    </p>
+                  </div>
+
+                  <details className="rounded-lg border border-slate-200 bg-white">
+                    <summary className="flex cursor-pointer items-center gap-2 p-4 text-sm font-semibold text-slate-900 hover:bg-slate-50">
+                      <Settings className="h-4 w-4 text-slate-500" />
+                      Advanced model fallback
+                    </summary>
+                    <div className="space-y-4 border-t border-slate-200 p-4">
+                      <div className="flex items-center space-x-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <Checkbox
+                          id="runDetection"
+                          checked={runDetection}
+                          onCheckedChange={(checked) =>
+                            handleAdvancedFallbackChange(Boolean(checked))
+                          }
+                        />
+                        <Label
+                          htmlFor="runDetection"
+                          className="flex cursor-pointer items-center text-sm"
+                        >
+                          <Brain className="mr-2 h-4 w-4 text-slate-600" />
+                          Use Roboflow/dynamic models for this upload
+                        </Label>
+                      </div>
+
+                      {runDetection && (
+                        <ModelSelector
+                          selectedModels={selectedModelIds}
+                          onSelectionChange={setSelectedModelIds}
+                          onModelsLoaded={handleModelsLoaded}
+                          onLoadError={handleModelsError}
+                          disabled={!selectedProject}
+                        />
+                      )}
+                    </div>
+                  </details>
                 </div>
               </section>
 
@@ -331,6 +615,20 @@ function UploadPageContent() {
                 <div className="flex items-center space-x-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
                   <AlertCircle className="h-4 w-4 flex-shrink-0" />
                   <span>Select a project to enable uploads.</span>
+                </div>
+              )}
+
+              {runActiveModel && !activeModelReady && selectedProject && (
+                <div className="flex items-center space-x-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                  <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                  <span>The active model must be ready before it can run after upload.</span>
+                </div>
+              )}
+
+              {!advancedDetectionReady && (
+                <div className="flex items-center space-x-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                  <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                  <span>Select a fallback model or turn off the advanced fallback.</span>
                 </div>
               )}
 
@@ -343,15 +641,17 @@ function UploadPageContent() {
                     </h3>
                     <p className="text-sm text-gray-500">
                       Files are sent straight to S3 using multipart uploads, then
-                      processed server-side.
+                      finalized server-side.
                     </p>
                     <p className="text-xs text-gray-400">
-                      Step 1 uploads to S3; Step 2 runs EXIF + detection after the upload finishes.
+                      Step 1 uploads to S3; Step 2 reads EXIF; Step 3 runs the active model only
+                      when selected.
                     </p>
                   </div>
                 </div>
                 <UppyUploader
                   projectId={selectedProject || null}
+                  runActiveModel={runActiveModel}
                   runDetection={runDetection}
                   dynamicModels={selectedModelsData}
                   flightSession={flightSession}
@@ -359,7 +659,7 @@ function UploadPageContent() {
                   cameraProfileId={
                     selectedCameraProfileId !== "none" ? selectedCameraProfileId : undefined
                   }
-                  disabled={!selectedProject}
+                  disabled={uploadDisabled}
                   onProcessingStart={handleProcessingStart}
                   onProcessingComplete={handleProcessingComplete}
                   onProcessingError={handleProcessingError}
@@ -368,8 +668,8 @@ function UploadPageContent() {
 
               {processing && (
                 <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
-                  Step 2 of 2: Processing uploaded files… EXIF parsing and detection may take a
-                  moment.
+                  Processing uploaded files... upload finalization runs first; model inference starts
+                  only after the uploaded assets are saved.
                 </div>
               )}
 
@@ -390,40 +690,82 @@ function UploadPageContent() {
                           Upload Complete!
                         </h3>
                         <p className="text-sm text-green-700">
-                          {uploadResponse.files.filter(f => f.success !== false).length} of {uploadResponse.files.length} images uploaded successfully
+                          {successfulUploadCount} of {uploadResponse.files.length} images uploaded successfully
                         </p>
                       </div>
                     </div>
                   </div>
 
-                  {uploadResponse.autoInference?.started && (
-                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
-                      YOLO inference{" "}
-                      {uploadResponse.autoInference.status === "queued"
-                        ? "has been queued"
-                        : "completed"}{" "}
-                      for {uploadResponse.autoInference.totalImages?.toLocaleString() || 0}{" "}
-                      uploaded images.
-                      {typeof uploadResponse.autoInference.detectionsFound === "number"
-                        ? ` ${uploadResponse.autoInference.detectionsFound.toLocaleString()} pine sapling candidates were saved.`
-                        : ""}
-                      {uploadResponse.autoInference.skippedImages
-                        ? ` ${uploadResponse.autoInference.skippedImages.toLocaleString()} images were skipped because they are missing GPS coordinates or image dimensions.`
-                        : ""}
-                      {uploadResponse.autoInference.jobId
-                        ? ` Job ID: ${uploadResponse.autoInference.jobId}.`
-                        : ""}
+                  {autoInference && (
+                    <div
+                      className={`rounded-lg border p-4 text-sm ${
+                        autoInference.started
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                          : "border-amber-200 bg-amber-50 text-amber-900"
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold">
+                            {autoInference.started
+                              ? autoInference.status === "queued"
+                                ? "Active model queued"
+                                : "Active model completed"
+                              : "Active model not started"}
+                          </p>
+                          <p className="mt-1">
+                            {autoInference.error ||
+                              "YOLO boxes and georeferenced centres were saved as review-gated candidates."}
+                          </p>
+                        </div>
+                        {autoInference.status === "queued" ? (
+                          <Clock className="h-5 w-5" />
+                        ) : (
+                          <CheckCircle2 className="h-5 w-5" />
+                        )}
+                      </div>
+                      <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                        <div className="rounded-md bg-white/70 p-3">
+                          <p className="text-xs font-medium uppercase text-slate-500">
+                            Images processed
+                          </p>
+                          <p className="mt-1 text-xl font-semibold">
+                            {(autoInference.processedImages ?? autoInference.totalImages ?? 0).toLocaleString()}
+                          </p>
+                        </div>
+                        <div className="rounded-md bg-white/70 p-3">
+                          <p className="text-xs font-medium uppercase text-slate-500">
+                            Skipped
+                          </p>
+                          <p className="mt-1 text-xl font-semibold">
+                            {(autoInference.skippedImages || 0).toLocaleString()}
+                          </p>
+                        </div>
+                        <div className="rounded-md bg-white/70 p-3">
+                          <p className="text-xs font-medium uppercase text-slate-500">
+                            Candidate detections
+                          </p>
+                          <p className="mt-1 text-xl font-semibold">
+                            {typeof autoInference.detectionsFound === "number"
+                              ? autoInference.detectionsFound.toLocaleString()
+                              : "--"}
+                          </p>
+                        </div>
+                      </div>
+                      {autoInferenceJobIds.length > 0 && (
+                        <p className="mt-3 text-xs">
+                          Job {autoInferenceJobIds.join(", ")}. Candidates are not approved until
+                          review accepts them.
+                        </p>
+                      )}
                     </div>
                   )}
 
-                  {uploadResponse.autoInference &&
-                    !uploadResponse.autoInference.started &&
-                    uploadResponse.autoInference.error && (
-                      <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                        Uploads completed, but YOLO auto-inference did not start:{" "}
-                        {uploadResponse.autoInference.error}
-                      </div>
-                    )}
+                  {!autoInference && (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                      Upload-only mode completed. No detection model was run for this upload.
+                    </div>
+                  )}
 
                   {uploadResponse.roboflowDetection?.started && (
                     <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
@@ -453,7 +795,42 @@ function UploadPageContent() {
                     <h3 className="mb-4 text-lg font-semibold text-gray-800">
                       What would you like to do next?
                     </h3>
-                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                      {autoInferenceJobIds.length > 0 && autoInference?.status === "completed" && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-auto w-full justify-start gap-3 border-2 border-amber-200 bg-white p-4 hover:border-amber-400 hover:bg-amber-50"
+                          onClick={handleStartReview}
+                          disabled={reviewStarting}
+                        >
+                          {reviewStarting ? (
+                            <Loader2 className="h-5 w-5 animate-spin text-amber-600" />
+                          ) : (
+                            <Eye className="h-5 w-5 text-amber-600" />
+                          )}
+                          <div className="text-left">
+                            <div className="font-semibold text-amber-700">Review candidates</div>
+                            <div className="text-xs text-gray-500">Accept, reject, or correct</div>
+                          </div>
+                          <ArrowRight className="ml-auto h-4 w-4 text-amber-400" />
+                        </Button>
+                      )}
+                      {autoInferenceJobIds.length > 0 && autoInference?.status === "queued" && (
+                        <Link href="/training#inference">
+                          <Button
+                            variant="outline"
+                            className="h-auto w-full justify-start gap-3 border-2 border-amber-200 bg-white p-4 hover:border-amber-400 hover:bg-amber-50"
+                          >
+                            <Clock className="h-5 w-5 text-amber-600" />
+                            <div className="text-left">
+                              <div className="font-semibold text-amber-700">Track model run</div>
+                              <div className="text-xs text-gray-500">Review when complete</div>
+                            </div>
+                            <ArrowRight className="ml-auto h-4 w-4 text-amber-400" />
+                          </Button>
+                        </Link>
+                      )}
                       <Link href={
                         uploadResponse.files.find(f => f.success !== false && f.id)?.id
                           ? `/annotate/${uploadResponse.files.find(f => f.success !== false && f.id)?.id}`
@@ -544,17 +921,15 @@ function UploadPageContent() {
               )}
 
               <section className="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
-                <h4 className="mb-2 font-semibold">Pro Tips</h4>
+                <h4 className="mb-2 font-semibold">Safe Upload Notes</h4>
                 <ul className="space-y-1">
                   <li>• Ensure your drone captures GPS metadata in each image.</li>
                   <li>• Keep uploads under 500MB per file for best performance.</li>
                   <li>
-                    • AI detection runs on the freshly downloaded S3 objects—no
-                    local storage required.
+                    • Active-model detections are review-gated and remain unapproved until accepted.
                   </li>
                   <li>
-                    • The upload summary above includes GPS metadata warnings and
-                    detection counts.
+                    • V1 displays YOLO boxes and georeferenced centres; segmentation polygons come later.
                   </li>
                 </ul>
               </section>

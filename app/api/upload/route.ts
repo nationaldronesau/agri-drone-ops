@@ -53,6 +53,7 @@ const requestSchema = z.object({
   flightSession: z.string().optional(),
   cameraFov: z.number().min(1).max(180).optional(),
   cameraProfileId: z.string().optional(),
+  runActiveModel: z.boolean().optional().default(false),
   disableAutoInference: z.boolean().optional().default(false),
 });
 
@@ -164,6 +165,7 @@ export async function POST(request: NextRequest) {
       flightSession,
       cameraFov,
       cameraProfileId,
+      runActiveModel,
       disableAutoInference,
     } = parsed.data;
 
@@ -195,6 +197,11 @@ export async function POST(request: NextRequest) {
     if (!projectSettings) {
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
     }
+
+    const activeModelInferenceRequested =
+      !disableAutoInference &&
+      (projectSettings.autoInferenceEnabled || runActiveModel);
+    const activeModelId = projectSettings.activeModelId;
 
     const explicitCameraProfileId = cameraProfileId || null;
     const effectiveCameraProfileId =
@@ -274,6 +281,8 @@ export async function POST(request: NextRequest) {
           processedImages?: number;
           detectionsFound?: number;
           skippedImages?: number;
+          duplicateImages?: number;
+          skippedReason?: string;
           modelName?: string;
           backend?: string;
           source?: string;
@@ -754,7 +763,7 @@ export async function POST(request: NextRequest) {
           return { asset, detections };
         });
 
-        if (projectSettings.autoInferenceEnabled && projectSettings.activeModelId) {
+        if (activeModelInferenceRequested && activeModelId) {
           if (
             extractedData.gpsLatitude != null &&
             extractedData.gpsLongitude != null &&
@@ -863,16 +872,37 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    if (
-      !disableAutoInference &&
-      projectSettings.autoInferenceEnabled &&
-      projectSettings.activeModelId &&
+    if (activeModelInferenceRequested && !activeModelId) {
+      autoInferenceSummary = {
+        started: false,
+        error: "No active YOLO model is set for this project.",
+        source: "auto_upload",
+      };
+    } else if (
+      activeModelInferenceRequested &&
+      activeModelId &&
+      autoInferenceAssetIds.length === 0
+    ) {
+      autoInferenceSummary = {
+        started: false,
+        error:
+          autoInferenceSkipped > 0
+            ? "No uploaded images were eligible for active-model inference because GPS coordinates or image dimensions are missing."
+            : "No uploaded images were eligible for active-model inference.",
+        totalImages: 0,
+        skippedImages: autoInferenceSkipped,
+        skippedReason: autoInferenceSkipped > 0 ? "missing_gps_or_dimensions" : undefined,
+        source: "auto_upload",
+      };
+    } else if (
+      activeModelInferenceRequested &&
+      activeModelId &&
       autoInferenceAssetIds.length > 0
     ) {
       try {
         const model = await prisma.trainedModel.findFirst({
           where: {
-            id: projectSettings.activeModelId,
+            id: activeModelId,
             teamId: projectSettings.teamId,
           },
           select: {
@@ -887,11 +917,13 @@ export async function POST(request: NextRequest) {
           autoInferenceSummary = {
             started: false,
             error: "Active YOLO model not found for this project.",
+            source: "auto_upload",
           };
         } else if (!["READY", "ACTIVE"].includes(model.status)) {
           autoInferenceSummary = {
             started: false,
             error: `Active YOLO model status ${model.status} is not ready for inference.`,
+            source: "auto_upload",
           };
         } else {
           const modelName = resolveYoloServiceModelName(model);
@@ -944,6 +976,8 @@ export async function POST(request: NextRequest) {
               processedImages: result.processedImages,
               detectionsFound: result.detectionsFound,
               skippedImages: autoInferenceSkipped,
+              duplicateImages: 0,
+              skippedReason: "missing_gps_or_dimensions",
               modelName,
               backend: backendPreference,
               source: "auto_upload",
@@ -963,6 +997,7 @@ export async function POST(request: NextRequest) {
                 started: false,
                 error:
                   "Redis unavailable - batch too large for auto inference.",
+                source: "auto_upload",
               };
             } else {
               await enqueueInferenceJob({
@@ -981,6 +1016,8 @@ export async function POST(request: NextRequest) {
                 jobId: processingJob.id,
                 totalImages: autoInferenceAssetIds.length,
                 skippedImages: autoInferenceSkipped,
+                duplicateImages: 0,
+                skippedReason: "missing_gps_or_dimensions",
                 modelName,
                 backend: backendPreference,
                 source: "auto_upload",
@@ -994,6 +1031,7 @@ export async function POST(request: NextRequest) {
         autoInferenceSummary = {
           started: false,
           error: message,
+          source: "auto_upload",
         };
       }
     }
