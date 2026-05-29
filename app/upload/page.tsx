@@ -396,6 +396,35 @@ function UploadPageContent() {
                     </div>
                   </div>
 
+                  {uploadResponse.autoInference?.started && (
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+                      YOLO inference{" "}
+                      {uploadResponse.autoInference.status === "queued"
+                        ? "has been queued"
+                        : "completed"}{" "}
+                      for {uploadResponse.autoInference.totalImages?.toLocaleString() || 0}{" "}
+                      uploaded images.
+                      {typeof uploadResponse.autoInference.detectionsFound === "number"
+                        ? ` ${uploadResponse.autoInference.detectionsFound.toLocaleString()} pine sapling candidates were saved.`
+                        : ""}
+                      {uploadResponse.autoInference.skippedImages
+                        ? ` ${uploadResponse.autoInference.skippedImages.toLocaleString()} images were skipped because they are missing GPS coordinates or image dimensions.`
+                        : ""}
+                      {uploadResponse.autoInference.jobId
+                        ? ` Job ID: ${uploadResponse.autoInference.jobId}.`
+                        : ""}
+                    </div>
+                  )}
+
+                  {uploadResponse.autoInference &&
+                    !uploadResponse.autoInference.started &&
+                    uploadResponse.autoInference.error && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                        Uploads completed, but YOLO auto-inference did not start:{" "}
+                        {uploadResponse.autoInference.error}
+                      </div>
+                    )}
+
                   {uploadResponse.roboflowDetection?.started && (
                     <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
                       Background AI detection has been queued for{" "}

@@ -36,6 +36,13 @@ export interface QueuedDetectionSummary {
   source?: string;
 }
 
+export interface AutoInferenceSummary extends QueuedDetectionSummary {
+  processedImages?: number;
+  detectionsFound?: number;
+  modelName?: string;
+  backend?: string;
+}
+
 export interface UploadApiResponse {
   message: string;
   files: ProcessedUploadFile[];
@@ -45,7 +52,7 @@ export interface UploadApiResponse {
     withWarnings: number;
     warningTypes: string[];
   };
-  autoInference?: Record<string, unknown>;
+  autoInference?: AutoInferenceSummary;
   roboflowDetection?: QueuedDetectionSummary;
 }
 
