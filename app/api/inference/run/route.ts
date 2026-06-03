@@ -16,6 +16,61 @@ import {
 import { S3Service } from '@/lib/services/s3';
 
 const MAX_SYNC_IMAGES = 50;
+const STANDARD_INFERENCE_CONFIDENCE = 0.25;
+const HIGH_RECALL_INFERENCE_CONFIDENCE = 0.1;
+
+type InferenceMode = 'standard' | 'high_recall' | 'custom';
+
+function clampConfidence(value: unknown, fallback = STANDARD_INFERENCE_CONFIDENCE): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.min(1, parsed));
+}
+
+function resolveInferenceMode(input: {
+  inferenceMode?: unknown;
+  confidence?: unknown;
+}): { mode: InferenceMode; label: string; confidence: number } {
+  const requestedMode = typeof input.inferenceMode === 'string'
+    ? input.inferenceMode
+    : null;
+  const hasExplicitConfidence = typeof input.confidence !== 'undefined';
+
+  if (requestedMode === 'high_recall') {
+    return {
+      mode: 'high_recall',
+      label: 'High recall assisted labelling',
+      confidence: HIGH_RECALL_INFERENCE_CONFIDENCE,
+    };
+  }
+
+  if (requestedMode === 'standard') {
+    return {
+      mode: 'standard',
+      label: 'Standard QA',
+      confidence: STANDARD_INFERENCE_CONFIDENCE,
+    };
+  }
+
+  if (requestedMode && requestedMode !== 'custom') {
+    throw new Error('Invalid inferenceMode. Use standard, high_recall, or custom.');
+  }
+
+  const confidence = clampConfidence(input.confidence);
+  if (requestedMode === 'custom' || hasExplicitConfidence) {
+    return {
+      mode: 'custom',
+      label: 'Custom confidence',
+      confidence,
+    };
+  }
+
+  return {
+    mode: 'standard',
+    label: 'Standard QA',
+    confidence: STANDARD_INFERENCE_CONFIDENCE,
+  };
+}
 
 function parseS3Path(path: string): { bucket: string; keyPrefix: string } | null {
   if (!path.startsWith('s3://')) return null;
@@ -73,10 +128,24 @@ export async function POST(request: NextRequest) {
       modelId: requestedModelId,
       projectId,
       assetIds,
-      confidence = 0.25,
       saveDetections = true,
       preview = false,
     } = body;
+    let inferenceSelection: ReturnType<typeof resolveInferenceMode>;
+    try {
+      inferenceSelection = resolveInferenceMode({
+        inferenceMode: body.inferenceMode,
+        confidence: body.confidence,
+      });
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : 'Invalid inference mode' },
+        { status: 400 }
+      );
+    }
+    const confidence = inferenceSelection.confidence;
+    const inferenceMode = inferenceSelection.mode;
+    const inferenceModeLabel = inferenceSelection.label;
 
     if (!projectId) {
       return NextResponse.json(
@@ -214,6 +283,9 @@ export async function POST(request: NextRequest) {
         skippedImages,
         skippedReason: 'missing_gps_or_dimensions',
         duplicateImages,
+        confidence,
+        inferenceMode,
+        inferenceModeLabel,
       });
     }
 
@@ -253,6 +325,8 @@ export async function POST(request: NextRequest) {
           modelId: effectiveModelId,
           modelName,
           confidence,
+          inferenceMode,
+          inferenceModeLabel,
           saveDetections,
           totalImages,
           processedImages: 0,
@@ -273,6 +347,8 @@ export async function POST(request: NextRequest) {
         modelName,
         assetIds: assetIdList,
         confidence,
+        inferenceMode,
+        inferenceModeLabel,
         saveDetections,
         skippedImages,
         duplicateImages,
@@ -291,6 +367,9 @@ export async function POST(request: NextRequest) {
             skippedReason: 'missing_gps_or_dimensions',
             duplicateImages,
             detectionsFound: result.detectionsFound,
+            confidence,
+            inferenceMode,
+            inferenceModeLabel,
             tiling: result.tiling,
           },
           { status: 502 }
@@ -306,6 +385,9 @@ export async function POST(request: NextRequest) {
         skippedReason: 'missing_gps_or_dimensions',
         duplicateImages,
         detectionsFound: result.detectionsFound,
+        confidence,
+        inferenceMode,
+        inferenceModeLabel,
         errors: result.errors.slice(0, 10),
         tiling: result.tiling,
       });
@@ -336,6 +418,8 @@ export async function POST(request: NextRequest) {
       projectId,
       assetIds: assetIdList,
       confidence,
+      inferenceMode,
+      inferenceModeLabel,
       saveDetections,
       backend: backendPreference as 'local' | 'roboflow' | 'auto',
     });
@@ -344,6 +428,9 @@ export async function POST(request: NextRequest) {
       jobId: processingJob.id,
       totalImages,
       status: 'queued',
+      confidence,
+      inferenceMode,
+      inferenceModeLabel,
       skippedImages,
       skippedReason: 'missing_gps_or_dimensions',
       duplicateImages,
