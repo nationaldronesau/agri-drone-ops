@@ -4,7 +4,10 @@
  * Runs model inference for a batch of assets and optionally saves detections.
  */
 import prisma from '@/lib/db';
-import { yoloInferenceService, type InferenceBackend } from '@/lib/services/yolo-inference';
+import {
+  yoloInferenceService,
+  type InferenceBackend,
+} from '@/lib/services/yolo-inference';
 import { S3Service } from '@/lib/services/s3';
 import { normalizeDetectionType } from '@/lib/utils/detection-types';
 import { fetchImageSafely } from '@/lib/utils/security';
@@ -33,6 +36,13 @@ interface InferenceAsset {
   metadata?: unknown | null;
 }
 
+export interface InferenceTilingSummary {
+  tiledImages: number;
+  tilesProcessed: number;
+  rawDetections: number;
+  mergedDetections: number;
+}
+
 export interface InferenceJobConfig {
   modelId: string;
   modelName: string;
@@ -46,6 +56,7 @@ export interface InferenceJobConfig {
   skippedReason?: string;
   errors?: string[];
   backend?: InferenceBackend;
+  tiling?: InferenceTilingSummary;
 }
 
 export interface InferenceResult {
@@ -54,10 +65,21 @@ export interface InferenceResult {
   skippedImages: number;
   duplicateImages: number;
   errors: string[];
+  tiling?: InferenceTilingSummary;
 }
 
 const DEFAULT_ALTITUDE = 100;
 const DEFAULT_BATCH_SIZE = 10;
+const DEFAULT_YOLO_GPU_LOCK_TTL_MS = 30 * 60 * 1000;
+
+function readPositiveIntegerEnv(name: string, fallback: number): number {
+  const parsed = Number.parseInt(process.env[name] || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function buildTilingSummary(stats: InferenceTilingSummary): InferenceTilingSummary | undefined {
+  return stats.tiledImages > 0 ? { ...stats } : undefined;
+}
 
 function toCenterBox(bbox: [number, number, number, number]) {
   const [x1, y1, x2, y2] = bbox;
@@ -139,6 +161,10 @@ export async function processInferenceJob(options: {
   const totalImages = assetIds.length;
   let processedImages = 0;
   let detectionsFound = 0;
+  let tiledImages = 0;
+  let tilesProcessed = 0;
+  let rawTileDetections = 0;
+  let mergedTileDetections = 0;
   const errors: string[] = [];
 
   await prisma.processingJob.update({
@@ -163,8 +189,9 @@ export async function processInferenceJob(options: {
   });
 
   let effectiveBackend = backend;
+  const gpuLockTtlMs = readPositiveIntegerEnv('YOLO_GPU_LOCK_TTL_MS', DEFAULT_YOLO_GPU_LOCK_TTL_MS);
   const gpuLock = backend !== 'roboflow'
-    ? await acquireGpuLock('yolo-inference')
+    ? await acquireGpuLock('yolo-inference', gpuLockTtlMs)
     : { acquired: true, token: null };
 
   if (backend !== 'roboflow' && !gpuLock.acquired) {
@@ -230,6 +257,12 @@ export async function processInferenceJob(options: {
         skippedImages,
         duplicateImages,
         errors,
+        tiling: buildTilingSummary({
+          tiledImages,
+          tilesProcessed,
+          rawDetections: rawTileDetections,
+          mergedDetections: mergedTileDetections,
+        }),
       };
     }
 
@@ -284,10 +317,18 @@ export async function processInferenceJob(options: {
           s3Path,
           imageBase64,
           imageUrl,
+          imageWidth: asset.imageWidth,
+          imageHeight: asset.imageHeight,
           modelName,
           confidence,
           backend: effectiveBackend,
         });
+        if (response.tiling?.enabled) {
+          tiledImages += 1;
+          tilesProcessed += response.tiling.tileCount ?? 0;
+          rawTileDetections += response.tiling.rawDetections ?? 0;
+          mergedTileDetections += response.tiling.mergedDetections ?? 0;
+        }
 
         const detectionsToCreate: Array<Record<string, unknown>> = [];
 
@@ -343,6 +384,7 @@ export async function processInferenceJob(options: {
                 modelName,
                 geoMethod: resolved.method,
                 backend: response.backend,
+                ...(response.tiling ? { tiling: response.tiling } : {}),
               },
               customModelId: modelId,
             });
@@ -357,6 +399,9 @@ export async function processInferenceJob(options: {
         }
 
         processedImages += 1;
+        if (gpuLock.token) {
+          await refreshGpuLock(gpuLock.token, gpuLockTtlMs);
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         errors.push(`Asset ${asset.id}: ${message}`);
@@ -377,11 +422,17 @@ export async function processInferenceJob(options: {
       skippedReason,
       errors: errors.slice(0, 10),
       backend: effectiveBackend,
+      tiling: buildTilingSummary({
+        tiledImages,
+        tilesProcessed,
+        rawDetections: rawTileDetections,
+        mergedDetections: mergedTileDetections,
+      }),
     };
 
       await updateJobProgress(jobId, config, progress);
       if (gpuLock.token) {
-        await refreshGpuLock(gpuLock.token);
+        await refreshGpuLock(gpuLock.token, gpuLockTtlMs);
       }
     }
   } finally {
@@ -406,5 +457,11 @@ export async function processInferenceJob(options: {
     skippedImages,
     duplicateImages,
     errors,
+    tiling: buildTilingSummary({
+      tiledImages,
+      tilesProcessed,
+      rawDetections: rawTileDetections,
+      mergedDetections: mergedTileDetections,
+    }),
   };
 }

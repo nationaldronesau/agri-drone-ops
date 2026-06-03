@@ -291,6 +291,7 @@ export async function POST(request: NextRequest) {
             skippedReason: 'missing_gps_or_dimensions',
             duplicateImages,
             detectionsFound: result.detectionsFound,
+            tiling: result.tiling,
           },
           { status: 502 }
         );
@@ -306,6 +307,7 @@ export async function POST(request: NextRequest) {
         duplicateImages,
         detectionsFound: result.detectionsFound,
         errors: result.errors.slice(0, 10),
+        tiling: result.tiling,
       });
     }
 
