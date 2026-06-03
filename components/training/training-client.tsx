@@ -780,9 +780,9 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
 
     try {
       const response = await fetch(`/api/training/jobs/${jobId}/metrics`);
-      const data = await response.json();
+      const data = await readJsonResponse(response, "Failed to load metrics history");
       if (!response.ok) {
-        throw new Error(data?.error || "Failed to load metrics history");
+        throw new Error((data?.error as string) || "Failed to load metrics history");
       }
 
       const history = Array.isArray(data.history)
@@ -811,7 +811,7 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
         },
       }));
     }
-  }, []);
+  }, [readJsonResponse]);
 
   const refreshAll = useCallback(async () => {
     setError(null);
@@ -881,11 +881,12 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
           minConfidence: datasetForm.minConfidence,
         }),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response, "Failed to load class options");
       if (!response.ok) {
-        throw new Error(data?.error || "Failed to load class options");
+        throw new Error((data?.error as string) || "Failed to load class options");
       }
-      const classes = data.preview?.availableClasses || [];
+      const previewData = data.preview as DatasetPreview | undefined;
+      const classes = previewData?.availableClasses || [];
       setAvailableClasses(classes);
       const classNames = classes.map((entry: { name: string }) => entry.name);
       setDatasetForm((prev) => {
@@ -904,6 +905,7 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
     datasetForm.includeAIDetections,
     datasetForm.includeManualAnnotations,
     datasetForm.minConfidence,
+    readJsonResponse,
   ]);
 
   const loadInferencePreview = useCallback(async () => {
@@ -921,22 +923,22 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
           preview: true,
         }),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response, "Failed to preview inference");
       if (!response.ok) {
-        throw new Error(data?.error || "Failed to preview inference");
+        throw new Error((data?.error as string) || "Failed to preview inference");
       }
       setInferencePreview({
-        totalImages: data.totalImages || 0,
-        skippedImages: data.skippedImages || 0,
-        duplicateImages: data.duplicateImages || 0,
-        skippedReason: data.skippedReason,
+        totalImages: Number(data.totalImages || 0),
+        skippedImages: Number(data.skippedImages || 0),
+        duplicateImages: Number(data.duplicateImages || 0),
+        skippedReason: data.skippedReason as string | undefined,
       });
     } catch {
       setInferencePreview(null);
     } finally {
       setInferencePreviewLoading(false);
     }
-  }, [selectedInferenceModel, inferenceForm.projectId, inferenceForm.confidence]);
+  }, [selectedInferenceModel, inferenceForm.projectId, inferenceForm.confidence, readJsonResponse]);
 
   useEffect(() => {
     if (!createDatasetOpen) return;
@@ -977,7 +979,7 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
           jobIds.map(async (jobId) => {
             const response = await fetch(`/api/training/jobs/${jobId}`);
             if (!response.ok) return null;
-            return (await response.json()) as TrainingJob;
+            return (await readJsonResponse(response, "Failed to poll training job")) as TrainingJob;
           })
         );
         setJobs((prev) =>
@@ -994,7 +996,7 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [activeJobIds]);
+  }, [activeJobIds, readJsonResponse]);
 
   useEffect(() => {
     if (!activeJobIds) return;
@@ -1066,11 +1068,11 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
           minConfidence: datasetForm.minConfidence,
         }),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response, "Failed to preview dataset");
       if (!response.ok) {
-        throw new Error(data?.error || "Failed to preview dataset");
+        throw new Error((data?.error as string) || "Failed to preview dataset");
       }
-      setPreview(data.preview);
+      setPreview(data.preview as DatasetPreview);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to preview dataset");
       setPreview(null);
@@ -1115,9 +1117,9 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
               : datasetForm.augmentationConfig,
         }),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response, "Failed to create dataset");
       if (!response.ok) {
-        throw new Error(data?.error || "Failed to create dataset");
+        throw new Error((data?.error as string) || "Failed to create dataset");
       }
 
       setNotice("Dataset created and uploaded to S3.");
@@ -1158,9 +1160,9 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
             : {}),
         }),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response, "Failed to start training");
       if (!response.ok) {
-        throw new Error(data?.error || "Failed to start training");
+        throw new Error((data?.error as string) || "Failed to start training");
       }
       setNotice("Training job queued. Monitoring progress.");
       setStartTrainingOpen(false);
@@ -1191,9 +1193,9 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
           saveDetections: true,
         }),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response, "Failed to start inference");
       if (!response.ok) {
-        throw new Error(data?.error || "Failed to start inference");
+        throw new Error((data?.error as string) || "Failed to start inference");
       }
       setNotice("Inference job started. Results will appear in review.");
       setRunInferenceOpen(false);
@@ -1211,9 +1213,9 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
     setError(null);
     try {
       const response = await fetch(`/api/inference/${jobId}`, { method: "DELETE" });
-      const data = await response.json();
+      const data = await readJsonResponse(response, "Failed to cancel inference job");
       if (!response.ok) {
-        throw new Error(data?.error || "Failed to cancel inference job");
+        throw new Error((data?.error as string) || "Failed to cancel inference job");
       }
       await loadInferenceJobs();
       setNotice("Inference job cancelled.");
@@ -1230,9 +1232,9 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
     setError(null);
     try {
       const response = await fetch(`/api/training/jobs/${jobId}`, { method: "DELETE" });
-      const data = await response.json();
+      const data = await readJsonResponse(response, "Failed to cancel training job");
       if (!response.ok) {
-        throw new Error(data?.error || "Failed to cancel training job");
+        throw new Error((data?.error as string) || "Failed to cancel training job");
       }
       await loadJobs();
       setNotice("Training job cancelled.");
@@ -1256,9 +1258,11 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId: settingsProjectId }),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response, "Failed to activate model");
       if (!response.ok) {
-        const message = data?.details ? `${data.error}: ${data.details}` : data?.error;
+        const error = data?.error as string | undefined;
+        const details = data?.details as string | undefined;
+        const message = details ? `${error}: ${details}` : error;
         throw new Error(message || "Failed to activate model");
       }
       await loadModels();
@@ -1293,17 +1297,18 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
           body: JSON.stringify({ autoInferenceEnabled: enabled }),
         }
       );
-      const data = await response.json();
+      const data = await readJsonResponse(response, "Failed to update settings");
       if (!response.ok) {
-        throw new Error(data?.error || "Failed to update settings");
+        throw new Error((data?.error as string) || "Failed to update settings");
       }
+      const projectUpdate = data.project as Partial<Project> | undefined;
       setProjects((prev) =>
         prev.map((project) =>
           project.id === settingsProjectId
             ? {
                 ...project,
-                autoInferenceEnabled: data.project?.autoInferenceEnabled,
-                activeModelId: data.project?.activeModelId ?? project.activeModelId,
+                autoInferenceEnabled: projectUpdate?.autoInferenceEnabled,
+                activeModelId: projectUpdate?.activeModelId ?? project.activeModelId,
               }
             : project
         )
@@ -1333,16 +1338,17 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ inferenceBackend: backend }),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response, "Failed to update inference backend");
       if (!response.ok) {
-        throw new Error(data?.error || "Failed to update inference backend");
+        throw new Error((data?.error as string) || "Failed to update inference backend");
       }
+      const projectUpdate = data.project as Partial<Project> | undefined;
       setProjects((prev) =>
         prev.map((project) =>
           project.id === settingsProjectId
             ? {
                 ...project,
-                inferenceBackend: data.project?.inferenceBackend ?? backend,
+                inferenceBackend: projectUpdate?.inferenceBackend ?? backend,
               }
             : project
         )
@@ -1360,11 +1366,11 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
     setError(null);
     try {
       const response = await fetch(`/api/training/models/${modelId}/download`);
-      const data = await response.json();
+      const data = await readJsonResponse(response, "Failed to download weights");
       if (!response.ok) {
-        throw new Error(data?.error || "Failed to download weights");
+        throw new Error((data?.error as string) || "Failed to download weights");
       }
-      if (data.url) {
+      if (typeof data.url === "string") {
         window.open(data.url, "_blank", "noopener,noreferrer");
       }
     } catch (err) {
@@ -1389,13 +1395,16 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
         }),
       });
 
-      const data = await response.json().catch(() => ({}));
+      const data = await readJsonResponse(response, "Failed to create review session");
       if (!response.ok) {
-        const message = data?.details ? `${data.error}: ${data.details}` : data?.error;
+        const error = data?.error as string | undefined;
+        const details = data?.details as string | undefined;
+        const message = details ? `${error}: ${details}` : error;
         throw new Error(message || "Failed to create review session");
       }
 
-      const sessionId = data.session?.id;
+      const session = data.session as { id?: string } | undefined;
+      const sessionId = session?.id;
       if (!sessionId) {
         throw new Error("Review session missing from response");
       }
