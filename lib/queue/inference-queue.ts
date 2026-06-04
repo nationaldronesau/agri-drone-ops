@@ -14,6 +14,8 @@ export interface InferenceJobData {
   projectId: string;
   assetIds: string[];
   confidence: number;
+  inferenceMode?: string;
+  inferenceModeLabel?: string;
   saveDetections: boolean;
   backend?: 'local' | 'roboflow' | 'auto';
 }

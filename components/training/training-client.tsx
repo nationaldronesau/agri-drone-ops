@@ -125,6 +125,8 @@ interface InferenceJob {
     modelId?: string;
     modelName?: string;
     confidence?: number;
+    inferenceMode?: InferenceMode;
+    inferenceModeLabel?: string;
     totalImages?: number;
     processedImages?: number;
     detectionsFound?: number;
@@ -153,6 +155,7 @@ interface HealthResponse {
 }
 
 type AugmentationPreset = "none" | "light" | "medium" | "heavy" | "agricultural";
+type InferenceMode = "standard" | "high_recall" | "custom";
 
 interface AugmentationConfig {
   horizontalFlip: boolean;
@@ -212,6 +215,26 @@ const INFERENCE_STATUS_STYLES: Record<string, string> = {
   FAILED: "bg-red-100 text-red-700",
   CANCELLED: "bg-gray-100 text-gray-600",
 };
+
+const INFERENCE_PRESETS: Array<{
+  mode: InferenceMode;
+  label: string;
+  confidence: number;
+  description: string;
+}> = [
+  {
+    mode: "standard",
+    label: "Standard QA",
+    confidence: 0.25,
+    description: "Balanced candidate set for normal review.",
+  },
+  {
+    mode: "high_recall",
+    label: "High recall assisted labelling",
+    confidence: 0.1,
+    description: "Find more saplings; expect more false positives to reject.",
+  },
+];
 
 const AUGMENTATION_PRESET_DEFAULTS: Record<AugmentationPreset, AugmentationConfig> = {
   none: {
@@ -278,6 +301,9 @@ const formatMetric = (value?: number | null) =>
 const formatPercentMetric = (value?: number | null) =>
   typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "--";
 
+const formatInferenceConfidence = (value?: number | null) =>
+  typeof value === "number" && Number.isFinite(value) ? `${Math.round(value * 100)}%` : "--";
+
 const formatDate = (value?: string | null) => {
   if (!value) return "--";
   const parsed = new Date(value);
@@ -301,6 +327,18 @@ const toPercentValue = (value?: number | null) =>
   typeof value === "number" && Number.isFinite(value)
     ? Math.min(100, Math.max(0, value * 100))
     : 0;
+
+const getInferenceModeLabel = (config?: InferenceJob["config"]) => {
+  if (typeof config?.inferenceModeLabel === "string") return config.inferenceModeLabel;
+  const preset = INFERENCE_PRESETS.find((entry) => entry.mode === config?.inferenceMode);
+  if (preset) return preset.label;
+  if (typeof config?.confidence === "number") {
+    const confidence = Math.round(config.confidence * 100);
+    if (confidence === 25) return "Standard QA";
+    if (confidence === 10) return "High recall assisted labelling";
+  }
+  return "Custom confidence";
+};
 
 const cloneAugmentationConfig = (config: AugmentationConfig): AugmentationConfig => ({ ...config });
 
@@ -558,6 +596,7 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
   const [inferenceForm, setInferenceForm] = useState({
     projectId: "",
     confidence: 0.25,
+    inferenceMode: "standard" as InferenceMode,
   });
   const [settingsProjectId, setSettingsProjectId] = useState("");
   const [savingAutoInference, setSavingAutoInference] = useState(false);
@@ -617,6 +656,10 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
   const activeInferenceIds = useMemo(
     () => activeInferenceJobs.map((job) => job.id).join(","),
     [activeInferenceJobs]
+  );
+  const selectedInferencePreset = useMemo(
+    () => INFERENCE_PRESETS.find((preset) => preset.mode === inferenceForm.inferenceMode),
+    [inferenceForm.inferenceMode]
   );
 
   const selectedDataset = useMemo(
@@ -919,6 +962,7 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
           modelId: selectedInferenceModel.id,
           projectId: inferenceForm.projectId,
           confidence: inferenceForm.confidence,
+          inferenceMode: inferenceForm.inferenceMode,
           saveDetections: true,
           preview: true,
         }),
@@ -938,7 +982,13 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
     } finally {
       setInferencePreviewLoading(false);
     }
-  }, [selectedInferenceModel, inferenceForm.projectId, inferenceForm.confidence, readJsonResponse]);
+  }, [
+    selectedInferenceModel,
+    inferenceForm.projectId,
+    inferenceForm.confidence,
+    inferenceForm.inferenceMode,
+    readJsonResponse,
+  ]);
 
   useEffect(() => {
     if (!createDatasetOpen) return;
@@ -1190,6 +1240,7 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
           modelId: selectedInferenceModel.id,
           projectId: inferenceForm.projectId,
           confidence: inferenceForm.confidence,
+          inferenceMode: inferenceForm.inferenceMode,
           saveDetections: true,
         }),
       });
@@ -1197,7 +1248,15 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
       if (!response.ok) {
         throw new Error((data?.error as string) || "Failed to start inference");
       }
-      setNotice("Inference job started. Results will appear in review.");
+      const label =
+        typeof data.inferenceModeLabel === "string"
+          ? data.inferenceModeLabel
+          : selectedInferencePreset?.label || "Inference";
+      const resolvedConfidence =
+        typeof data.confidence === "number" ? data.confidence : inferenceForm.confidence;
+      setNotice(
+        `${label} inference started at ${Math.round(resolvedConfidence * 100)}%. Results will appear in review.`
+      );
       setRunInferenceOpen(false);
       await loadInferenceJobs();
     } catch (err) {
@@ -2150,7 +2209,40 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Confidence threshold</Label>
+                  <Label>Inference mode</Label>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {INFERENCE_PRESETS.map((preset) => (
+                      <button
+                        key={preset.mode}
+                        type="button"
+                        onClick={() =>
+                          setInferenceForm((prev) => ({
+                            ...prev,
+                            inferenceMode: preset.mode,
+                            confidence: preset.confidence,
+                          }))
+                        }
+                        className={`rounded-lg border px-4 py-3 text-left transition ${
+                          inferenceForm.inferenceMode === preset.mode
+                            ? "border-emerald-500 bg-emerald-50 text-emerald-950"
+                            : "border-gray-200 bg-white text-gray-700 hover:border-emerald-200"
+                        }`}
+                      >
+                        <span className="block text-sm font-semibold">{preset.label}</span>
+                        <span className="mt-1 block text-xs text-gray-600">
+                          {formatInferenceConfidence(preset.confidence)} - {preset.description}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    High recall is for assisted labelling only. Reviewers should reject false positives
+                    before accepted labels are used for YOLO training or spray exports.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Inference confidence</Label>
                   <div className="flex items-center gap-3">
                     <Slider
                       min={0.05}
@@ -2160,6 +2252,7 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
                       onValueChange={(value) =>
                         setInferenceForm((prev) => ({
                           ...prev,
+                          inferenceMode: "custom",
                           confidence: value[0] ?? prev.confidence,
                         }))
                       }
@@ -2174,11 +2267,17 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
                       onChange={(event) =>
                         setInferenceForm((prev) => ({
                           ...prev,
+                          inferenceMode: "custom",
                           confidence: clampNumber(Number(event.target.value), 0, 1),
                         }))
                       }
                     />
                   </div>
+                  <p className="text-xs text-gray-500">
+                    Current save-time threshold: {formatInferenceConfidence(inferenceForm.confidence)}
+                    {inferenceForm.inferenceMode === "custom" ? " (custom)" : ""}. The review slider
+                    can only filter detections saved above this threshold.
+                  </p>
                 </div>
 
                 <Card className="border-dashed border-gray-200">
@@ -2190,7 +2289,7 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
                         : "Counts exclude images already processed by this model."}
                     </CardDescription>
                   </CardHeader>
-                  <CardContent className="grid gap-3 md:grid-cols-3 text-sm">
+                  <CardContent className="grid gap-3 md:grid-cols-4 text-sm">
                     <div className="rounded-md bg-white p-3 border border-gray-100">
                       <p className="text-xs text-gray-500">Eligible images</p>
                       <p className="text-lg font-semibold">
@@ -2207,6 +2306,15 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
                       <p className="text-xs text-gray-500">Duplicates</p>
                       <p className="text-lg font-semibold">
                         {inferencePreview ? inferencePreview.duplicateImages : "--"}
+                      </p>
+                    </div>
+                    <div className="rounded-md bg-white p-3 border border-gray-100">
+                      <p className="text-xs text-gray-500">Save threshold</p>
+                      <p className="text-lg font-semibold">
+                        {formatInferenceConfidence(inferenceForm.confidence)}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {selectedInferencePreset?.label || "Custom"}
                       </p>
                     </div>
                   </CardContent>
@@ -2491,6 +2599,9 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
                                 <p className="text-xs text-gray-500">
                                   {getInferenceModelLabel(job)}
                                 </p>
+                                <p className="text-xs text-gray-500">
+                                  {getInferenceModeLabel(job.config)} - {formatInferenceConfidence(job.config?.confidence)}
+                                </p>
                               </div>
                               <Badge
                                 className={
@@ -2554,6 +2665,9 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
                                 </p>
                                 <p className="text-xs text-gray-500">
                                   {getInferenceModelLabel(job)}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {getInferenceModeLabel(job.config)} - {formatInferenceConfidence(job.config?.confidence)}
                                 </p>
                               </div>
                               <Badge

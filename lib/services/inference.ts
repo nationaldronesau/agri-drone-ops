@@ -47,6 +47,8 @@ export interface InferenceJobConfig {
   modelId: string;
   modelName: string;
   confidence: number;
+  inferenceMode?: string;
+  inferenceModeLabel?: string;
   saveDetections: boolean;
   totalImages: number;
   processedImages: number;
@@ -136,6 +138,8 @@ export async function processInferenceJob(options: {
   modelName: string;
   assetIds: string[];
   confidence: number;
+  inferenceMode?: string;
+  inferenceModeLabel?: string;
   saveDetections: boolean;
   skippedImages: number;
   duplicateImages: number;
@@ -150,6 +154,8 @@ export async function processInferenceJob(options: {
     modelName,
     assetIds,
     confidence,
+    inferenceMode,
+    inferenceModeLabel,
     saveDetections,
     skippedImages,
     duplicateImages,
@@ -177,6 +183,8 @@ export async function processInferenceJob(options: {
         modelId,
         modelName,
         confidence,
+        inferenceMode,
+        inferenceModeLabel,
         saveDetections,
         totalImages,
         processedImages,
@@ -413,6 +421,8 @@ export async function processInferenceJob(options: {
       modelId,
       modelName,
       confidence,
+      inferenceMode,
+      inferenceModeLabel,
       saveDetections,
       totalImages,
       processedImages,
