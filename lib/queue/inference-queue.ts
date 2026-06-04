@@ -17,6 +17,7 @@ export interface InferenceJobData {
   inferenceMode?: string;
   inferenceModeLabel?: string;
   saveDetections: boolean;
+  replaceDraftDetections?: boolean;
   backend?: 'local' | 'roboflow' | 'auto';
 }
 
@@ -25,6 +26,7 @@ export interface InferenceJobResult {
   detectionsFound: number;
   skippedImages: number;
   duplicateImages: number;
+  draftDetectionsReplaced: number;
   errors: string[];
 }
 

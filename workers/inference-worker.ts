@@ -32,6 +32,10 @@ async function handleInferenceJob(
   const config = parseConfig(storedJob?.config);
   const skippedImages = Number(config.skippedImages || 0);
   const duplicateImages = Number(config.duplicateImages || 0);
+  const replaceDraftDetections =
+    typeof job.data.replaceDraftDetections === 'boolean'
+      ? job.data.replaceDraftDetections
+      : config.replaceDraftDetections === true;
   const skippedReason = typeof config.skippedReason === 'string' ? config.skippedReason : undefined;
   const backend =
     typeof job.data.backend === 'string'
@@ -60,8 +64,11 @@ async function handleInferenceJob(
           ? config.inferenceModeLabel
           : undefined,
     saveDetections: job.data.saveDetections,
+    replaceDraftDetections,
     skippedImages,
     duplicateImages,
+    replaceableDuplicateImages: Number(config.replaceableDuplicateImages || 0),
+    reviewedDuplicateImages: Number(config.reviewedDuplicateImages || 0),
     skippedReason,
     backend: backend as 'local' | 'roboflow' | 'auto' | undefined,
   });
@@ -73,6 +80,7 @@ async function handleInferenceJob(
     detectionsFound: result.detectionsFound,
     skippedImages: result.skippedImages,
     duplicateImages: result.duplicateImages,
+    draftDetectionsReplaced: result.draftDetectionsReplaced,
     errors: result.errors,
   };
 }

@@ -3,6 +3,7 @@
  *
  * Runs model inference for a batch of assets and optionally saves detections.
  */
+import type { Prisma } from '@prisma/client';
 import prisma from '@/lib/db';
 import {
   yoloInferenceService,
@@ -55,6 +56,10 @@ export interface InferenceJobConfig {
   detectionsFound: number;
   skippedImages: number;
   duplicateImages: number;
+  replaceDraftDetections?: boolean;
+  replaceableDuplicateImages?: number;
+  reviewedDuplicateImages?: number;
+  draftDetectionsReplaced?: number;
   skippedReason?: string;
   errors?: string[];
   backend?: InferenceBackend;
@@ -66,6 +71,7 @@ export interface InferenceResult {
   detectionsFound: number;
   skippedImages: number;
   duplicateImages: number;
+  draftDetectionsReplaced: number;
   errors: string[];
   tiling?: InferenceTilingSummary;
 }
@@ -126,9 +132,23 @@ async function updateJobProgress(
     where: { id: jobId },
     data: {
       progress,
-      config,
+      config: config as unknown as Prisma.InputJsonObject,
     },
   });
+}
+
+async function deleteDraftDetectionsForRerun(assetId: string, modelId: string): Promise<number> {
+  const deleted = await prisma.detection.deleteMany({
+    where: {
+      assetId,
+      customModelId: modelId,
+      verified: false,
+      rejected: false,
+      userCorrected: false,
+      reviewedAt: null,
+    },
+  });
+  return deleted.count;
 }
 
 export async function processInferenceJob(options: {
@@ -141,8 +161,11 @@ export async function processInferenceJob(options: {
   inferenceMode?: string;
   inferenceModeLabel?: string;
   saveDetections: boolean;
+  replaceDraftDetections?: boolean;
   skippedImages: number;
   duplicateImages: number;
+  replaceableDuplicateImages?: number;
+  reviewedDuplicateImages?: number;
   skippedReason?: string;
   batchSize?: number;
   backend?: InferenceBackend;
@@ -157,8 +180,11 @@ export async function processInferenceJob(options: {
     inferenceMode,
     inferenceModeLabel,
     saveDetections,
+    replaceDraftDetections = false,
     skippedImages,
     duplicateImages,
+    replaceableDuplicateImages = 0,
+    reviewedDuplicateImages = 0,
     skippedReason,
     batchSize = DEFAULT_BATCH_SIZE,
     backend = 'auto',
@@ -171,6 +197,7 @@ export async function processInferenceJob(options: {
   let tilesProcessed = 0;
   let rawTileDetections = 0;
   let mergedTileDetections = 0;
+  let draftDetectionsReplaced = 0;
   const errors: string[] = [];
 
   await prisma.processingJob.update({
@@ -186,13 +213,17 @@ export async function processInferenceJob(options: {
         inferenceMode,
         inferenceModeLabel,
         saveDetections,
+        replaceDraftDetections,
         totalImages,
         processedImages,
         detectionsFound,
         skippedImages,
         duplicateImages,
+        replaceableDuplicateImages,
+        reviewedDuplicateImages,
+        draftDetectionsReplaced,
         skippedReason,
-      } satisfies InferenceJobConfig,
+      } satisfies InferenceJobConfig as unknown as Prisma.InputJsonObject,
     },
   });
 
@@ -218,6 +249,7 @@ export async function processInferenceJob(options: {
         detectionsFound: 0,
         skippedImages,
         duplicateImages,
+        draftDetectionsReplaced,
         errors: ['GPU lock unavailable for local inference'],
       };
     }
@@ -244,6 +276,7 @@ export async function processInferenceJob(options: {
           detectionsFound: 0,
           skippedImages,
           duplicateImages,
+          draftDetectionsReplaced,
           errors: [`GPU not available: ${gpuResult.message}`],
         };
       }
@@ -264,6 +297,7 @@ export async function processInferenceJob(options: {
         detectionsFound,
         skippedImages,
         duplicateImages,
+        draftDetectionsReplaced,
         errors,
         tiling: buildTilingSummary({
           tiledImages,
@@ -338,7 +372,7 @@ export async function processInferenceJob(options: {
           mergedTileDetections += response.tiling.mergedDetections ?? 0;
         }
 
-        const detectionsToCreate: Array<Record<string, unknown>> = [];
+        const detectionsToCreate: Prisma.DetectionCreateManyInput[] = [];
 
         for (const detection of response.detections || []) {
           if (typeof detection.confidence === 'number' && detection.confidence < confidence) {
@@ -393,17 +427,22 @@ export async function processInferenceJob(options: {
                 geoMethod: resolved.method,
                 backend: response.backend,
                 ...(response.tiling ? { tiling: response.tiling } : {}),
-              },
+              } as unknown as Prisma.InputJsonObject,
               customModelId: modelId,
             });
           }
         }
 
         if (saveDetections && detectionsToCreate.length > 0) {
+          if (replaceDraftDetections) {
+            draftDetectionsReplaced += await deleteDraftDetectionsForRerun(asset.id, modelId);
+          }
           await prisma.detection.createMany({
             data: detectionsToCreate,
           });
           detectionsFound += detectionsToCreate.length;
+        } else if (saveDetections && replaceDraftDetections) {
+          draftDetectionsReplaced += await deleteDraftDetectionsForRerun(asset.id, modelId);
         }
 
         processedImages += 1;
@@ -424,11 +463,15 @@ export async function processInferenceJob(options: {
       inferenceMode,
       inferenceModeLabel,
       saveDetections,
+      replaceDraftDetections,
       totalImages,
       processedImages,
       detectionsFound,
       skippedImages,
       duplicateImages,
+      replaceableDuplicateImages,
+      reviewedDuplicateImages,
+      draftDetectionsReplaced,
       skippedReason,
       errors: errors.slice(0, 10),
       backend: effectiveBackend,
@@ -466,6 +509,7 @@ export async function processInferenceJob(options: {
     detectionsFound,
     skippedImages,
     duplicateImages,
+    draftDetectionsReplaced,
     errors,
     tiling: buildTilingSummary({
       tiledImages,

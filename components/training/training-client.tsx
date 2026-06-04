@@ -132,6 +132,10 @@ interface InferenceJob {
     detectionsFound?: number;
     skippedImages?: number;
     duplicateImages?: number;
+    replaceDraftDetections?: boolean;
+    replaceableDuplicateImages?: number;
+    reviewedDuplicateImages?: number;
+    draftDetectionsReplaced?: number;
   };
 }
 
@@ -597,6 +601,7 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
     projectId: "",
     confidence: 0.25,
     inferenceMode: "standard" as InferenceMode,
+    replaceDraftDetections: false,
   });
   const [settingsProjectId, setSettingsProjectId] = useState("");
   const [savingAutoInference, setSavingAutoInference] = useState(false);
@@ -605,6 +610,9 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
     totalImages: number;
     skippedImages: number;
     duplicateImages: number;
+    replaceDraftDetections: boolean;
+    replaceableDuplicateImages: number;
+    reviewedDuplicateImages: number;
     skippedReason?: string;
   } | null>(null);
   const [inferencePreviewLoading, setInferencePreviewLoading] = useState(false);
@@ -660,6 +668,12 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
   const selectedInferencePreset = useMemo(
     () => INFERENCE_PRESETS.find((preset) => preset.mode === inferenceForm.inferenceMode),
     [inferenceForm.inferenceMode]
+  );
+  const hasReplaceableInferenceDrafts = Boolean(
+    inferencePreview && inferencePreview.replaceableDuplicateImages > 0
+  );
+  const hasProtectedInferenceReviews = Boolean(
+    inferencePreview && inferencePreview.reviewedDuplicateImages > 0
   );
 
   const selectedDataset = useMemo(
@@ -840,7 +854,7 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
         ...prev,
         [jobId]: {
           loading: false,
-          warning: data.warning,
+          warning: typeof data.warning === "string" ? data.warning : undefined,
           points,
         },
       }));
@@ -963,6 +977,7 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
           projectId: inferenceForm.projectId,
           confidence: inferenceForm.confidence,
           inferenceMode: inferenceForm.inferenceMode,
+          replaceDraftDetections: inferenceForm.replaceDraftDetections,
           saveDetections: true,
           preview: true,
         }),
@@ -975,6 +990,9 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
         totalImages: Number(data.totalImages || 0),
         skippedImages: Number(data.skippedImages || 0),
         duplicateImages: Number(data.duplicateImages || 0),
+        replaceDraftDetections: data.replaceDraftDetections === true,
+        replaceableDuplicateImages: Number(data.replaceableDuplicateImages || 0),
+        reviewedDuplicateImages: Number(data.reviewedDuplicateImages || 0),
         skippedReason: data.skippedReason as string | undefined,
       });
     } catch {
@@ -987,6 +1005,7 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
     inferenceForm.projectId,
     inferenceForm.confidence,
     inferenceForm.inferenceMode,
+    inferenceForm.replaceDraftDetections,
     readJsonResponse,
   ]);
 
@@ -1029,7 +1048,7 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
           jobIds.map(async (jobId) => {
             const response = await fetch(`/api/training/jobs/${jobId}`);
             if (!response.ok) return null;
-            return (await readJsonResponse(response, "Failed to poll training job")) as TrainingJob;
+            return (await readJsonResponse(response, "Failed to poll training job")) as unknown as TrainingJob;
           })
         );
         setJobs((prev) =>
@@ -1241,6 +1260,7 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
           projectId: inferenceForm.projectId,
           confidence: inferenceForm.confidence,
           inferenceMode: inferenceForm.inferenceMode,
+          replaceDraftDetections: inferenceForm.replaceDraftDetections,
           saveDetections: true,
         }),
       });
@@ -2192,7 +2212,11 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
                   <Select
                     value={inferenceForm.projectId}
                     onValueChange={(value) =>
-                      setInferenceForm((prev) => ({ ...prev, projectId: value }))
+                      setInferenceForm((prev) => ({
+                        ...prev,
+                        projectId: value,
+                        replaceDraftDetections: false,
+                      }))
                     }
                   >
                     <SelectTrigger id="inference-project">
@@ -2286,10 +2310,10 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
                     <CardDescription>
                       {inferencePreviewLoading
                         ? "Calculating eligible images..."
-                        : "Counts exclude images already processed by this model."}
+                        : "Reviewed decisions are protected. Draft-only detections can be replaced when you choose to rerun."}
                     </CardDescription>
                   </CardHeader>
-                  <CardContent className="grid gap-3 md:grid-cols-4 text-sm">
+                  <CardContent className="grid gap-3 md:grid-cols-5 text-sm">
                     <div className="rounded-md bg-white p-3 border border-gray-100">
                       <p className="text-xs text-gray-500">Eligible images</p>
                       <p className="text-lg font-semibold">
@@ -2309,6 +2333,12 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
                       </p>
                     </div>
                     <div className="rounded-md bg-white p-3 border border-gray-100">
+                      <p className="text-xs text-gray-500">Replaceable drafts</p>
+                      <p className="text-lg font-semibold">
+                        {inferencePreview ? inferencePreview.replaceableDuplicateImages : "--"}
+                      </p>
+                    </div>
+                    <div className="rounded-md bg-white p-3 border border-gray-100">
                       <p className="text-xs text-gray-500">Save threshold</p>
                       <p className="text-lg font-semibold">
                         {formatInferenceConfidence(inferenceForm.confidence)}
@@ -2319,6 +2349,50 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
                     </div>
                   </CardContent>
                 </Card>
+
+                {hasReplaceableInferenceDrafts && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                    <div className="flex items-start gap-3">
+                      <Checkbox
+                        id="replace-draft-detections"
+                        checked={inferenceForm.replaceDraftDetections}
+                        onCheckedChange={(checked) =>
+                          setInferenceForm((prev) => ({
+                            ...prev,
+                            replaceDraftDetections: checked === true,
+                          }))
+                        }
+                      />
+                      <div className="space-y-1">
+                        <Label htmlFor="replace-draft-detections" className="font-semibold">
+                          Replace previous draft detections for this model
+                        </Label>
+                        <p className="text-xs">
+                          This reruns {inferencePreview?.replaceableDuplicateImages || 0} image(s)
+                          with unreviewed draft detections. Accepted, rejected, corrected, or
+                          reviewed detections are kept and will not be overwritten.
+                        </p>
+                        {hasProtectedInferenceReviews && (
+                          <p className="text-xs">
+                            {inferencePreview?.reviewedDuplicateImages || 0} image(s) already have
+                            reviewed decisions and are protected from rerun.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {inferencePreview &&
+                  inferencePreview.totalImages === 0 &&
+                  hasReplaceableInferenceDrafts &&
+                  !inferenceForm.replaceDraftDetections && (
+                    <div className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm text-orange-800">
+                      Start is unavailable because every eligible image already has draft
+                      detections. Tick the replacement option above to rerun the unreviewed drafts
+                      at the selected confidence.
+                    </div>
+                  )}
 
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setRunInferenceOpen(false)}>
@@ -2819,6 +2893,10 @@ export default function TrainingPage({ workspaceMode = false }: TrainingClientPr
                         onClick={() => {
                           setSelectedInferenceModel(model);
                           setInferencePreview(null);
+                          setInferenceForm((prev) => ({
+                            ...prev,
+                            replaceDraftDetections: false,
+                          }));
                           setRunInferenceOpen(true);
                         }}
                         disabled={
