@@ -131,6 +131,7 @@ export async function POST(request: NextRequest) {
       saveDetections = true,
       preview = false,
     } = body;
+    const replaceDraftDetections = body.replaceDraftDetections === true;
     let inferenceSelection: ReturnType<typeof resolveInferenceMode>;
     try {
       inferenceSelection = resolveInferenceMode({
@@ -235,20 +236,52 @@ export async function POST(request: NextRequest) {
       baseWhere.id = { in: assetIds };
     }
 
+    const anyModelDetectionFilter = { customModelId: effectiveModelId };
+    const reviewedModelDetectionFilter = {
+      customModelId: effectiveModelId,
+      OR: [
+        { verified: true },
+        { rejected: true },
+        { userCorrected: true },
+        { reviewedAt: { not: null } },
+      ],
+    };
+
     const duplicateImages = await prisma.asset.count({
       where: {
         ...baseWhere,
         detections: {
-          some: { customModelId: effectiveModelId },
+          some: anyModelDetectionFilter,
         },
       },
     });
 
+    const reviewedDuplicateImages = await prisma.asset.count({
+      where: {
+        ...baseWhere,
+        detections: {
+          some: reviewedModelDetectionFilter,
+        },
+      },
+    });
+
+    const replaceableDuplicateImages = Math.max(0, duplicateImages - reviewedDuplicateImages);
+
     const candidateWhere: Record<string, unknown> = {
       ...baseWhere,
-      detections: {
-        none: { customModelId: effectiveModelId },
-      },
+      ...(replaceDraftDetections
+        ? {
+            NOT: {
+              detections: {
+                some: reviewedModelDetectionFilter,
+              },
+            },
+          }
+        : {
+            detections: {
+              none: anyModelDetectionFilter,
+            },
+          }),
     };
 
     const skippedImages = await prisma.asset.count({
@@ -283,6 +316,9 @@ export async function POST(request: NextRequest) {
         skippedImages,
         skippedReason: 'missing_gps_or_dimensions',
         duplicateImages,
+        replaceDraftDetections,
+        replaceableDuplicateImages,
+        reviewedDuplicateImages,
         confidence,
         inferenceMode,
         inferenceModeLabel,
@@ -290,13 +326,20 @@ export async function POST(request: NextRequest) {
     }
 
     if (totalImages === 0) {
+      const rerunBlockedByDrafts =
+        duplicateImages > 0 && replaceableDuplicateImages > 0 && !replaceDraftDetections;
       return NextResponse.json(
         {
-          error: 'No eligible images to process',
+          error: rerunBlockedByDrafts
+            ? 'No eligible images to process. This project already has draft detections for this model; enable replaceDraftDetections to rerun unreviewed images.'
+            : 'No eligible images to process',
           totalImages,
           skippedImages,
           skippedReason: 'missing_gps_or_dimensions',
           duplicateImages,
+          replaceDraftDetections,
+          replaceableDuplicateImages,
+          reviewedDuplicateImages,
         },
         { status: 400 }
       );
@@ -328,12 +371,15 @@ export async function POST(request: NextRequest) {
           inferenceMode,
           inferenceModeLabel,
           saveDetections,
+          replaceDraftDetections,
           totalImages,
           processedImages: 0,
           detectionsFound: 0,
           skippedImages,
           skippedReason: 'missing_gps_or_dimensions',
           duplicateImages,
+          replaceableDuplicateImages,
+          reviewedDuplicateImages,
           backend: backendPreference,
         },
       },
@@ -350,8 +396,11 @@ export async function POST(request: NextRequest) {
         inferenceMode,
         inferenceModeLabel,
         saveDetections,
+        replaceDraftDetections,
         skippedImages,
         duplicateImages,
+        replaceableDuplicateImages,
+        reviewedDuplicateImages,
         skippedReason: 'missing_gps_or_dimensions',
         backend: backendPreference as 'local' | 'roboflow' | 'auto',
       });
@@ -366,7 +415,11 @@ export async function POST(request: NextRequest) {
             skippedImages,
             skippedReason: 'missing_gps_or_dimensions',
             duplicateImages,
+            replaceDraftDetections,
+            replaceableDuplicateImages,
+            reviewedDuplicateImages,
             detectionsFound: result.detectionsFound,
+            draftDetectionsReplaced: result.draftDetectionsReplaced,
             confidence,
             inferenceMode,
             inferenceModeLabel,
@@ -384,7 +437,11 @@ export async function POST(request: NextRequest) {
         skippedImages,
         skippedReason: 'missing_gps_or_dimensions',
         duplicateImages,
+        replaceDraftDetections,
+        replaceableDuplicateImages,
+        reviewedDuplicateImages,
         detectionsFound: result.detectionsFound,
+        draftDetectionsReplaced: result.draftDetectionsReplaced,
         confidence,
         inferenceMode,
         inferenceModeLabel,
@@ -421,6 +478,7 @@ export async function POST(request: NextRequest) {
       inferenceMode,
       inferenceModeLabel,
       saveDetections,
+      replaceDraftDetections,
       backend: backendPreference as 'local' | 'roboflow' | 'auto',
     });
 
@@ -434,6 +492,9 @@ export async function POST(request: NextRequest) {
       skippedImages,
       skippedReason: 'missing_gps_or_dimensions',
       duplicateImages,
+      replaceDraftDetections,
+      replaceableDuplicateImages,
+      reviewedDuplicateImages,
     });
   } catch (error) {
     console.error('Error starting inference:', error);
