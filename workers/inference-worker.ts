@@ -47,6 +47,18 @@ async function handleInferenceJob(
     modelName: job.data.modelName,
     assetIds: job.data.assetIds,
     confidence: job.data.confidence,
+    inferenceMode:
+      typeof job.data.inferenceMode === 'string'
+        ? job.data.inferenceMode
+        : typeof config.inferenceMode === 'string'
+          ? config.inferenceMode
+          : undefined,
+    inferenceModeLabel:
+      typeof job.data.inferenceModeLabel === 'string'
+        ? job.data.inferenceModeLabel
+        : typeof config.inferenceModeLabel === 'string'
+          ? config.inferenceModeLabel
+          : undefined,
     saveDetections: job.data.saveDetections,
     skippedImages,
     duplicateImages,
