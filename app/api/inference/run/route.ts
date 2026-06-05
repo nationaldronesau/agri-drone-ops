@@ -15,7 +15,7 @@ import {
 } from '@/lib/services/yolo';
 import { S3Service } from '@/lib/services/s3';
 
-const MAX_SYNC_IMAGES = 50;
+const DEFAULT_MAX_SYNC_IMAGES = 1;
 const STANDARD_INFERENCE_CONFIDENCE = 0.25;
 const HIGH_RECALL_INFERENCE_CONFIDENCE = 0.1;
 
@@ -25,6 +25,24 @@ function clampConfidence(value: unknown, fallback = STANDARD_INFERENCE_CONFIDENC
   const parsed = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(0, Math.min(1, parsed));
+}
+
+function resolveMaxSyncImages(): number {
+  const parsed = Number.parseInt(process.env.YOLO_MAX_SYNC_IMAGES || '', 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_MAX_SYNC_IMAGES;
+}
+
+export function shouldRunInferenceSynchronously(input: {
+  totalImages: number;
+  explicitAssetSelection: boolean;
+  maxSyncImages?: number;
+}): boolean {
+  const maxSyncImages = input.maxSyncImages ?? DEFAULT_MAX_SYNC_IMAGES;
+  return (
+    input.explicitAssetSelection &&
+    input.totalImages > 0 &&
+    input.totalImages <= maxSyncImages
+  );
 }
 
 function resolveInferenceMode(input: {
@@ -385,7 +403,13 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    if (totalImages <= MAX_SYNC_IMAGES) {
+    const runSynchronously = shouldRunInferenceSynchronously({
+      totalImages,
+      explicitAssetSelection: Array.isArray(assetIds),
+      maxSyncImages: resolveMaxSyncImages(),
+    });
+
+    if (runSynchronously) {
       const result = await processInferenceJob({
         jobId: processingJob.id,
         projectId,
@@ -462,7 +486,7 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json(
         {
-          error: 'Batch too large for synchronous processing. Please select 50 or fewer images.',
+          error: 'Inference queue unavailable. Project-level YOLO runs are processed asynchronously to avoid web request timeouts.',
         },
         { status: 503 }
       );
