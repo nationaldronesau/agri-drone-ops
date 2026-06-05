@@ -1,4 +1,5 @@
 import YOLOService, { yoloService } from '@/lib/services/yolo';
+import { yoloRuntimeService } from '@/lib/services/yolo-runtime';
 import { roboflowService, ROBOFLOW_MODELS, ModelType } from '@/lib/services/roboflow';
 import { fetchImageSafely } from '@/lib/utils/security';
 import {
@@ -45,10 +46,12 @@ export interface DetectionResult {
 }
 
 const inferenceBaseUrl =
-  process.env.YOLO_INFERENCE_URL ||
-  process.env.SAM3_SERVICE_URL ||
-  process.env.SAM3_API_URL ||
-  null;
+  yoloRuntimeService.hasManagedInstance()
+    ? null
+    : process.env.YOLO_INFERENCE_URL ||
+      process.env.SAM3_SERVICE_URL ||
+      process.env.SAM3_API_URL ||
+      null;
 
 const yoloInferenceClient = inferenceBaseUrl
   ? new YOLOService({

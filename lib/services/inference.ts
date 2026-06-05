@@ -14,6 +14,7 @@ import { normalizeDetectionType } from '@/lib/utils/detection-types';
 import { fetchImageSafely } from '@/lib/utils/security';
 import { resolveGeoCoordinates, validateGeoCoordinates } from '@/lib/utils/georeferencing';
 import { sam3Orchestrator } from '@/lib/services/sam3-orchestrator';
+import { yoloRuntimeService, type YOLORuntimeStatus } from '@/lib/services/yolo-runtime';
 import { acquireGpuLock, refreshGpuLock, releaseGpuLock } from '@/lib/services/gpu-lock';
 
 interface InferenceAsset {
@@ -64,6 +65,7 @@ export interface InferenceJobConfig {
   errors?: string[];
   backend?: InferenceBackend;
   tiling?: InferenceTilingSummary;
+  yoloRuntime?: Partial<YOLORuntimeStatus>;
 }
 
 export interface InferenceResult {
@@ -278,6 +280,62 @@ export async function processInferenceJob(options: {
           duplicateImages,
           draftDetectionsReplaced,
           errors: [`GPU not available: ${gpuResult.message}`],
+        };
+      }
+    }
+
+    const runtimeStartingConfig: InferenceJobConfig = {
+      modelId,
+      modelName,
+      confidence,
+      inferenceMode,
+      inferenceModeLabel,
+      saveDetections,
+      replaceDraftDetections,
+      totalImages,
+      processedImages,
+      detectionsFound,
+      skippedImages,
+      duplicateImages,
+      replaceableDuplicateImages,
+      reviewedDuplicateImages,
+      draftDetectionsReplaced,
+      skippedReason,
+      backend: effectiveBackend,
+      yoloRuntime: {
+        state: 'starting',
+        managedInstance: yoloRuntimeService.hasManagedInstance(),
+      },
+    };
+    await updateJobProgress(jobId, runtimeStartingConfig, 0);
+
+    const runtimeResult = await yoloRuntimeService.ensureReady();
+    if (!runtimeResult.ready) {
+      const runtimeError = `YOLO runtime unavailable: ${runtimeResult.lastError || runtimeResult.state}`;
+      if (backend === 'auto') {
+        effectiveBackend = 'roboflow';
+      } else {
+        await prisma.processingJob.update({
+          where: { id: jobId },
+          data: {
+            status: 'FAILED',
+            errorMessage: runtimeError,
+            config: {
+              ...runtimeStartingConfig,
+              yoloRuntime: runtimeResult,
+            } as unknown as Prisma.InputJsonObject,
+          },
+        });
+        if (gpuLock.token) {
+          await releaseGpuLock(gpuLock.token);
+        }
+        return {
+          processedImages: 0,
+          detectionsFound: 0,
+          skippedImages,
+          duplicateImages,
+          draftDetectionsReplaced,
+          errors: [runtimeError],
         };
       }
     }
