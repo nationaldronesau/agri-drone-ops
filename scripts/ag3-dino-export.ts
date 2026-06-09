@@ -537,40 +537,58 @@ async function exportActualBundle(options: CliOptions): Promise<ExportBundle> {
 
   const inferenceJobIds = toStringArray(session.inferenceJobIds);
   const batchJobIds = toStringArray(session.batchJobIds);
+  const exportAssetIds = assets.map((asset) => asset.id);
 
-  const detectionRows = await prisma.detection.findMany({
-    where: {
-      assetId: { in: assets.map((asset) => asset.id) },
-      OR: [
-        ...(inferenceJobIds.length > 0
-          ? [{ inferenceJobId: { in: inferenceJobIds } }]
-          : [
-              { customModelId: PINE_MODEL_ID },
-              { createdAt: { gte: session.createdAt }, type: 'YOLO_LOCAL' as const },
-            ]),
-      ],
-    },
-    select: {
-      id: true,
-      assetId: true,
-      type: true,
-      className: true,
-      confidence: true,
-      boundingBox: true,
-      preprocessingMeta: true,
-      verified: true,
-      rejected: true,
-      userCorrected: true,
-      customModelId: true,
-      inferenceJobId: true,
-      metadata: true,
-    },
-  });
+  const detectionSelect = {
+    id: true,
+    assetId: true,
+    type: true,
+    className: true,
+    confidence: true,
+    boundingBox: true,
+    preprocessingMeta: true,
+    verified: true,
+    rejected: true,
+    userCorrected: true,
+    customModelId: true,
+    inferenceJobId: true,
+    metadata: true,
+  } as const;
+
+  const linkedDetectionRows = inferenceJobIds.length > 0
+    ? await prisma.detection.findMany({
+        where: {
+          assetId: { in: exportAssetIds },
+          inferenceJobId: { in: inferenceJobIds },
+        },
+        select: detectionSelect,
+      })
+    : [];
+
+  const detectionRows = linkedDetectionRows.length > 0
+    ? linkedDetectionRows
+    : await prisma.detection.findMany({
+        where: {
+          assetId: { in: exportAssetIds },
+          OR: [
+            { customModelId: PINE_MODEL_ID },
+            { createdAt: { gte: session.createdAt }, type: 'YOLO_LOCAL' as const },
+          ],
+        },
+        select: detectionSelect,
+      });
+
+  if (inferenceJobIds.length > 0 && linkedDetectionRows.length === 0 && detectionRows.length > 0) {
+    console.warn(
+      `No detections were linked to inference job(s) ${inferenceJobIds.join(', ')}; ` +
+      `exporting ${detectionRows.length} model detections from the same asset set instead.`
+    );
+  }
 
   const pendingRows = batchJobIds.length > 0
     ? await prisma.pendingAnnotation.findMany({
         where: {
-          assetId: { in: assets.map((asset) => asset.id) },
+          assetId: { in: exportAssetIds },
           batchJobId: { in: batchJobIds },
         },
         select: {
