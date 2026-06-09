@@ -86,4 +86,3 @@ experiment only returns a point, it may use `point: [x, y]` plus `boxSize`.
   `mode=DINO_CANDIDATE_MINING`, then creates a normal review session for that batch.
 - This keeps candidate mining outside the critical app path while preserving the
   normal accepted-only training flow.
-
