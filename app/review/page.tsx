@@ -235,7 +235,11 @@ function ReviewPageContent() {
   );
 
   const handleAction = useCallback(
-    async (item: ReviewItem, action: 'accept' | 'reject' | 'correct', correctedClass?: string) => {
+    async (
+      item: ReviewItem,
+      action: 'accept' | 'reject' | 'correct' | 'restore',
+      correctedClass?: string
+    ) => {
       if (!sessionId) return;
       setActionLoading(true);
       setActionError(null);
