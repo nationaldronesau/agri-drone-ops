@@ -143,8 +143,8 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
   ).length;
 
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[240px_minmax(0,1fr)_320px] xl:grid-cols-[280px_minmax(0,1fr)_360px]">
-      <div className="space-y-3">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[220px_minmax(0,1fr)_360px] xl:grid-cols-[260px_minmax(0,1fr)_420px] 2xl:grid-cols-[280px_minmax(0,1fr)_480px]">
+      <div className="space-y-3 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto lg:pr-1">
         <div className="text-sm font-semibold text-gray-700">Assets</div>
         <div className="space-y-2">
           {groupedAssets.map((group, index) => (
@@ -154,8 +154,9 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
               className={`w-full rounded-lg border px-3 py-2 text-left text-sm transition ${
                 index === currentIndex ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'
               }`}
+              title={group.asset.fileName}
             >
-              <div className="font-medium text-gray-900">{group.asset.fileName}</div>
+              <div className="truncate font-medium text-gray-900">{group.asset.fileName}</div>
               <div className="text-xs text-gray-500">{group.items.length} items</div>
             </button>
           ))}
@@ -262,26 +263,33 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
         </div>
       </div>
 
-      <div className="space-y-4">
-        <div className="text-sm font-semibold text-gray-700">Review Items</div>
+      <div className="space-y-3 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto lg:pr-1">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-sm font-semibold text-gray-700">Review Items</div>
+          <div className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">
+            {currentItems.length} on image
+          </div>
+        </div>
         {currentItems.length === 0 ? (
           <div className="rounded-lg border border-dashed p-4 text-sm text-gray-500">
             No items for this asset.
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-2">
             {currentItems.map((item) => {
               const warningText = item.warnings.join('; ');
               return (
-                <div key={item.id} className="rounded-lg border border-gray-200 p-3">
+                <div key={item.id} className="rounded-lg border border-gray-200 bg-white p-3">
                   <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="text-sm font-semibold text-gray-900">{item.className}</div>
-                      <div className="text-xs text-gray-500">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-gray-900" title={item.className}>
+                        {item.className}
+                      </div>
+                      <div className="truncate text-xs text-gray-500" title={`${Math.round(item.confidence * 100)}% confidence · ${item.source}`}>
                         {Math.round(item.confidence * 100)}% confidence · {item.source}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-shrink-0 items-center gap-2">
                       {item.status === 'accepted' && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                       {item.status === 'rejected' && <XCircle className="h-4 w-4 text-red-500" />}
                       {item.warnings.length > 0 && (
@@ -311,11 +319,12 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
                       </SelectContent>
                     </Select>
 
-                    <div className="flex flex-wrap gap-2">
+                    <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => onAction(item, 'accept')}
+                        className="h-8 px-2 text-xs"
                       >
                         Accept
                       </Button>
@@ -323,6 +332,7 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
                         variant="outline"
                         size="sm"
                         onClick={() => onAction(item, 'reject')}
+                        className="h-8 px-2 text-xs"
                       >
                         Reject
                       </Button>
@@ -331,6 +341,7 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
                         size="sm"
                         onClick={() => onAction(item, 'correct', corrections[item.id])}
                         disabled={!corrections[item.id]}
+                        className="h-8 px-2 text-xs"
                       >
                         Correct
                       </Button>
@@ -338,9 +349,10 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
                         variant="outline"
                         size="sm"
                         onClick={() => onEdit(item)}
+                        className="h-8 px-2 text-xs"
                       >
                         <Pencil className="mr-1 h-3 w-3" />
-                        Edit Geometry
+                        Edit
                       </Button>
                     </div>
 

@@ -448,7 +448,7 @@ function ReviewPageContent() {
 
   return (
     <div className="p-6 lg:p-8">
-      <div className="mx-auto max-w-[1500px] space-y-6">
+      <div className="mx-auto max-w-[1800px] space-y-6">
         {yoloTrainingJobId && (
           <div className="flex justify-end">
             <Link href="/training">
