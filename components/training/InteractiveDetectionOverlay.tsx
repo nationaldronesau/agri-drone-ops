@@ -90,6 +90,10 @@ export function InteractiveDetectionOverlay({
   const scaledHeight = actualImageSize.height * scale;
   const renderWidth = Math.max(1, Math.round(scaledWidth));
   const renderHeight = Math.max(1, Math.round(scaledHeight));
+  const denseDetectionMode = detections.length >= 60;
+  const badgeWidth = denseDetectionMode ? 34 : 40;
+  const badgeHeight = denseDetectionMode ? 16 : 18;
+  const badgeFontSize = denseDetectionMode ? 10 : 11;
 
   // Convert pixel coordinates to scaled coordinates
   const scaleBox = (bbox: number[]) => {
@@ -238,17 +242,18 @@ export function InteractiveDetectionOverlay({
                   {/* Confidence Badge */}
                   <g transform={`translate(${box.x + 4}, ${box.y + 4})`}>
                     <rect
-                      width="40"
-                      height="18"
+                      width={badgeWidth}
+                      height={badgeHeight}
                       rx="4"
                       fill={detection.confidence >= 0.8 ? '#22c55e' : detection.confidence >= 0.5 ? '#f59e0b' : '#ef4444'}
+                      opacity={denseDetectionMode && !isHovered ? 0.9 : 1}
                     />
                     <text
-                      x="20"
-                      y="13"
+                      x={badgeWidth / 2}
+                      y={denseDetectionMode ? 12 : 13}
                       textAnchor="middle"
                       fill="white"
-                      fontSize="11"
+                      fontSize={badgeFontSize}
                       fontWeight="bold"
                     >
                       {Math.round(detection.confidence * 100)}%
