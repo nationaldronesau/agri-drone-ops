@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
   AlertTriangle,
@@ -73,7 +73,7 @@ export interface ReviewItem {
 interface ReviewViewerProps {
   items: ReviewItem[];
   assets?: ReviewItemAsset[];
-  onAction: (item: ReviewItem, action: 'accept' | 'reject' | 'correct', correctedClass?: string) => Promise<void>;
+  onAction: (item: ReviewItem, action: 'accept' | 'reject' | 'correct' | 'restore', correctedClass?: string) => Promise<void>;
   onEdit: (item: ReviewItem) => void;
 }
 
@@ -97,6 +97,8 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
   const [zoomLevel, setZoomLevel] = useState(1);
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
   const [viewMode, setViewMode] = useState<'image' | 'map'>('image');
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const reviewItemRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   useEffect(() => {
     if (currentIndex >= groupedAssets.length) {
@@ -110,7 +112,16 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
   useEffect(() => {
     setZoomLevel(1);
     setPanOffset({ x: 0, y: 0 });
+    setSelectedItemId(null);
   }, [currentGroup?.asset.id]);
+
+  useEffect(() => {
+    if (!selectedItemId) return;
+    reviewItemRefs.current[selectedItemId]?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center',
+    });
+  }, [selectedItemId]);
 
   const handleZoomIn = () => setZoomLevel((prev) => Math.min(prev * 1.2, 5));
   const handleZoomOut = () => setZoomLevel((prev) => Math.max(prev / 1.2, 0.1));
@@ -193,14 +204,8 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
             <InteractiveDetectionOverlay
               imageUrl={currentGroup.asset.storageUrl}
               detections={overlayItems}
-              onAccept={(id) => {
-                const item = currentItems.find((entry) => entry.id === id);
-                if (item) onAction(item, 'accept');
-              }}
-              onReject={(id) => {
-                const item = currentItems.find((entry) => entry.id === id);
-                if (item) onAction(item, 'reject');
-              }}
+              selectedDetectionId={selectedItemId}
+              onSelectDetection={setSelectedItemId}
               imageWidth={currentGroup.asset.imageWidth || undefined}
               imageHeight={currentGroup.asset.imageHeight || undefined}
               zoomLevel={zoomLevel}
@@ -278,12 +283,29 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
           <div className="space-y-2">
             {currentItems.map((item) => {
               const warningText = item.warnings.join('; ');
+              const isSelected = selectedItemId === item.id;
               return (
-                <div key={item.id} className="rounded-lg border border-gray-200 bg-white p-3">
+                <div
+                  key={item.id}
+                  ref={(element) => {
+                    reviewItemRefs.current[item.id] = element;
+                  }}
+                  onClick={() => setSelectedItemId(item.id)}
+                  className={`rounded-lg border bg-white p-3 transition ${
+                    isSelected ? 'border-blue-500 shadow-sm ring-2 ring-blue-100' : 'border-gray-200'
+                  }`}
+                >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-gray-900" title={item.className}>
-                        {item.className}
+                      <div className="flex items-center gap-2">
+                        <div className="truncate text-sm font-semibold text-gray-900" title={item.className}>
+                          {item.className}
+                        </div>
+                        {isSelected && (
+                          <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700">
+                            Selected
+                          </span>
+                        )}
                       </div>
                       <div className="truncate text-xs text-gray-500" title={`${Math.round(item.confidence * 100)}% confidence · ${item.source}`}>
                         {Math.round(item.confidence * 100)}% confidence · {item.source}
@@ -328,14 +350,25 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
                       >
                         Accept
                       </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => onAction(item, 'reject')}
-                        className="h-8 px-2 text-xs"
-                      >
-                        Reject
-                      </Button>
+                      {item.status === 'rejected' ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onAction(item, 'restore')}
+                          className="h-8 px-2 text-xs"
+                        >
+                          Restore
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onAction(item, 'reject')}
+                          className="h-8 px-2 text-xs"
+                        >
+                          Reject
+                        </Button>
+                      )}
                       <Button
                         variant="outline"
                         size="sm"

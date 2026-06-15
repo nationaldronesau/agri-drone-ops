@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
-import { Check, X } from 'lucide-react';
 
 interface Detection {
   id: string;
@@ -15,8 +14,8 @@ interface Detection {
 interface InteractiveDetectionOverlayProps {
   imageUrl: string;
   detections: Detection[];
-  onAccept: (id: string) => void;
-  onReject: (id: string) => void;
+  selectedDetectionId?: string | null;
+  onSelectDetection?: (id: string) => void;
   imageWidth?: number;
   imageHeight?: number;
   zoomLevel?: number;
@@ -27,8 +26,8 @@ interface InteractiveDetectionOverlayProps {
 export function InteractiveDetectionOverlay({
   imageUrl,
   detections,
-  onAccept,
-  onReject,
+  selectedDetectionId,
+  onSelectDetection,
   imageWidth = 4000, // Default DJI image width
   imageHeight = 3000, // Default DJI image height
   zoomLevel = 1,
@@ -67,24 +66,6 @@ export function InteractiveDetectionOverlay({
     return () => observer.disconnect();
   }, [imageLoaded, actualImageSize.width, actualImageSize.height]);
 
-  // Handle keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (!hoveredId) return;
-
-      if (e.key === 'a' || e.key === 'A') {
-        e.preventDefault();
-        onAccept(hoveredId);
-      } else if (e.key === 'd' || e.key === 'D' || e.key === 'Delete' || e.key === 'Backspace') {
-        e.preventDefault();
-        onReject(hoveredId);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [hoveredId, onAccept, onReject]);
-
   const scale = containerSize.width > 0 ? containerSize.width / actualImageSize.width : 1;
   const scaledWidth = actualImageSize.width * scale;
   const scaledHeight = actualImageSize.height * scale;
@@ -106,7 +87,10 @@ export function InteractiveDetectionOverlay({
     };
   };
 
-  const getStatusColor = (status: string, isHovered: boolean) => {
+  const getStatusColor = (status: string, isHovered: boolean, isSelected: boolean) => {
+    if (isSelected) {
+      return { stroke: '#2563eb', fill: 'rgba(37, 99, 235, 0.18)' };
+    }
     switch (status) {
       case 'ACCEPTED':
         return { stroke: '#22c55e', fill: 'rgba(34, 197, 94, 0.2)' };
@@ -200,14 +184,15 @@ export function InteractiveDetectionOverlay({
             {detections.map((detection) => {
               const box = scaleBox(detection.bbox);
               const isHovered = hoveredId === detection.id;
-              const colors = getStatusColor(detection.status, isHovered);
-              const isPending = detection.status === 'PENDING';
+              const isSelected = selectedDetectionId === detection.id;
+              const colors = getStatusColor(detection.status, isHovered, isSelected);
 
               return (
                 <g
                   key={detection.id}
                   onMouseEnter={() => setHoveredId(detection.id)}
                   onMouseLeave={() => setHoveredId(null)}
+                  onClick={() => onSelectDetection?.(detection.id)}
                   className="pointer-events-auto cursor-pointer"
                 >
                   {/* Detection Box */}
@@ -218,12 +203,25 @@ export function InteractiveDetectionOverlay({
                     height={box.height}
                     fill={colors.fill}
                     stroke={colors.stroke}
-                    strokeWidth={isHovered ? 3 : 2}
+                    strokeWidth={isSelected ? 4 : isHovered ? 3 : 2}
                     className="transition-all"
                     style={{
                       opacity: detection.status === 'REJECTED' ? 0.5 : 1,
                     }}
                   />
+                  {isSelected && (
+                    <rect
+                      x={Math.max(0, box.x - 3)}
+                      y={Math.max(0, box.y - 3)}
+                      width={box.width + 6}
+                      height={box.height + 6}
+                      fill="none"
+                      stroke="#2563eb"
+                      strokeWidth="2"
+                      strokeDasharray="6 4"
+                      className="pointer-events-none"
+                    />
+                  )}
 
                   {/* Status Icon for accepted/rejected */}
                   {detection.status === 'ACCEPTED' && (
@@ -260,42 +258,8 @@ export function InteractiveDetectionOverlay({
                     </text>
                   </g>
 
-                  {/* Hover Action Buttons - Only for pending */}
-                  {isHovered && isPending && (
-                    <foreignObject
-                      x={box.x + box.width / 2 - 50}
-                      y={box.y + box.height / 2 - 18}
-                      width="100"
-                      height="36"
-                      className="pointer-events-auto"
-                    >
-                      <div className="flex items-center justify-center gap-2">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onAccept(detection.id);
-                          }}
-                          className="w-10 h-10 rounded-full bg-green-500 hover:bg-green-600 text-white flex items-center justify-center shadow-lg transition-transform hover:scale-110"
-                          title="Accept (A)"
-                        >
-                          <Check className="w-5 h-5" />
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onReject(detection.id);
-                          }}
-                          className="w-10 h-10 rounded-full bg-red-500 hover:bg-red-600 text-white flex items-center justify-center shadow-lg transition-transform hover:scale-110"
-                          title="Reject (D)"
-                        >
-                          <X className="w-5 h-5" />
-                        </button>
-                      </div>
-                    </foreignObject>
-                  )}
-
                   {/* Weed Type Label on Hover */}
-                  {isHovered && (
+                  {(isHovered || isSelected) && (
                     <g transform={`translate(${box.x}, ${box.y - 24})`}>
                       <rect
                         width={Math.max(detection.weedType.length * 8 + 16, 80)}
@@ -321,11 +285,15 @@ export function InteractiveDetectionOverlay({
       </div>
 
       {/* Keyboard Shortcut Hint */}
-      {hoveredId && (
+      {selectedDetectionId ? (
         <div className="absolute bottom-2 left-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
-          Press <kbd className="bg-gray-600 px-1 rounded">A</kbd> to accept, <kbd className="bg-gray-600 px-1 rounded">D</kbd> to reject
+          Selected detection. Use the Review Items panel to accept, reject, correct, or restore it.
         </div>
-      )}
+      ) : hoveredId ? (
+        <div className="absolute bottom-2 left-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
+          Click a box to select it. Review actions are in the side panel.
+        </div>
+      ) : null}
     </div>
   );
 }
