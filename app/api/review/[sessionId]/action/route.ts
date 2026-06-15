@@ -3,7 +3,7 @@ import prisma from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
 import { normalizeDetectionType } from '@/lib/utils/detection-types';
 
-type ReviewAction = 'accept' | 'reject' | 'correct' | 'edit';
+type ReviewAction = 'accept' | 'reject' | 'correct' | 'edit' | 'restore';
 type ReviewSource = 'manual' | 'pending' | 'detection';
 
 function confidenceToEnum(confidence: number): 'CERTAIN' | 'LIKELY' | 'UNCERTAIN' {
@@ -197,7 +197,17 @@ export async function POST(
             ? 'rejected'
             : 'pending';
 
-        if (action === 'reject') {
+        if (action === 'restore') {
+          nextStatus = 'pending';
+          await tx.manualAnnotation.update({
+            where: { id: itemId },
+            data: {
+              verified: false,
+              verifiedAt: null,
+              verifiedBy: null,
+            },
+          });
+        } else if (action === 'reject') {
           nextStatus = 'rejected';
           await tx.manualAnnotation.update({
             where: { id: itemId },
@@ -233,7 +243,18 @@ export async function POST(
               ? 'rejected'
               : 'pending';
 
-        if (action === 'reject') {
+        if (action === 'restore') {
+          nextStatus = 'pending';
+          await tx.pendingAnnotation.update({
+            where: { id: itemId },
+            data: {
+              status: 'PENDING',
+              reviewedAt: null,
+              reviewedBy: null,
+              rejectionReason: null,
+            },
+          });
+        } else if (action === 'reject') {
           nextStatus = 'rejected';
           await tx.pendingAnnotation.update({
             where: { id: itemId },
@@ -318,7 +339,19 @@ export async function POST(
             ? 'accepted'
             : 'pending';
 
-        if (action === 'reject') {
+        if (action === 'restore') {
+          nextStatus = 'pending';
+          await tx.detection.update({
+            where: { id: itemId },
+            data: {
+              rejected: false,
+              verified: false,
+              userCorrected: false,
+              reviewedAt: null,
+              reviewedBy: null,
+            },
+          });
+        } else if (action === 'reject') {
           nextStatus = 'rejected';
           await tx.detection.update({
             where: { id: itemId },
@@ -361,14 +394,34 @@ export async function POST(
         }
       }
 
-      if (prevStatus === 'pending' && nextStatus !== 'pending') {
+      if (prevStatus !== nextStatus) {
+        const data: {
+          itemsReviewed?: { increment: number };
+          itemsAccepted?: { increment: number };
+          itemsRejected?: { increment: number };
+        } = {};
+
+        if (prevStatus === 'pending' && nextStatus !== 'pending') {
+          data.itemsReviewed = { increment: 1 };
+        } else if (prevStatus !== 'pending' && nextStatus === 'pending') {
+          data.itemsReviewed = { increment: -1 };
+        }
+
+        if (prevStatus !== 'accepted' && nextStatus === 'accepted') {
+          data.itemsAccepted = { increment: 1 };
+        } else if (prevStatus === 'accepted' && nextStatus !== 'accepted') {
+          data.itemsAccepted = { increment: -1 };
+        }
+
+        if (prevStatus !== 'rejected' && nextStatus === 'rejected') {
+          data.itemsRejected = { increment: 1 };
+        } else if (prevStatus === 'rejected' && nextStatus !== 'rejected') {
+          data.itemsRejected = { increment: -1 };
+        }
+
         await tx.reviewSession.update({
           where: { id: params.sessionId },
-          data: {
-            itemsReviewed: { increment: 1 },
-            ...(nextStatus === 'accepted' ? { itemsAccepted: { increment: 1 } } : {}),
-            ...(nextStatus === 'rejected' ? { itemsRejected: { increment: 1 } } : {}),
-          },
+          data,
         });
       }
 
