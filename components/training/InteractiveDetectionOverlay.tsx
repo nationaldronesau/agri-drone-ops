@@ -75,6 +75,8 @@ export function InteractiveDetectionOverlay({
   const badgeWidth = denseDetectionMode ? 34 : 40;
   const badgeHeight = denseDetectionMode ? 16 : 18;
   const badgeFontSize = denseDetectionMode ? 10 : 11;
+  const clamp = (value: number, min: number, max: number) =>
+    Math.min(Math.max(value, min), max);
 
   // Convert pixel coordinates to scaled coordinates
   const scaleBox = (bbox: number[]) => {
@@ -186,6 +188,16 @@ export function InteractiveDetectionOverlay({
               const isHovered = hoveredId === detection.id;
               const isSelected = selectedDetectionId === detection.id;
               const colors = getStatusColor(detection.status, isHovered, isSelected);
+              const showBadge = !denseDetectionMode || isHovered || isSelected;
+              const badgeX = clamp(box.x + 4, 0, Math.max(0, renderWidth - badgeWidth - 2));
+              const badgeY = clamp(box.y + 4, 0, Math.max(0, renderHeight - badgeHeight - 2));
+              const weedLabel =
+                detection.weedType.length > 36
+                  ? `${detection.weedType.slice(0, 33)}...`
+                  : detection.weedType;
+              const labelWidth = Math.max(weedLabel.length * 8 + 16, 80);
+              const labelX = clamp(box.x, 0, Math.max(0, renderWidth - labelWidth - 2));
+              const labelY = clamp(box.y - 24, 0, Math.max(0, renderHeight - 20));
 
               return (
                 <g
@@ -238,31 +250,32 @@ export function InteractiveDetectionOverlay({
                   )}
 
                   {/* Confidence Badge */}
-                  <g transform={`translate(${box.x + 4}, ${box.y + 4})`}>
-                    <rect
-                      width={badgeWidth}
-                      height={badgeHeight}
-                      rx="4"
-                      fill={detection.confidence >= 0.8 ? '#22c55e' : detection.confidence >= 0.5 ? '#f59e0b' : '#ef4444'}
-                      opacity={denseDetectionMode && !isHovered ? 0.9 : 1}
-                    />
-                    <text
-                      x={badgeWidth / 2}
-                      y={denseDetectionMode ? 12 : 13}
-                      textAnchor="middle"
-                      fill="white"
-                      fontSize={badgeFontSize}
-                      fontWeight="bold"
-                    >
-                      {Math.round(detection.confidence * 100)}%
-                    </text>
-                  </g>
+                  {showBadge && (
+                    <g transform={`translate(${badgeX}, ${badgeY})`}>
+                      <rect
+                        width={badgeWidth}
+                        height={badgeHeight}
+                        rx="4"
+                        fill={detection.confidence >= 0.8 ? '#22c55e' : detection.confidence >= 0.5 ? '#f59e0b' : '#ef4444'}
+                      />
+                      <text
+                        x={badgeWidth / 2}
+                        y={denseDetectionMode ? 12 : 13}
+                        textAnchor="middle"
+                        fill="white"
+                        fontSize={badgeFontSize}
+                        fontWeight="bold"
+                      >
+                        {Math.round(detection.confidence * 100)}%
+                      </text>
+                    </g>
+                  )}
 
                   {/* Weed Type Label on Hover */}
                   {(isHovered || isSelected) && (
-                    <g transform={`translate(${box.x}, ${box.y - 24})`}>
+                    <g transform={`translate(${labelX}, ${labelY})`}>
                       <rect
-                        width={Math.max(detection.weedType.length * 8 + 16, 80)}
+                        width={labelWidth}
                         height="20"
                         rx="4"
                         fill="rgba(0,0,0,0.8)"
@@ -273,7 +286,7 @@ export function InteractiveDetectionOverlay({
                         fill="white"
                         fontSize="12"
                       >
-                        {detection.weedType}
+                        {weedLabel}
                       </text>
                     </g>
                   )}

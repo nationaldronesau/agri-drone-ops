@@ -179,6 +179,10 @@ function toClientAsset<T extends {
   };
 }
 
+function sourceKey(source: string, sourceId: string): string {
+  return `${source}:${sourceId}`;
+}
+
 async function resolveCenterGeo(
   asset: {
     gpsLatitude: number | null;
@@ -395,15 +399,41 @@ export async function GET(
           },
         })
       : Promise.resolve([]);
+    const reviewEditsPromise = prisma.reviewSessionEdit.findMany({
+      where: { reviewSessionId: sessionId },
+    });
 
-    const [manualAnnotations, aiDetections, yoloDetections, pendingAnnotations] = await Promise.all([
+    const [manualAnnotations, aiDetections, yoloDetections, pendingAnnotations, reviewEdits] = await Promise.all([
       manualAnnotationsPromise,
       aiDetectionsPromise,
       yoloDetectionsPromise,
       pendingAnnotationsPromise,
+      reviewEditsPromise,
     ]);
+    const editedAnnotationIds = reviewEdits.map((edit) => edit.newAnnotationId);
+    const editedAnnotationIdSet = new Set(editedAnnotationIds);
+    const editedSourceKeys = new Set(
+      reviewEdits.map((edit) => sourceKey(edit.sourceType, edit.sourceId))
+    );
+    const editedManualAnnotations = editedAnnotationIds.length > 0
+      ? await prisma.manualAnnotation.findMany({
+          where: {
+            id: { in: editedAnnotationIds },
+            session: {
+              assetId: { in: filteredAssetIds },
+            },
+          },
+          include: {
+            session: {
+              select: {
+                asset: { select: assetSelect },
+              },
+            },
+          },
+        })
+      : [];
 
-    const manualItems = await Promise.all(manualAnnotations.map(async (annotation) => {
+    const toManualReviewItem = async (annotation: (typeof manualAnnotations)[number]) => {
         const assetRecord = annotation.session.asset;
         const asset = toClientAsset(assetRecord);
         const validation = validateGeoParams(asset);
@@ -447,7 +477,15 @@ export async function GET(
           canExport: validation.valid,
           warnings: validation.warnings,
         };
-      }));
+      };
+    const manualItems = await Promise.all(
+      manualAnnotations
+        .filter((annotation) => !editedAnnotationIdSet.has(annotation.id))
+        .map(toManualReviewItem)
+    );
+    const editedItems = await Promise.all(
+      editedManualAnnotations.map(toManualReviewItem)
+    );
     const aiItems = await Promise.all(aiDetections.map(async (detection) => {
         const assetRecord = detection.asset;
         const asset = toClientAsset(assetRecord);
@@ -601,7 +639,15 @@ export async function GET(
           },
         };
       }));
-    const items = [...manualItems, ...aiItems, ...yoloItems, ...pendingItems];
+    const sourceItemIsActive = (item: { source: string; sourceId: string }) =>
+      !editedSourceKeys.has(sourceKey(item.source, item.sourceId));
+    const items = [
+      ...manualItems.filter(sourceItemIsActive),
+      ...editedItems,
+      ...aiItems.filter(sourceItemIsActive),
+      ...yoloItems.filter(sourceItemIsActive),
+      ...pendingItems.filter(sourceItemIsActive),
+    ];
 
     if (sessionBiasEnabled && items.length >= 8) {
       const biasCorrections = solveSessionAssetBias(

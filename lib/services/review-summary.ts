@@ -3,7 +3,12 @@ import { resolveReviewSessionAssetIds } from "@/lib/services/review-session-asse
 
 type ReviewPrisma = Pick<
   PrismaClient,
-  "manualAnnotation" | "detection" | "pendingAnnotation" | "yOLOInferenceJob" | "processingJob"
+  | "manualAnnotation"
+  | "detection"
+  | "pendingAnnotation"
+  | "reviewSessionEdit"
+  | "yOLOInferenceJob"
+  | "processingJob"
 >;
 
 export interface ReviewSessionSummaryInput {
@@ -57,6 +62,30 @@ async function resolveInferenceJobIds(
     yoloInferenceJobIds: yoloJobs.map((job) => job.id),
     aiProcessingJobIds: processingJobs.map((job) => job.id),
   };
+}
+
+type ReviewStatus = "pending" | "accepted" | "rejected";
+
+function manualStatus(annotation: { verified: boolean; verifiedAt: Date | null }): ReviewStatus {
+  if (annotation.verified) return "accepted";
+  if (annotation.verifiedAt) return "rejected";
+  return "pending";
+}
+
+function pendingStatus(annotation: { status: string }): ReviewStatus {
+  if (annotation.status === "ACCEPTED") return "accepted";
+  if (annotation.status === "REJECTED") return "rejected";
+  return "pending";
+}
+
+function detectionStatus(detection: {
+  verified: boolean;
+  rejected: boolean;
+  userCorrected: boolean;
+}): ReviewStatus {
+  if (detection.rejected) return "rejected";
+  if (detection.verified || detection.userCorrected) return "accepted";
+  return "pending";
 }
 
 export async function getReviewItemSummary(
@@ -190,9 +219,105 @@ export async function getReviewItemSummary(
       : Promise.resolve(0),
   ]);
 
-  const pendingCount = manualPending + aiPending + yoloPending + samPending;
-  const acceptedCount = manualAccepted + aiAccepted + yoloAccepted + samAccepted;
-  const rejectedCount = manualRejected + aiRejected + yoloRejected + samRejected;
+  let pendingCount = manualPending + aiPending + yoloPending + samPending;
+  let acceptedCount = manualAccepted + aiAccepted + yoloAccepted + samAccepted;
+  let rejectedCount = manualRejected + aiRejected + yoloRejected + samRejected;
+
+  const reviewEdits = await prisma.reviewSessionEdit.findMany({
+    where: { reviewSessionId: session.id },
+  });
+
+  if (reviewEdits.length > 0) {
+    const decrement = (status: ReviewStatus) => {
+      if (status === "accepted") acceptedCount = Math.max(0, acceptedCount - 1);
+      else if (status === "rejected") rejectedCount = Math.max(0, rejectedCount - 1);
+      else pendingCount = Math.max(0, pendingCount - 1);
+    };
+    const increment = (status: ReviewStatus) => {
+      if (status === "accepted") acceptedCount += 1;
+      else if (status === "rejected") rejectedCount += 1;
+      else pendingCount += 1;
+    };
+
+    const manualSourceIds = reviewEdits
+      .filter((edit) => edit.sourceType === "manual")
+      .map((edit) => edit.sourceId);
+    const pendingSourceIds = reviewEdits
+      .filter((edit) => edit.sourceType === "pending")
+      .map((edit) => edit.sourceId);
+    const detectionSourceIds = reviewEdits
+      .filter((edit) => edit.sourceType === "detection")
+      .map((edit) => edit.sourceId);
+    const editedAnnotationIds = Array.from(
+      new Set(reviewEdits.map((edit) => edit.newAnnotationId))
+    );
+
+    const [manualOriginals, pendingOriginals, detectionOriginals, editedReplacements] =
+      await Promise.all([
+        manualSourceIds.length > 0
+          ? prisma.manualAnnotation.findMany({
+              where: {
+                id: { in: manualSourceIds },
+                session: { assetId: { in: assetIds } },
+              },
+              select: { id: true, verified: true, verifiedAt: true },
+            })
+          : Promise.resolve([]),
+        pendingSourceIds.length > 0
+          ? prisma.pendingAnnotation.findMany({
+              where: {
+                id: { in: pendingSourceIds },
+                assetId: { in: assetIds },
+              },
+              select: { id: true, status: true },
+            })
+          : Promise.resolve([]),
+        detectionSourceIds.length > 0
+          ? prisma.detection.findMany({
+              where: {
+                id: { in: detectionSourceIds },
+                assetId: { in: assetIds },
+              },
+              select: { id: true, verified: true, rejected: true, userCorrected: true },
+            })
+          : Promise.resolve([]),
+        isBatchReview && editedAnnotationIds.length > 0
+          ? prisma.manualAnnotation.findMany({
+              where: {
+                id: { in: editedAnnotationIds },
+                session: { assetId: { in: assetIds } },
+              },
+              select: { id: true, verified: true, verifiedAt: true },
+            })
+          : Promise.resolve([]),
+      ]);
+
+    const manualOriginalStatusById = new Map(
+      manualOriginals.map((annotation) => [annotation.id, manualStatus(annotation)])
+    );
+    const pendingOriginalStatusById = new Map(
+      pendingOriginals.map((annotation) => [annotation.id, pendingStatus(annotation)])
+    );
+    const detectionOriginalStatusById = new Map(
+      detectionOriginals.map((detection) => [detection.id, detectionStatus(detection)])
+    );
+
+    for (const edit of reviewEdits) {
+      const status =
+        edit.sourceType === "manual"
+          ? manualOriginalStatusById.get(edit.sourceId)
+          : edit.sourceType === "pending"
+            ? pendingOriginalStatusById.get(edit.sourceId)
+            : edit.sourceType === "detection"
+              ? detectionOriginalStatusById.get(edit.sourceId)
+              : null;
+      if (status) decrement(status);
+    }
+
+    for (const replacement of editedReplacements) {
+      increment(manualStatus(replacement));
+    }
+  }
 
   return {
     pendingCount,
