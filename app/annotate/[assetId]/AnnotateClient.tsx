@@ -191,6 +191,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
   const highlightId = searchParams.get("highlightId");
   const highlightSource = searchParams.get("source");
   const returnToParam = searchParams.get("returnTo");
+  const focusReviewItem = searchParams.get("focusReviewItem") !== "0";
   const returnTo = useMemo(() => {
     if (!returnToParam) return null;
     let decoded = returnToParam;
@@ -220,6 +221,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       returnTo,
     };
   }, [highlightId, highlightSource, reviewSessionId, returnTo]);
+  const reviewEditFocusMode = Boolean(editContext && focusReviewItem);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
@@ -1698,7 +1700,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
 
     // AI suggestions
-    if (showAiSuggestions) {
+    if (showAiSuggestions && !reviewEditFocusMode) {
       aiSuggestions.filter(s => s.boundingBox && !s.rejected).forEach((suggestion) => {
         const color = suggestion.color || '#0ea5e9';
         const bbox = suggestion.boundingBox!;
@@ -1745,8 +1747,17 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
       ctx.setLineDash([]);
     }
 
-    // Existing annotations
-    annotations.forEach((annotation) => {
+    // Existing annotations. Review edit mode intentionally isolates the selected
+    // item so dense detections cannot hide the geometry being corrected.
+    const visibleAnnotations = reviewEditFocusMode
+      ? annotations.filter((annotation) =>
+          annotation.id === editContext?.originalItemId ||
+          annotation.id === selectedAnnotation ||
+          annotation.id === editingAnnotationId
+        )
+      : annotations;
+
+    visibleAnnotations.forEach((annotation) => {
       const isSelected = selectedAnnotation === annotation.id;
       const isHovered = hoveredAnnotation === annotation.id;
       const color = getClassColor(annotation.weedType);
@@ -1924,7 +1935,7 @@ export function AnnotateClient({ assetId }: AnnotateClientProps) {
     }
 
     ctx.restore();
-  }, [annotations, currentPolygon, selectedAnnotation, hoveredAnnotation, scale, imageLoaded, zoomLevel, panOffset, aiSuggestions, showAiSuggestions, highlightOverlay, annotationMode, sam3Points, sam3PreviewPolygon, boxExemplars, currentBox, editingAnnotationId, editedCoordinates, draggingVertexIndex]);
+  }, [annotations, currentPolygon, selectedAnnotation, hoveredAnnotation, scale, imageLoaded, zoomLevel, panOffset, aiSuggestions, showAiSuggestions, reviewEditFocusMode, editContext?.originalItemId, highlightOverlay, annotationMode, sam3Points, sam3PreviewPolygon, boxExemplars, currentBox, editingAnnotationId, editedCoordinates, draggingVertexIndex]);
 
   useEffect(() => { redrawCanvas(); }, [redrawCanvas]);
 

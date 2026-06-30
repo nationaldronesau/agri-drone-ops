@@ -129,6 +129,10 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
     setZoomLevel(1);
     setPanOffset({ x: 0, y: 0 });
   };
+  const handleEditItem = (item: ReviewItem) => {
+    setSelectedItemId(item.id);
+    onEdit(item);
+  };
 
   const classOptions = useMemo(() => {
     const unique = new Set(items.map((item) => item.className));
@@ -381,7 +385,7 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => onEdit(item)}
+                        onClick={() => handleEditItem(item)}
                         className="h-8 px-2 text-xs"
                       >
                         <Pencil className="mr-1 h-3 w-3" />
