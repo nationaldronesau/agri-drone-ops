@@ -21,6 +21,8 @@
     "worker:inference:dev": "tsx -r tsconfig-paths/register --env-file=.env workers/inference-worker.ts",
     "worker:roboflow-detection": "tsx -r tsconfig-paths/register workers/roboflow-detection-worker.ts",
     "worker:roboflow-detection:dev": "tsx -r tsconfig-paths/register --env-file=.env workers/roboflow-detection-worker.ts",
+    "worker:rapid-map": "tsx -r tsconfig-paths/register workers/rapid-map-worker.ts",
+    "worker:rapid-map:dev": "tsx -r tsconfig-paths/register --env-file=.env workers/rapid-map-worker.ts",
     "worker:yolo-inference": "tsx -r tsconfig-paths/register workers/yolo-inference-worker.ts",
     "worker:yolo-inference:dev": "tsx -r tsconfig-paths/register --env-file=.env workers/yolo-inference-worker.ts",
     "worker:temporal": "tsx -r tsconfig-paths/register workers/temporal-worker.ts",
