@@ -6,7 +6,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import { datasetPreparation } from '@/lib/services/dataset-preparation';
+import { datasetPreparation, type DatasetTask } from '@/lib/services/dataset-preparation';
 import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
 import { checkRateLimit } from '@/lib/utils/security';
 import { normalizeTrainingDatasetSourceFlags } from '@/lib/utils/training-dataset-sources';
@@ -55,6 +55,7 @@ export async function POST(request: NextRequest) {
       minConfidence = 0.5,
       augmentationPreset = 'none',
       augmentationConfig,
+      task = 'detect',
     } = body;
     const sourceFlags = normalizeTrainingDatasetSourceFlags({
       includeAIDetections,
@@ -75,6 +76,10 @@ export async function POST(request: NextRequest) {
         { error: 'classes array is required and must not be empty' },
         { status: 400 }
       );
+    }
+
+    if (task !== 'detect' && task !== 'segment') {
+      return NextResponse.json({ error: 'task must be detect or segment' }, { status: 400 });
     }
 
     if (splitRatio) {
@@ -154,6 +159,7 @@ export async function POST(request: NextRequest) {
       createdById: auth.userId,
       augmentationPreset,
       augmentationConfig,
+      task: task as DatasetTask,
     });
 
     const datasetPatch: {

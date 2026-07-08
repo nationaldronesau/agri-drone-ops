@@ -1,5 +1,9 @@
 import prisma from '@/lib/db';
-import { datasetPreparation, sanitizeClassName } from '@/lib/services/dataset-preparation';
+import {
+  datasetPreparation,
+  sanitizeClassName,
+  type DatasetTask,
+} from '@/lib/services/dataset-preparation';
 import { S3Service } from '@/lib/services/s3';
 import { createHash, randomUUID } from 'crypto';
 import type { TrainingDataset } from '@prisma/client';
@@ -37,6 +41,7 @@ export interface CreateVersionConfig {
   augmentation?: AugmentationConfig;
   splits?: { train: number; val: number; test: number };
   filters?: SnapshotFilters;
+  task?: DatasetTask;
 }
 
 interface AnnotationManifestEntry {
@@ -123,6 +128,7 @@ class TrainingDatasetVersionService {
           minConfidence: storedFilterConfig.minConfidence,
           verifiedOnly: storedFilterConfig.verifiedOnly,
           createdBefore: existing.snapshotAt || new Date(),
+          task: config.task || 'detect',
         });
         return { dataset: existing, preview };
       }
@@ -139,6 +145,7 @@ class TrainingDatasetVersionService {
       minConfidence: filterConfig.minConfidence,
       verifiedOnly: filterConfig.verifiedOnly,
       createdBefore: snapshotAt,
+      task: config.task || 'detect',
     });
 
     if (preview.imageCount === 0) {
@@ -156,6 +163,7 @@ class TrainingDatasetVersionService {
       minConfidence: filterConfig.minConfidence,
       verifiedOnly: filterConfig.verifiedOnly,
       createdBefore: snapshotAt,
+      task: config.task || 'detect',
     });
 
     if (preparedAssets.length === 0) {
@@ -287,6 +295,7 @@ class TrainingDatasetVersionService {
           s3BasePath,
           skipCreateRecord: true,
           createdById: config.createdById ?? undefined,
+          task: config.task || 'detect',
         }
       );
     } catch (error) {

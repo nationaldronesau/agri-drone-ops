@@ -105,6 +105,7 @@ export async function POST(
       learningRate?: number;
       augmentationPreset?: string;
       augmentationConfig?: Record<string, unknown>;
+      task?: 'detect' | 'segment';
     } | undefined;
 
     if (!target || !['roboflow', 'yolo', 'both'].includes(target)) {
@@ -291,6 +292,7 @@ export async function POST(
         createdById: auth.userId,
         augmentationPreset: yoloConfig.augmentationPreset,
         augmentationConfig: yoloConfig.augmentationConfig,
+        task: yoloConfig.task || 'detect',
       });
       const augmentation = buildTrainingAugmentationFromInput(
         yoloConfig.augmentationPreset,
@@ -329,9 +331,10 @@ export async function POST(
           createdById: auth.userId,
           trainingConfig: JSON.stringify({
             modelName,
-            trainingIntent: yoloConfig.trainingIntent || 'update_existing',
-            ...(augmentation ? { augmentation } : {}),
-          }),
+              trainingIntent: yoloConfig.trainingIntent || 'update_existing',
+              task: yoloConfig.task || 'detect',
+              ...(augmentation ? { augmentation } : {}),
+            }),
         },
       });
 
@@ -377,6 +380,7 @@ export async function POST(
           batch_size: yoloConfig.batchSize || 16,
           image_size: yoloConfig.imageSize || 640,
           learning_rate: yoloConfig.learningRate || 0.01,
+          task: yoloConfig.task || 'detect',
           ...(augmentation ? { augmentation } : {}),
         });
 
@@ -388,6 +392,7 @@ export async function POST(
             trainingConfig: JSON.stringify({
               modelName,
               trainingIntent: yoloConfig.trainingIntent || 'update_existing',
+              task: yoloConfig.task || 'detect',
               ...(augmentation ? { augmentation } : {}),
               gpuLockToken: gpuLock.token,
             }),

@@ -29,6 +29,7 @@ export interface TrainingConfig {
   learning_rate?: number;
   checkpoint_s3_path?: string;
   augmentation?: Record<string, unknown>;
+  task?: 'detect' | 'segment';
 }
 
 export interface TrainingJobResponse {
@@ -329,6 +330,7 @@ export class YOLOService {
       batch_size: config.batch_size || 16,
       image_size: config.image_size || 640,
       learning_rate: config.learning_rate || 0.01,
+      task: config.task || 'detect',
       ...(config.checkpoint_s3_path ? { checkpoint_s3_path: config.checkpoint_s3_path } : {}),
     };
 

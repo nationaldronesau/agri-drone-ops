@@ -12,14 +12,24 @@ describe('training dataset sources', () => {
       includeAI: boolean,
       includeManual: boolean,
       minConfidence: number,
-      includeSAM3: boolean
+      includeSAM3: boolean,
+      task?: 'detect' | 'segment'
     ) => Array<{
       classId: number;
       bbox: { x: number; y: number; width: number; height: number };
+      polygon?: Array<[number, number]>;
     }>;
+    formatYOLOAnnotation: (
+      annotation: {
+        classId: number;
+        bbox: { x: number; y: number; width: number; height: number };
+        polygon?: Array<[number, number]>;
+      },
+      task?: 'detect' | 'segment'
+    ) => string;
   };
 
-  function convertToYOLO(asset: Record<string, unknown>) {
+  function convertToYOLO(asset: Record<string, unknown>, task: 'detect' | 'segment' = 'detect') {
     return datasetPreparationInternals.convertToYOLO(
       {
         id: 'asset-1',
@@ -32,7 +42,8 @@ describe('training dataset sources', () => {
       true,
       true,
       0.5,
-      true
+      true,
+      task
     );
   }
 
@@ -74,6 +85,76 @@ describe('training dataset sources', () => {
         },
       },
     ]);
+  });
+
+  it('keeps default detect label output byte-identical for bbox callers', () => {
+    const labels = convertToYOLO({
+      pendingAnnotations: [
+        {
+          weedType: 'Lantana',
+          confidence: 0.92,
+          status: 'ACCEPTED',
+          bbox: [10, 20, 50, 80],
+          polygon: [
+            [10, 20],
+            [50, 20],
+            [50, 80],
+            [10, 80],
+          ],
+        },
+      ],
+    });
+
+    expect(labels).toEqual([
+      {
+        classId: 0,
+        bbox: {
+          x: 0.3,
+          y: 0.5,
+          width: 0.4,
+          height: 0.6,
+        },
+      },
+    ]);
+    expect(datasetPreparationInternals.formatYOLOAnnotation(labels[0])).toBe(
+      '0 0.300000 0.500000 0.400000 0.600000'
+    );
+  });
+
+  it('emits YOLO-seg polygon rows for segment task and falls back to bbox without polygons', () => {
+    const segmentLabels = convertToYOLO(
+      {
+        pendingAnnotations: [
+          {
+            weedType: 'Lantana',
+            confidence: 0.92,
+            status: 'ACCEPTED',
+            bbox: [10, 20, 50, 80],
+            polygon: [
+              [10, 20],
+              [50, 20],
+              [50, 80],
+              [10, 80],
+            ],
+          },
+          {
+            weedType: 'Lantana',
+            confidence: 0.92,
+            status: 'ACCEPTED',
+            bbox: [60, 10, 90, 40],
+            polygon: [],
+          },
+        ],
+      },
+      'segment'
+    );
+
+    expect(datasetPreparationInternals.formatYOLOAnnotation(segmentLabels[0], 'segment')).toBe(
+      '0 0.100000 0.200000 0.500000 0.200000 0.500000 0.800000 0.100000 0.800000'
+    );
+    expect(datasetPreparationInternals.formatYOLOAnnotation(segmentLabels[1], 'segment')).toBe(
+      '0 0.750000 0.250000 0.300000 0.300000'
+    );
   });
 
   it('excludes pending and rejected SAM3 labels from YOLO datasets', () => {

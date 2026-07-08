@@ -75,7 +75,12 @@ export async function POST(
       filters,
       classes,
       reviewSessionId,
+      task = 'detect',
     } = body || {};
+
+    if (task !== 'detect' && task !== 'segment') {
+      return NextResponse.json({ error: 'task must be detect or segment' }, { status: 400 });
+    }
 
     let scopedAssetIds: string[] | undefined;
     if (typeof reviewSessionId === 'string' && reviewSessionId) {
@@ -118,6 +123,7 @@ export async function POST(
       preprocessing,
       augmentation,
       splits,
+      task,
       filters: {
         ...(filters || {}),
         ...(typeof reviewSessionId === 'string' && reviewSessionId ? { reviewSessionId } : {}),

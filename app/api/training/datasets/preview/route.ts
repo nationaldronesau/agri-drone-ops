@@ -5,7 +5,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import { datasetPreparation } from '@/lib/services/dataset-preparation';
+import { datasetPreparation, type DatasetTask } from '@/lib/services/dataset-preparation';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
 import { checkRateLimit } from '@/lib/utils/security';
 import { normalizeTrainingDatasetSourceFlags } from '@/lib/utils/training-dataset-sources';
@@ -42,6 +42,7 @@ export async function POST(request: NextRequest) {
       includeManualAnnotations,
       includeSAM3,
       minConfidence = 0.5,
+      task = 'detect',
     } = body;
     const sourceFlags = normalizeTrainingDatasetSourceFlags({
       includeAIDetections,
@@ -55,6 +56,10 @@ export async function POST(request: NextRequest) {
 
     if (classes && !Array.isArray(classes)) {
       return NextResponse.json({ error: 'classes must be an array if provided' }, { status: 400 });
+    }
+
+    if (task !== 'detect' && task !== 'segment') {
+      return NextResponse.json({ error: 'task must be detect or segment' }, { status: 400 });
     }
 
     if (splitRatio) {
@@ -110,6 +115,7 @@ export async function POST(request: NextRequest) {
       includeManualAnnotations: sourceFlags.includeManualAnnotations,
       includeSAM3: sourceFlags.includeSAM3,
       minConfidence,
+      task: task as DatasetTask,
     });
 
     return NextResponse.json({ preview, sources: sourceFlags });
