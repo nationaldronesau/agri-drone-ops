@@ -135,7 +135,7 @@ async function listJpegImages(imagesDir: string): Promise<ImageCandidate[]> {
   const root = path.resolve(imagesDir);
   const entries = await fs.readdir(root, { withFileTypes: true });
   const images = entries
-    .filter((entry) => entry.isFile() && /\.(jpe?g)$/i.test(entry.name))
+    .filter((entry) => (entry.isFile() || entry.isSymbolicLink()) && /\.(jpe?g)$/i.test(entry.name))
     .map((entry) => ({
       fileName: entry.name,
       filePath: path.join(root, entry.name),
