@@ -10,7 +10,7 @@ interface CliOptions {
   schemaOnly: boolean;
 }
 
-interface CandidateFile {
+export interface CandidateFile {
   schemaVersion?: string;
   sourceSessionId?: string;
   projectId?: string;
@@ -19,7 +19,7 @@ interface CandidateFile {
   candidates?: CandidateInput[];
 }
 
-interface CandidateInput {
+export interface CandidateInput {
   assetId: string;
   className?: string;
   confidence?: number;
@@ -39,6 +39,35 @@ interface NormalizedCandidate {
   bbox: [number, number, number, number];
   polygon: number[][];
   notes?: string;
+}
+
+export interface ImportReviewSessionOwner {
+  teamId: string;
+  createdById: string;
+  yoloModelName?: string | null;
+}
+
+export interface ImportDinoCandidatesOptions {
+  candidateFile: CandidateFile;
+  candidatesPath?: string;
+  createReviewSession?: boolean;
+  dryRun?: boolean;
+  schemaOnly?: boolean;
+  reviewSessionOwner?: ImportReviewSessionOwner;
+}
+
+export interface ImportDinoCandidatesResult {
+  ok: true;
+  schemaOnly?: boolean;
+  dryRun?: boolean;
+  projectId: string | null;
+  sourceSessionId: string | null;
+  batchJobId?: string;
+  reviewSessionId?: string | null;
+  reviewUrl?: string | null;
+  assets: number;
+  candidates: number;
+  createReviewSession?: boolean;
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -226,21 +255,21 @@ async function resolveContext(file: CandidateFile) {
   return { sourceSession, projectId };
 }
 
-async function main() {
-  const options = parseArgs(process.argv.slice(2));
-  const candidateFile = await loadCandidateFile(options.candidatesPath);
+export async function importDinoCandidates(
+  options: ImportDinoCandidatesOptions
+): Promise<ImportDinoCandidatesResult> {
+  const candidateFile = options.candidateFile;
   const candidates = normalizeCandidates(candidateFile);
 
   if (options.schemaOnly) {
-    console.log(JSON.stringify({
+    return {
       ok: true,
       schemaOnly: true,
       sourceSessionId: candidateFile.sourceSessionId || null,
       projectId: candidateFile.projectId || null,
       candidates: candidates.length,
       assets: Array.from(new Set(candidates.map((candidate) => candidate.assetId))).length,
-    }, null, 2));
-    return;
+    };
   }
 
   const context = await resolveContext(candidateFile);
@@ -259,12 +288,12 @@ async function main() {
     throw new Error(`Candidates reference assets outside project ${context.projectId}: ${missingAssetIds.join(', ')}`);
   }
 
-  if (options.createReviewSession && !context.sourceSession) {
-    throw new Error('--create-review-session requires sourceSessionId so team/user ownership can be copied safely.');
+  if (options.createReviewSession && !context.sourceSession && !options.reviewSessionOwner) {
+    throw new Error('--create-review-session requires sourceSessionId or explicit review session owner.');
   }
 
   if (options.dryRun) {
-    console.log(JSON.stringify({
+    return {
       ok: true,
       dryRun: true,
       projectId: context.projectId,
@@ -272,8 +301,7 @@ async function main() {
       assets: assetIds.length,
       candidates: candidates.length,
       createReviewSession: options.createReviewSession,
-    }, null, 2));
-    return;
+    };
   }
 
   const result = await prisma.$transaction(async (tx) => {
@@ -291,7 +319,7 @@ async function main() {
           source: 'DINO_CANDIDATE_MINING',
           sourceSessionId: candidateFile.sourceSessionId || null,
           generator: candidateFile.generator || null,
-          importedFrom: path.resolve(options.candidatesPath),
+          importedFrom: options.candidatesPath ? path.resolve(options.candidatesPath) : null,
           importedAt: new Date().toISOString(),
         } as Prisma.InputJsonValue,
         status: 'COMPLETED',
@@ -316,15 +344,25 @@ async function main() {
     });
 
     let reviewSession: { id: string } | null = null;
-    if (options.createReviewSession && context.sourceSession) {
+    if (options.createReviewSession) {
+      const owner = context.sourceSession
+        ? {
+            teamId: context.sourceSession.teamId,
+            createdById: context.sourceSession.createdById,
+            yoloModelName: 'DINO candidate mining',
+          }
+        : options.reviewSessionOwner;
+      if (!owner) {
+        throw new Error('Review session owner could not be resolved.');
+      }
       reviewSession = await tx.reviewSession.create({
         data: {
-          teamId: context.sourceSession.teamId,
-          createdById: context.sourceSession.createdById,
+          teamId: owner.teamId,
+          createdById: owner.createdById,
           projectId: context.projectId,
           workflowType: 'batch_review',
           targetType: 'training',
-          yoloModelName: 'DINO candidate mining',
+          yoloModelName: owner.yoloModelName || 'DINO candidate mining',
           weedTypeFilter: candidateFile.className || candidates[0]?.weedType || 'Pine Sapling',
           assetIds,
           assetCount: assetIds.length,
@@ -342,7 +380,7 @@ async function main() {
     };
   });
 
-  console.log(JSON.stringify({
+  return {
     ok: true,
     projectId: context.projectId,
     batchJobId: result.batchJobId,
@@ -350,14 +388,29 @@ async function main() {
     assets: assetIds.length,
     candidates: candidates.length,
     reviewUrl: result.reviewSessionId ? `/review?sessionId=${result.reviewSessionId}` : null,
-  }, null, 2));
+  };
 }
 
-main()
-  .catch((error) => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await prisma.$disconnect().catch(() => undefined);
+async function main() {
+  const options = parseArgs(process.argv.slice(2));
+  const candidateFile = await loadCandidateFile(options.candidatesPath);
+  const result = await importDinoCandidates({
+    candidateFile,
+    candidatesPath: options.candidatesPath,
+    createReviewSession: options.createReviewSession,
+    dryRun: options.dryRun,
+    schemaOnly: options.schemaOnly,
   });
+  console.log(JSON.stringify(result, null, 2));
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename)) {
+  main()
+    .catch((error) => {
+      console.error(error instanceof Error ? error.message : error);
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      await prisma.$disconnect().catch(() => undefined);
+    });
+}
