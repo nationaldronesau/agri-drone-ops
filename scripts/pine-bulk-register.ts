@@ -11,6 +11,7 @@ interface CliOptions {
   imagesDir: string;
   projectRef: string;
   flightSession?: string;
+  skipUpload?: boolean;
 }
 
 interface ProjectContext {
@@ -51,6 +52,8 @@ function parseArgs(argv: string[]): CliOptions {
     } else if (arg === '--flight-session') {
       options.flightSession = requireValue(arg, next);
       index += 1;
+    } else if (arg === '--skip-upload') {
+      options.skipUpload = true;
     } else if (arg === '--help' || arg === '-h') {
       printHelpAndExit();
     } else {
@@ -218,6 +221,7 @@ async function storeImage(args: {
   contentType: string;
   flightSession?: string;
   storageMode: StorageMode;
+  skipUpload?: boolean;
 }): Promise<{
   storageUrl: string;
   storageType: string;
@@ -251,7 +255,13 @@ async function storeImage(args: {
     contentType: args.contentType,
     flightSession: args.flightSession,
   });
-  await S3Service.uploadBuffer(args.buffer, key, args.contentType);
+  if (args.skipUpload) {
+    // Objects were uploaded out-of-band (e.g. aws s3 sync from a box with
+    // bucket access); record the computed key without a PutObject call.
+    console.log(`skip-upload: recording ${key}`);
+  } else {
+    await S3Service.uploadBuffer(args.buffer, key, args.contentType);
+  }
   const cloudFrontBase =
     process.env.CLOUDFRONT_BASE_URL ??
     process.env.NEXT_PUBLIC_CLOUDFRONT_BASE_URL ??
@@ -335,6 +345,7 @@ async function main() {
       contentType,
       flightSession: options.flightSession,
       storageMode,
+      skipUpload: options.skipUpload,
     });
 
     const asset = await prisma.asset.create({
