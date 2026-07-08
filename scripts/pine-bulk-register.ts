@@ -45,7 +45,7 @@ function parseArgs(argv: string[]): CliOptions {
     if (arg === '--images-dir') {
       options.imagesDir = requireValue(arg, next);
       index += 1;
-    } else if (arg === '--project') {
+    } else if (arg === '--project' || arg === '--project-id') {
       options.projectRef = requireValue(arg, next);
       index += 1;
     } else if (arg === '--flight-session') {

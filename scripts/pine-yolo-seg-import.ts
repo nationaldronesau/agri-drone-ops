@@ -52,7 +52,7 @@ function parseArgs(argv: string[]): CliOptions {
     if (arg === '--labels-dir') {
       options.labelsDir = requireValue(arg, next);
       index += 1;
-    } else if (arg === '--project') {
+    } else if (arg === '--project' || arg === '--project-id') {
       options.projectId = requireValue(arg, next);
       index += 1;
     } else if (arg === '--session-name') {
