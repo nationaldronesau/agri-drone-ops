@@ -331,5 +331,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename
     })
     .finally(async () => {
       await prisma.$disconnect().catch(() => undefined);
+      // Module graph (lib/db + dataset-preparation) holds keep-alive handles
+      // that prevent natural exit; this is a CLI, so exit explicitly.
+      process.exit(process.exitCode ?? 0);
     });
 }
