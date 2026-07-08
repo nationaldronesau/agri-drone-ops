@@ -22,7 +22,10 @@ interface BoundingBox {
 interface YOLOAnnotation {
   classId: number;
   bbox: BoundingBox;
+  polygon?: AnnotationPoint[];
 }
+
+export type DatasetTask = 'detect' | 'segment';
 
 export interface DatasetConfig {
   projectId?: string;
@@ -48,6 +51,7 @@ export interface DatasetConfig {
   skipCreateRecord?: boolean;
   augmentationPreset?: string;
   augmentationConfig?: Record<string, unknown> | null;
+  task?: DatasetTask;
 }
 
 interface PreparedDataset {
@@ -128,6 +132,7 @@ export function sanitizeClassName(name: string): string {
 interface NormalizedAssetAnnotation {
   className: string;
   bbox: BoundingBox;
+  polygon?: AnnotationPoint[];
 }
 
 class DatasetPreparationService {
@@ -168,6 +173,7 @@ class DatasetPreparationService {
     const splitRatio = this.normalizeSplitRatio(config.splitRatio);
     const shuffled = this.shuffleArray([...assets]);
     const splits = this.splitDataset(shuffled, splitRatio);
+    const task = config.task || 'detect';
 
     let totalLabels = 0;
     let processedImages = 0;
@@ -183,7 +189,8 @@ class DatasetPreparationService {
           config.includeAIDetections ?? true,
           config.includeManualAnnotations ?? true,
           config.minConfidence ?? 0.5,
-          config.includeSAM3 ?? true
+          config.includeSAM3 ?? true,
+          task
         );
 
         if (yoloAnnotations.length === 0) {
@@ -191,10 +198,7 @@ class DatasetPreparationService {
         }
 
         const labelContent = yoloAnnotations
-          .map(
-            (ann) =>
-              `${ann.classId} ${ann.bbox.x.toFixed(6)} ${ann.bbox.y.toFixed(6)} ${ann.bbox.width.toFixed(6)} ${ann.bbox.height.toFixed(6)}`
-          )
+          .map((ann) => this.formatYOLOAnnotation(ann, task))
           .join('\n');
 
         const labelKey = `${s3BasePath}/${splitName}/labels/${asset.id}.txt`;
@@ -208,7 +212,7 @@ class DatasetPreparationService {
       }
     }
 
-    const dataYaml = this.generateDataYaml(s3BasePath, dedupedClasses, splitCounts);
+    const dataYaml = this.generateDataYaml(s3BasePath, dedupedClasses, splitCounts, task);
     await S3Service.uploadBuffer(
       Buffer.from(dataYaml),
       `${s3BasePath}/data.yaml`,
@@ -284,11 +288,12 @@ class DatasetPreparationService {
     for (const asset of assets) {
       const annotations = this.collectAssetAnnotations(
         asset,
-        includeAI,
-        includeManual,
-        minConfidence,
-        includeSAM3
-      );
+          includeAI,
+          includeManual,
+          minConfidence,
+          includeSAM3,
+          config.task || 'detect'
+        );
       for (const annotation of annotations) {
         incrementAvailable(annotation.className);
       }
@@ -319,7 +324,8 @@ class DatasetPreparationService {
         includeAI,
         includeManual,
         minConfidence,
-        includeSAM3
+        includeSAM3,
+        config.task || 'detect'
       );
 
       if (yoloAnnotations.length === 0) continue;
@@ -497,7 +503,8 @@ class DatasetPreparationService {
     includeAI: boolean,
     includeManual: boolean,
     minConfidence: number,
-    includeSAM3: boolean
+    includeSAM3: boolean,
+    task: DatasetTask = 'detect'
   ): YOLOAnnotation[] {
     return this.collectAssetAnnotations(
       asset,
@@ -509,7 +516,13 @@ class DatasetPreparationService {
       .map((annotation) => {
         const classId = classMap.get(annotation.className);
         if (classId === undefined) return null;
-        return { classId, bbox: annotation.bbox };
+        return {
+          classId,
+          bbox: annotation.bbox,
+          ...(task === 'segment' && annotation.polygon && annotation.polygon.length >= 3
+            ? { polygon: annotation.polygon }
+            : {}),
+        };
       })
       .filter((annotation): annotation is YOLOAnnotation => annotation !== null);
   }
@@ -526,7 +539,11 @@ class DatasetPreparationService {
     const imageWidth = asset.imageWidth || 4000;
     const imageHeight = asset.imageHeight || 3000;
 
-    const addAnnotation = (rawClassName: string, bbox: BoundingBox | null) => {
+    const addAnnotation = (
+      rawClassName: string,
+      bbox: BoundingBox | null,
+      polygon?: AnnotationPoint[] | null
+    ) => {
       if (!bbox) return;
       const className = sanitizeClassName(rawClassName);
       if (!className) return;
@@ -535,7 +552,11 @@ class DatasetPreparationService {
       if (seen.has(key)) return;
       seen.add(key);
 
-      annotations.push({ className, bbox });
+      annotations.push({
+        className,
+        bbox,
+        ...(polygon && polygon.length >= 3 ? { polygon } : {}),
+      });
     };
 
     if (includeAI && asset.detections) {
@@ -561,7 +582,8 @@ class DatasetPreparationService {
 
           addAnnotation(
             annotation.roboflowClassName || annotation.weedType,
-            this.polygonToBBox(points, imageWidth, imageHeight)
+            this.polygonToBBox(points, imageWidth, imageHeight),
+            this.normalizePolygon(points, imageWidth, imageHeight)
           );
         }
       }
@@ -577,12 +599,23 @@ class DatasetPreparationService {
 
         addAnnotation(
           pending.weedType,
-          this.parsePendingBBox(pending, imageWidth, imageHeight)
+          this.parsePendingBBox(pending, imageWidth, imageHeight),
+          this.parsePendingPolygon(pending, imageWidth, imageHeight)
         );
       }
     }
 
     return annotations;
+  }
+
+  private parsePendingPolygon(
+    pending: { polygon?: unknown },
+    imgWidth: number,
+    imgHeight: number
+  ): AnnotationPoint[] | null {
+    const points = this.parsePolygonPoints(pending.polygon);
+    if (!points || points.length < 3) return null;
+    return this.normalizePolygon(points, imgWidth, imgHeight);
   }
 
   private parsePendingBBox(
@@ -708,6 +741,29 @@ class DatasetPreparationService {
     return this.pixelToYOLO(x1, y1, x2, y2, imgWidth, imgHeight);
   }
 
+  private normalizePolygon(
+    points: AnnotationPoint[],
+    imgWidth: number,
+    imgHeight: number
+  ): AnnotationPoint[] {
+    return points.map(([x, y]) => [
+      Math.max(0, Math.min(1, x / imgWidth)),
+      Math.max(0, Math.min(1, y / imgHeight)),
+    ]);
+  }
+
+  private formatYOLOAnnotation(annotation: YOLOAnnotation, task: DatasetTask = 'detect'): string {
+    if (task === 'segment' && annotation.polygon && annotation.polygon.length >= 3) {
+      const coordinates = annotation.polygon
+        .flatMap(([x, y]) => [x, y])
+        .map((value) => value.toFixed(6))
+        .join(' ');
+      return `${annotation.classId} ${coordinates}`;
+    }
+
+    return `${annotation.classId} ${annotation.bbox.x.toFixed(6)} ${annotation.bbox.y.toFixed(6)} ${annotation.bbox.width.toFixed(6)} ${annotation.bbox.height.toFixed(6)}`;
+  }
+
   private clampBBox(bbox: BoundingBox): BoundingBox {
     return {
       x: Math.max(0, Math.min(1, bbox.x)),
@@ -736,7 +792,8 @@ class DatasetPreparationService {
   private generateDataYaml(
     s3BasePath: string,
     classes: string[],
-    counts: { train: number; val: number; test: number }
+    counts: { train: number; val: number; test: number },
+    task: DatasetTask = 'detect'
   ): string {
     const s3Uri = `s3://${this.bucket}/${s3BasePath}`;
 
@@ -744,6 +801,7 @@ class DatasetPreparationService {
 # Generated: ${new Date().toISOString()}
 
 path: ${s3Uri}
+task: ${task}
 train: train/images
 val: val/images
 test: ${counts.test > 0 ? 'test/images' : ''}

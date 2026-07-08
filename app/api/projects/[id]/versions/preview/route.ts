@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
-import { datasetPreparation } from '@/lib/services/dataset-preparation';
+import { datasetPreparation, type DatasetTask } from '@/lib/services/dataset-preparation';
 
 function isDatasetVersionsEnabled(features: unknown): boolean {
   if (process.env.ENABLE_DATASET_VERSIONS === 'true') return true;
@@ -42,12 +42,16 @@ export async function POST(
     }
 
     const body = await request.json();
-    const { splits, filters, classes, reviewSessionId } = body || {};
+    const { splits, filters, classes, reviewSessionId, task = 'detect' } = body || {};
     const selectedClasses = Array.isArray(classes) && classes.length > 0
       ? classes
       : Array.isArray(filters?.weedTypes) && filters.weedTypes.length > 0
         ? filters.weedTypes
         : undefined;
+
+    if (task !== 'detect' && task !== 'segment') {
+      return NextResponse.json({ error: 'task must be detect or segment' }, { status: 400 });
+    }
 
     let scopedAssetIds: string[] | undefined;
     if (typeof reviewSessionId === 'string' && reviewSessionId) {
@@ -82,6 +86,7 @@ export async function POST(
       minConfidence: filters?.minConfidence ?? 0.5,
       verifiedOnly: filters?.verifiedOnly ?? false,
       createdBefore: new Date(),
+      task: task as DatasetTask,
     });
 
     return NextResponse.json({ preview });

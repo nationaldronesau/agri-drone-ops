@@ -32,6 +32,7 @@ describe('yolo training service', () => {
       batch_size: 8,
       image_size: 960,
       learning_rate: 0.005,
+      task: 'detect',
       augmentation: {
         preset: 'agricultural',
         fliplr: 0.5,
