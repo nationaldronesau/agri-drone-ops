@@ -32,6 +32,8 @@
     "sam3:contract": "tsx -r tsconfig-paths/register scripts/sam3-replay.ts --include-source-target --technique both --crop-source source-detections",
     "ag3:dino-export": "tsx -r tsconfig-paths/register scripts/ag3-dino-export.ts",
     "ag3:dino-import": "tsx -r tsconfig-paths/register scripts/ag3-dino-import.ts",
+    "ag3:pine-yolo-seg-import": "tsx -r tsconfig-paths/register scripts/pine-yolo-seg-import.ts",
+    "ag3:pine-bulk-register": "tsx -r tsconfig-paths/register scripts/pine-bulk-register.ts",
     "seed:verified": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed-verified.ts",
     "docker:build": "docker build -t agridrone-ops .",
     "docker:dev": "docker-compose -f docker-compose.yml -f docker-compose.dev.yml up",
