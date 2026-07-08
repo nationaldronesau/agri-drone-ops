@@ -378,6 +378,10 @@ export async function importDinoCandidates(
       batchJobId: batchJob.id,
       reviewSessionId: reviewSession?.id || null,
     };
+  }, {
+    // Bulk imports (25k+ rows) over a remote DB blow the 5s default.
+    maxWait: 30_000,
+    timeout: 600_000,
   });
 
   return {
