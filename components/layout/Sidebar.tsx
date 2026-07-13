@@ -20,7 +20,12 @@ import {
   ChevronRight,
   Crosshair,
   Route,
+  Eye,
+  Box,
+  ShieldCheck,
+  Settings,
 } from "lucide-react";
+import { isGuidedOperatorFlowEnabled } from "@/lib/utils/feature-flags";
 
 interface NavItem {
   label: string;
@@ -44,6 +49,14 @@ const navItems: NavItem[] = [
   { label: "Camera Profiles", href: "/camera-profiles", icon: Camera, section: "settings" },
 ];
 
+const guidedNavItems: NavItem[] = [
+  { label: "Projects", href: "/projects", icon: FolderOpen, section: "guided" },
+  { label: "Teach AI", href: "/teach", icon: Sparkles, section: "guided" },
+  { label: "Review", href: "/review-queue", icon: Eye, section: "guided" },
+  { label: "Models", href: "/training#models", icon: Box, section: "guided" },
+  { label: "Operations", href: "/mission-planner", icon: ShieldCheck, section: "guided" },
+];
+
 const sectionLabels: Record<string, string> = {
   main: "Overview",
   data: "Data",
@@ -56,6 +69,8 @@ const sectionLabels: Record<string, string> = {
 export function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+  const guidedFlow = pathname.startsWith("/teach") || isGuidedOperatorFlowEnabled();
+  const activeNavItems = guidedFlow ? guidedNavItems : navItems;
 
   const isActive = (href: string) => {
     if (href === "/dashboard") return pathname === "/dashboard" || pathname === "/test-dashboard";
@@ -64,7 +79,7 @@ export function Sidebar() {
   };
 
   // Group items by section
-  const sections = navItems.reduce<Record<string, NavItem[]>>((acc, item) => {
+  const sections = activeNavItems.reduce<Record<string, NavItem[]>>((acc, item) => {
     const section = item.section || "main";
     if (!acc[section]) acc[section] = [];
     acc[section].push(item);
@@ -101,7 +116,7 @@ export function Sidebar() {
       <nav className="flex-1 overflow-y-auto px-2 py-4">
         {Object.entries(sections).map(([sectionKey, items]) => (
           <div key={sectionKey} className="mb-4">
-            {!collapsed && (
+            {!collapsed && sectionLabels[sectionKey] && (
               <p className="mb-1.5 hidden px-3 text-[10px] font-semibold uppercase tracking-wider text-gray-500 md:block">
                 {sectionLabels[sectionKey]}
               </p>
@@ -140,8 +155,17 @@ export function Sidebar() {
         ))}
       </nav>
 
+      {guidedFlow && !collapsed && (
+        <div className="hidden space-y-0.5 border-t border-gray-800 px-2 py-3 md:block">
+          <Link href="/camera-profiles" className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-gray-400 hover:bg-gray-800/60 hover:text-white">
+            <Settings className="h-4.5 w-4.5 text-gray-500" /> Settings
+          </Link>
+        </div>
+      )}
+
       {/* Collapse Toggle */}
       <button
+        aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
         onClick={() => setCollapsed(!collapsed)}
         className="flex h-12 items-center justify-center border-t border-gray-800 text-gray-500 transition-colors hover:bg-gray-800/60 hover:text-white"
       >
