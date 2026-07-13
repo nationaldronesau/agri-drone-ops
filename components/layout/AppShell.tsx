@@ -7,7 +7,7 @@ import { Sidebar } from "./Sidebar";
 const excludedPaths = ["/", "/auth"];
 
 // Pages that use full width (no max-width container)
-const fullWidthPaths = ["/map", "/annotate"];
+const fullWidthPaths = ["/map", "/annotate", "/teach"];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
