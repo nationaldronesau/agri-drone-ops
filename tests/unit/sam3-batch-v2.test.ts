@@ -281,6 +281,7 @@ describe('sam3-batch-v2', () => {
     expect(result).toMatchObject({
       assetId: 'asset-target',
       outcome: 'success',
+      candidateExpansionUsed: true,
       detections: [
         {
           bbox: [20, 25, 40, 45],
@@ -425,6 +426,7 @@ describe('sam3-batch-v2', () => {
     expect(result).toMatchObject({
       assetId: 'asset-target',
       outcome: 'success',
+      candidateExpansionUsed: true,
       detections: [
         {
           bbox: [20, 25, 40, 45],
@@ -580,6 +582,7 @@ describe('sam3-batch-v2', () => {
     expect(result).toMatchObject({
       assetId: 'asset-target',
       outcome: 'success',
+      candidateExpansionUsed: true,
       detections: [
         {
           bbox: [20, 25, 40, 45],
@@ -714,6 +717,7 @@ describe('sam3-batch-v2', () => {
       assetId: 'asset-target',
       outcome: 'success',
       backendMode: 'concept_ensemble_refined',
+      candidateExpansionUsed: false,
       candidateCount: 60,
       detections: [
         {
