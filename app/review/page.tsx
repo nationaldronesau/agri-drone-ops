@@ -275,7 +275,7 @@ function ReviewPageContent() {
       if (!sessionId) return;
       const returnTo = encodeURIComponent(`/review?sessionId=${sessionId}`);
       router.push(
-        `/annotate/${item.assetId}?highlightId=${item.sourceId}&source=${item.source}&reviewSessionId=${sessionId}&returnTo=${returnTo}`
+        `/annotate/${item.assetId}?highlightId=${item.sourceId}&source=${item.source}&reviewSessionId=${sessionId}&returnTo=${returnTo}&focusReviewItem=1`
       );
     },
     [router, sessionId]
