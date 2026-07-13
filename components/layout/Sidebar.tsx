@@ -24,7 +24,6 @@ import {
   Box,
   ShieldCheck,
   Settings,
-  CircleHelp,
 } from "lucide-react";
 import { isGuidedOperatorFlowEnabled } from "@/lib/utils/feature-flags";
 
@@ -55,7 +54,7 @@ const guidedNavItems: NavItem[] = [
   { label: "Teach AI", href: "/teach", icon: Sparkles, section: "guided" },
   { label: "Review", href: "/review-queue", icon: Eye, section: "guided" },
   { label: "Models", href: "/training#models", icon: Box, section: "guided" },
-  { label: "Operations", href: "/operations", icon: ShieldCheck, section: "guided" },
+  { label: "Operations", href: "/mission-planner", icon: ShieldCheck, section: "guided" },
 ];
 
 const sectionLabels: Record<string, string> = {
@@ -158,11 +157,8 @@ export function Sidebar() {
 
       {guidedFlow && !collapsed && (
         <div className="hidden space-y-0.5 border-t border-gray-800 px-2 py-3 md:block">
-          <Link href="/projects" className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-gray-400 hover:bg-gray-800/60 hover:text-white">
+          <Link href="/camera-profiles" className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-gray-400 hover:bg-gray-800/60 hover:text-white">
             <Settings className="h-4.5 w-4.5 text-gray-500" /> Settings
-          </Link>
-          <Link href="/help" className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-gray-400 hover:bg-gray-800/60 hover:text-white">
-            <CircleHelp className="h-4.5 w-4.5 text-gray-500" /> Help
           </Link>
         </div>
       )}

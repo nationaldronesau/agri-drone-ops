@@ -8,6 +8,11 @@ test.describe("Guided Teach AI workspace", () => {
     await expect(page.getByRole("link", { name: "Teach AI" })).toBeVisible();
     await expect(page.getByText("Batch images (146)")).toBeVisible();
 
+    const filmstrip = page.getByTestId("teach-filmstrip");
+    await expect.poll(() => filmstrip.evaluate((element) => element.scrollLeft)).toBe(0);
+    await page.getByRole("button", { name: "Next images" }).click();
+    await expect.poll(() => filmstrip.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+
     const searchButton = page.getByRole("button", { name: "Search this batch (146)" });
     await expect(searchButton).toBeDisabled();
 

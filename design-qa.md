@@ -24,9 +24,9 @@
 
 - P2: the field image letterboxed instead of filling the teaching canvas.
 - P2: filmstrip images repeated the same wide crop, making examples harder to scan.
-- P2: the simplified sidebar lacked the lower Settings and Help destinations.
+- P2: the simplified sidebar lacked a lower Settings destination.
 
-Fixes applied: crop-aware coordinate conversion for the cover image, varied close crops in the demo filmstrip, and guided-mode sidebar utility links.
+Fixes applied: crop-aware coordinate conversion for the cover image, varied close crops in the demo filmstrip, and a guided-mode Settings link to the existing camera profiles route.
 
 ### Pass 2
 
@@ -40,5 +40,12 @@ Fixes applied: crop-aware coordinate conversion for the cover image, varied clos
 - “Open review” replaces the concept's “Skip teaching” shortcut to preserve the review approval gate.
 - Demo imagery is an original generated agricultural raster asset with the same subject and art direction, not a copy of the concept image.
 - The minor external-link footer from the concept guide is omitted because it is not part of the core teaching task.
+- The concept's Help item is omitted because the application has no Help route; the UI does not expose a dead destination.
+
+## Reviewer Amendments
+
+- Confirmed every guided navigation destination resolves to an existing application route.
+- Added functional previous and next controls for moving through the filmstrip.
+- Re-ran the focused browser tests after both amendments.
 
 final result: passed

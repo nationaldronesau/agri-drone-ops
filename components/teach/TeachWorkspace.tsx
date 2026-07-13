@@ -121,6 +121,7 @@ export default function TeachWorkspace() {
   const [frameSize, setFrameSize] = useState({ width: 1, height: 1 });
   const [filter, setFilter] = useState("");
   const imageRef = useRef<HTMLDivElement>(null);
+  const filmstripRef = useRef<HTMLDivElement>(null);
 
   const project = projects.find((item) => item.id === projectId) || projects[0] || null;
   const asset = assets.find((item) => item.id === assetId) || assets[0] || null;
@@ -275,6 +276,15 @@ export default function TeachWorkspace() {
     setNotice("New source image selected. Mark 3–8 examples on this image.");
   }
 
+  function scrollFilmstrip(direction: -1 | 1) {
+    const filmstrip = filmstripRef.current;
+    if (!filmstrip) return;
+    filmstrip.scrollBy({
+      left: direction * Math.max(filmstrip.clientWidth * 0.75, 220),
+      behavior: "smooth",
+    });
+  }
+
   function styleBox(box: DraftBox | ExemplarBox) {
     const left = Math.min(box.x1, box.x2) * coverTransform.scale - coverTransform.cropX;
     const top = Math.min(box.y1, box.y2) * coverTransform.scale - coverTransform.cropY;
@@ -405,8 +415,8 @@ export default function TeachWorkspace() {
           </section>
 
           <section className="border-b border-gray-200 bg-white px-5 pb-3 pt-3 lg:px-7">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3"><div className="flex items-baseline gap-3"><h2 className="text-sm font-semibold">Batch images ({batchCount})</h2><p className="text-xs text-gray-500">Choose the best image, then mark all examples on it.</p></div><div className="flex items-center gap-2"><label className="relative hidden sm:block"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" /><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Jump to image…" className="h-9 w-56 rounded-lg border border-gray-200 pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" /></label><button type="button" aria-label="Previous images" className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200"><ChevronLeft className="h-4 w-4" /></button><button type="button" aria-label="Next images" className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200"><ChevronRight className="h-4 w-4" /></button></div></div>
-            <div className="flex gap-2 overflow-x-auto pb-1">{visibleAssets.map((item) => <Thumbnail key={item.id} asset={item} active={item.id === assetId} demo={demo} onSelect={() => selectAsset(item)} />)}</div>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3"><div className="flex items-baseline gap-3"><h2 className="text-sm font-semibold">Batch images ({batchCount})</h2><p className="text-xs text-gray-500">Choose the best image, then mark all examples on it.</p></div><div className="flex items-center gap-2"><label className="relative hidden sm:block"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" /><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Jump to image…" className="h-9 w-56 rounded-lg border border-gray-200 pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" /></label><button type="button" aria-label="Previous images" onClick={() => scrollFilmstrip(-1)} className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200"><ChevronLeft className="h-4 w-4" /></button><button type="button" aria-label="Next images" onClick={() => scrollFilmstrip(1)} className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200"><ChevronRight className="h-4 w-4" /></button></div></div>
+            <div ref={filmstripRef} data-testid="teach-filmstrip" className="flex gap-2 overflow-x-auto pb-1">{visibleAssets.map((item) => <Thumbnail key={item.id} asset={item} active={item.id === assetId} demo={demo} onSelect={() => selectAsset(item)} />)}</div>
           </section>
 
           <footer className="sticky bottom-0 z-20 bg-white px-5 pb-3 pt-3 shadow-[0_-8px_30px_rgba(15,23,42,0.06)] lg:px-7">
