@@ -6,6 +6,7 @@ import {
   SAM3_BATCH_JOB_KINDS,
   summarizeChildBatchJobs,
 } from '@/lib/utils/sam3-batch-jobs';
+import { summarizeSam3BatchExecution } from '@/lib/utils/sam3-batch-execution';
 
 interface RouteParams {
   params: Promise<{ batchId: string }>;
@@ -151,6 +152,10 @@ export async function GET(
     });
 
     const aggregateStageInfo = summarizeChildBatchJobs(childStageSummaries);
+    const execution = summarizeSam3BatchExecution(
+      childJobs.map((childJob) => parseStageLog(childJob.stageLog)),
+      batchJob.mode
+    );
     const assetSummary = childStageSummaries.reduce(
       (summary, child) => {
         summary.success += child.assetSummary.success;
@@ -212,6 +217,7 @@ export async function GET(
         accepted: statusCounts.ACCEPTED || 0,
         rejected: statusCounts.REJECTED || 0,
       },
+      execution,
       annotations,
     });
   }
@@ -251,6 +257,7 @@ export async function GET(
   const totalAnnotations = groupedStatusCounts.reduce((sum, row) => sum + row._count._all, 0);
   const stageLog = parseStageLog(batchJob.stageLog);
   const stageSummary = summarizeStageLog(stageLog);
+  const execution = summarizeSam3BatchExecution([stageLog], batchJob.mode);
 
   return NextResponse.json({
     success: true,
@@ -288,6 +295,7 @@ export async function GET(
       accepted: statusCounts.ACCEPTED || 0,
       rejected: statusCounts.REJECTED || 0,
     },
+    execution,
     annotations,
   });
 }

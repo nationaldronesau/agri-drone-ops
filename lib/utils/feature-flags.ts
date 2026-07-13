@@ -13,3 +13,6 @@ export function isTemporalInsightsEnabled(features: unknown): boolean {
   return Boolean(flags.temporalInsights);
 }
 
+export function isGuidedOperatorFlowEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_GUIDED_OPERATOR_FLOW === 'true';
+}
