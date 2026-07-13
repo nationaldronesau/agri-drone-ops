@@ -29,7 +29,7 @@ interface ReviewSession {
 
 export default function ReviewQueuePage() {
   const [sessions, setSessions] = useState<ReviewSession[]>([]);
-  const [filter, setFilter] = useState<QueueFilter>("me");
+  const [filter, setFilter] = useState<QueueFilter>("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);

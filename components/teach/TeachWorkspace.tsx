@@ -171,8 +171,9 @@ export default function TeachWorkspace() {
         if (cancelled) return;
         const nextProjects: Project[] = data.projects || [];
         const requested = searchParams.get("projectId");
+        const defaultProject = nextProjects.find((item) => (item._count?.assets || 0) > 0) || nextProjects[0];
         setProjects(nextProjects);
-        setProjectId(nextProjects.some((item) => item.id === requested) ? requested || "" : nextProjects[0]?.id || "");
+        setProjectId(nextProjects.some((item) => item.id === requested) ? requested || "" : defaultProject?.id || "");
       } catch (loadError) {
         if (!cancelled) setError(loadError instanceof Error ? loadError.message : "Projects could not be loaded.");
       } finally {
