@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowRight,
   Box,
@@ -24,6 +24,14 @@ import {
   X,
 } from "lucide-react";
 import { useSignedUrl } from "@/lib/hooks/useSignedUrl";
+import { TeachBatchStatus } from "@/components/teach/TeachBatchStatus";
+import {
+  isTeachBatchTerminal,
+  parseTeachBatchRun,
+  TEACH_BATCH_RUN_STORAGE_KEY,
+  type TeachBatchRun,
+  type TeachBatchStatusResponse,
+} from "@/lib/utils/teach-batch-run";
 
 interface Project {
   id: string;
@@ -74,16 +82,17 @@ const GUIDE_ITEMS = [
   { icon: Leaf, title: "Different growth stages", body: "Include young, mature, and flowering plants." },
 ];
 
-function Thumbnail({ asset, active, demo, onSelect }: { asset: Asset; active: boolean; demo: boolean; onSelect: () => void }) {
+function Thumbnail({ asset, active, demo, disabled, onSelect }: { asset: Asset; active: boolean; demo: boolean; disabled: boolean; onSelect: () => void }) {
   const signed = useSignedUrl(demo ? null : asset.id, "asset", asset.storageUrl);
   const src = demo ? asset.storageUrl : signed.url || asset.storageUrl;
   return (
     <button
       type="button"
       onClick={onSelect}
+      disabled={disabled}
       aria-label={`Use ${asset.fileName} as the source image`}
       aria-current={active ? "true" : undefined}
-      className={`relative h-[74px] w-[100px] flex-none overflow-hidden rounded-lg border-2 bg-gray-100 transition focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${active ? "border-blue-500 shadow-sm" : "border-transparent hover:border-gray-300"}`}
+      className={`relative h-[74px] w-[100px] flex-none overflow-hidden rounded-lg border-2 bg-gray-100 transition focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 ${active ? "border-blue-500 shadow-sm" : "border-transparent hover:border-gray-300"}`}
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
@@ -98,6 +107,7 @@ function Thumbnail({ asset, active, demo, onSelect }: { asset: Asset; active: bo
 }
 
 export default function TeachWorkspace() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const demo = process.env.NODE_ENV !== "production" && searchParams.get("demo") === "1";
   const [projects, setProjects] = useState<Project[]>(demo ? [DEMO_PROJECT] : []);
@@ -120,6 +130,12 @@ export default function TeachWorkspace() {
   const [imageSize, setImageSize] = useState({ width: 1536, height: 1024 });
   const [frameSize, setFrameSize] = useState({ width: 1, height: 1 });
   const [filter, setFilter] = useState("");
+  const [activeRun, setActiveRun] = useState<TeachBatchRun | null>(null);
+  const [batchData, setBatchData] = useState<TeachBatchStatusResponse | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
+  const [pollNonce, setPollNonce] = useState(0);
+  const [openingReview, setOpeningReview] = useState(false);
+  const [storageReady, setStorageReady] = useState(false);
   const imageRef = useRef<HTMLDivElement>(null);
   const filmstripRef = useRef<HTMLDivElement>(null);
 
@@ -128,6 +144,8 @@ export default function TeachWorkspace() {
   const signedMain = useSignedUrl(demo ? null : asset?.id || null, "asset", asset?.storageUrl);
   const mainImage = demo ? asset?.storageUrl : signedMain.url || asset?.storageUrl;
   const batchCount = demo ? 146 : assets.length;
+  const batchLocked = Boolean(activeRun);
+  const batchBusy = Boolean(activeRun && (!batchData || !isTeachBatchTerminal(batchData.batchJob.status)));
   const visibleAssets = useMemo(() => {
     const query = filter.trim().toLowerCase();
     return query ? assets.filter((item, index) => item.fileName.toLowerCase().includes(query) || String(index + 1).includes(query)) : assets;
@@ -166,6 +184,48 @@ export default function TeachWorkspace() {
   }, [demo, searchParams]);
 
   useEffect(() => {
+    if (demo) {
+      setStorageReady(true);
+      return;
+    }
+    const restored = parseTeachBatchRun(window.localStorage.getItem(TEACH_BATCH_RUN_STORAGE_KEY));
+    setActiveRun(restored);
+    if (restored) {
+      setBatchData({
+        batchJob: {
+          id: restored.batchJobId,
+          projectId: restored.projectId,
+          weedType: restored.target,
+          status: "QUEUED",
+          mode: "concept_propagation",
+          processedImages: 0,
+          totalImages: 0,
+          detectionsFound: 0,
+        },
+      });
+    }
+    setStorageReady(true);
+  }, [demo]);
+
+  useEffect(() => {
+    if (!storageReady || demo) return;
+    if (activeRun) {
+      window.localStorage.setItem(TEACH_BATCH_RUN_STORAGE_KEY, JSON.stringify(activeRun));
+    } else {
+      window.localStorage.removeItem(TEACH_BATCH_RUN_STORAGE_KEY);
+    }
+  }, [activeRun, demo, storageReady]);
+
+  useEffect(() => {
+    if (!activeRun || projects.length === 0) return;
+    if (projects.some((item) => item.id === activeRun.projectId)) {
+      setProjectId(activeRun.projectId);
+      setTarget(activeRun.target);
+      setTargetDraft(activeRun.target);
+    }
+  }, [activeRun, projects]);
+
+  useEffect(() => {
     if (demo || !projectId) return;
     let cancelled = false;
     async function loadAssets() {
@@ -190,6 +250,65 @@ export default function TeachWorkspace() {
   }, [demo, projectId]);
 
   useEffect(() => {
+    if (demo || !activeRun) return;
+
+    const controller = new AbortController();
+    let cancelled = false;
+    let timer: number | null = null;
+    let consecutiveFailures = 0;
+
+    const schedule = (delay: number) => {
+      if (!cancelled) timer = window.setTimeout(fetchStatus, delay);
+    };
+
+    const fetchStatus = async () => {
+      try {
+        const response = await fetch(`${activeRun.pollUrl}?includeAnnotations=false`, {
+          signal: controller.signal,
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const error = new Error(data.error || "The batch status could not be loaded.");
+          error.name = response.status === 401 || response.status === 403 || response.status === 404
+            ? "TerminalStatusError"
+            : "StatusError";
+          throw error;
+        }
+        if (cancelled || !data?.batchJob) return;
+        if (data.batchJob.id !== activeRun.batchJobId || data.batchJob.projectId !== activeRun.projectId) {
+          throw new Error("The restored batch does not match this project.");
+        }
+
+        consecutiveFailures = 0;
+        setPollError(null);
+        setBatchData(data as TeachBatchStatusResponse);
+        if (!isTeachBatchTerminal(data.batchJob.status)) schedule(3000);
+      } catch (statusError) {
+        if (cancelled || controller.signal.aborted) return;
+        consecutiveFailures += 1;
+        const message = statusError instanceof Error ? statusError.message : "The batch status could not be loaded.";
+        setPollError(
+          statusError instanceof Error && statusError.name === "TerminalStatusError"
+            ? message
+            : consecutiveFailures >= 5
+              ? "Status updates paused after repeated connection failures. Your batch has not been cancelled."
+              : "Connection interrupted. Retrying the batch status…"
+        );
+        if (!(statusError instanceof Error && statusError.name === "TerminalStatusError") && consecutiveFailures < 5) {
+          schedule(5000);
+        }
+      }
+    };
+
+    void fetchStatus();
+    return () => {
+      cancelled = true;
+      controller.abort();
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [activeRun, demo, pollNonce]);
+
+  useEffect(() => {
     const frame = imageRef.current;
     if (!frame) return;
     const update = () => setFrameSize({ width: frame.clientWidth || 1, height: frame.clientHeight || 1 });
@@ -212,7 +331,7 @@ export default function TeachWorkspace() {
   }
 
   function beginBox(event: React.PointerEvent<HTMLDivElement>) {
-    if (boxes.length >= 8) return;
+    if (batchLocked || boxes.length >= 8) return;
     const point = eventPoint(event);
     if (!point) return;
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -243,6 +362,7 @@ export default function TeachWorkspace() {
   }
 
   function handleCanvasKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (batchLocked) return;
     if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Enter", "Escape"].includes(event.key)) return;
     event.preventDefault();
     if (event.key === "Escape") {
@@ -269,6 +389,7 @@ export default function TeachWorkspace() {
   }
 
   function selectAsset(nextAsset: Asset) {
+    if (batchLocked) return;
     if (nextAsset.id === assetId) return;
     if (boxes.length && !window.confirm("Choose a different source image? Your current example boxes will be cleared.")) return;
     setAssetId(nextAsset.id);
@@ -304,7 +425,7 @@ export default function TeachWorkspace() {
   }
 
   async function searchBatch() {
-    if (!project || !asset || boxes.length < 3) return;
+    if (!project || !asset || boxes.length < 3 || batchBusy) return;
     setSubmitting(true);
     setError(null);
     setNotice(null);
@@ -332,11 +453,77 @@ export default function TeachWorkspace() {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "The search could not be started.");
-      setNotice(`Search started across ${assets.length} images. Every suggestion will wait in Review.`);
+      if (!data.batchJobId) throw new Error("The search started without a traceable batch ID.");
+      const run: TeachBatchRun = {
+        batchJobId: data.batchJobId,
+        pollUrl: data.pollUrl || `/api/sam3/v2/batch/${data.batchJobId}`,
+        projectId: project.id,
+        target,
+        submittedAt: new Date().toISOString(),
+      };
+      setActiveRun(run);
+      setBatchData({
+        batchJob: {
+          id: data.batchJobId,
+          projectId: project.id,
+          weedType: target,
+          status: data.status || "QUEUED",
+          mode: data.mode || "concept_propagation",
+          processedImages: data.processedImages || 0,
+          totalImages: data.totalImages || assets.length,
+          detectionsFound: 0,
+        },
+      });
+      setNotice(null);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "The search could not be started.");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  function clearActiveRun(message?: string) {
+    setActiveRun(null);
+    setBatchData(null);
+    setPollError(null);
+    setOpeningReview(false);
+    if (message) setNotice(message);
+  }
+
+  async function openBatchReview() {
+    if (!activeRun || !batchData || batchData.batchJob.status !== "COMPLETED") return;
+    if (activeRun.reviewSessionId) {
+      router.push(`/review?sessionId=${activeRun.reviewSessionId}`);
+      return;
+    }
+
+    setOpeningReview(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: activeRun.projectId,
+          workflowType: "batch_review",
+          targetType: "both",
+          weedTypeFilter: activeRun.target,
+          batchJobIds: [activeRun.batchJobId],
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.session?.id) {
+        const details = data?.details ? `: ${data.details}` : "";
+        throw new Error(`${data?.error || "The review session could not be created"}${details}`);
+      }
+      const nextRun = { ...activeRun, reviewSessionId: data.session.id };
+      setActiveRun(nextRun);
+      window.localStorage.setItem(TEACH_BATCH_RUN_STORAGE_KEY, JSON.stringify(nextRun));
+      router.push(`/review?sessionId=${data.session.id}`);
+    } catch (reviewError) {
+      setError(reviewError instanceof Error ? reviewError.message : "The review session could not be created.");
+    } finally {
+      setOpeningReview(false);
     }
   }
 
@@ -351,7 +538,7 @@ export default function TeachWorkspace() {
           <span className="flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-emerald-50 text-emerald-600"><Box className="h-5 w-5" /></span>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <select aria-label="Project" value={projectId} onChange={(event) => setProjectId(event.target.value)} disabled={demo || loadingProjects} className="max-w-[190px] truncate bg-transparent text-base font-semibold outline-none disabled:opacity-100 sm:max-w-[420px] sm:text-lg">
+              <select aria-label="Project" value={projectId} onChange={(event) => setProjectId(event.target.value)} disabled={demo || loadingProjects || batchLocked} className="max-w-[190px] truncate bg-transparent text-base font-semibold outline-none disabled:opacity-100 sm:max-w-[420px] sm:text-lg">
                 {projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
             </div>
@@ -378,13 +565,28 @@ export default function TeachWorkspace() {
           <section className="flex flex-wrap items-center justify-between gap-4 border-b border-gray-200 bg-white px-5 py-3.5 lg:px-7">
             <div>
               <h1 className="text-xl font-semibold tracking-tight">What should we find?</h1>
-              {editingTarget ? <div className="mt-2 flex gap-2"><input autoFocus aria-label="Target name" value={targetDraft} onChange={(event) => setTargetDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && targetDraft.trim()) { setTarget(targetDraft.trim()); setEditingTarget(false); } }} className="h-10 w-64 rounded-lg border border-gray-300 px-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" /><button type="button" onClick={() => { if (targetDraft.trim()) { setTarget(targetDraft.trim()); setEditingTarget(false); } }} className="rounded-lg bg-gray-950 px-3 text-sm font-medium text-white">Save</button></div> : <div className="mt-2 inline-flex items-center gap-3 rounded-lg border border-gray-200 bg-white px-2.5 py-2"><span className="h-8 w-8 overflow-hidden rounded-md bg-emerald-50">{mainImage ? <img src={mainImage} alt="" className="h-full w-full scale-150 object-cover" /> : <Leaf className="m-2 h-4 w-4 text-emerald-600" />}</span><span className="font-semibold">{target}</span><button type="button" onClick={() => setEditingTarget(true)} className="ml-4 text-sm font-medium text-blue-600">Change target</button></div>}
+              {editingTarget ? <div className="mt-2 flex gap-2"><input autoFocus aria-label="Target name" value={targetDraft} onChange={(event) => setTargetDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && targetDraft.trim()) { setTarget(targetDraft.trim()); setEditingTarget(false); } }} className="h-10 w-64 rounded-lg border border-gray-300 px-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" /><button type="button" onClick={() => { if (targetDraft.trim()) { setTarget(targetDraft.trim()); setEditingTarget(false); } }} className="rounded-lg bg-gray-950 px-3 text-sm font-medium text-white">Save</button></div> : <div className="mt-2 inline-flex items-center gap-3 rounded-lg border border-gray-200 bg-white px-2.5 py-2"><span className="h-8 w-8 overflow-hidden rounded-md bg-emerald-50">{mainImage ? <img src={mainImage} alt="" className="h-full w-full scale-150 object-cover" /> : <Leaf className="m-2 h-4 w-4 text-emerald-600" />}</span><span className="font-semibold">{target}</span><button type="button" disabled={batchLocked} onClick={() => setEditingTarget(true)} className="ml-4 text-sm font-medium text-blue-600 disabled:cursor-not-allowed disabled:text-gray-400">Change target</button></div>}
             </div>
             <button type="button" onClick={() => setGuideOpen((open) => !open)} aria-expanded={guideOpen} className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"><CircleHelp className="h-4 w-4" /> How to mark examples <ChevronDown className={`h-4 w-4 transition ${guideOpen ? "rotate-180" : ""}`} /></button>
           </section>
 
           {error && <div className="mx-5 mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 lg:mx-7">{error}</div>}
           {notice && <div className="mx-5 mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 lg:mx-7">{notice}</div>}
+          {activeRun && batchData ? (
+            <TeachBatchStatus
+              status={batchData.batchJob}
+              summary={batchData.summary}
+              execution={batchData.execution}
+              pollError={pollError}
+              reviewing={openingReview}
+              onRetryStatus={() => {
+                setPollError(null);
+                setPollNonce((value) => value + 1);
+              }}
+              onReview={() => void openBatchReview()}
+              onStartAgain={() => clearActiveRun("Previous search cleared. Your examples are ready to use again.")}
+            />
+          ) : null}
 
           <section className="relative mx-5 mt-3 flex min-h-[410px] flex-1 items-center justify-center overflow-hidden rounded-xl border border-gray-200 bg-gray-900 lg:mx-7">
             {loadingAssets || signedMain.loading ? <div className="flex items-center text-white"><Loader2 className="mr-2 h-5 w-5 animate-spin" />Loading image…</div> : !asset || !mainImage ? <div className="text-center text-white"><ImageIcon className="mx-auto mb-3 h-9 w-9 text-gray-400" /><p className="font-medium">This project has no images yet.</p><Link href="/upload" className="mt-3 inline-block text-sm text-emerald-300 underline">Upload images</Link></div> : <div
@@ -394,7 +596,7 @@ export default function TeachWorkspace() {
               tabIndex={0}
               aria-label="Example marking canvas"
               aria-describedby="teach-canvas-instructions"
-              className="relative h-full min-h-[410px] w-full touch-none select-none cursor-crosshair overflow-hidden"
+              className={`relative h-full min-h-[410px] w-full touch-none select-none overflow-hidden ${batchLocked ? "cursor-not-allowed" : "cursor-crosshair"}`}
               onPointerDown={beginBox}
               onPointerMove={moveBox}
               onPointerUp={finishBox}
@@ -407,7 +609,7 @@ export default function TeachWorkspace() {
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={mainImage} alt={`${project?.name || "Project"} source imagery`} className="absolute inset-0 h-full w-full object-cover" onLoad={(event) => { const size = { width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight }; setImageSize(size); setKeyboardCursor({ x: size.width / 2, y: size.height / 2 }); }} draggable={false} />
               <div className="absolute left-3 top-3 max-w-[340px] rounded-lg bg-gray-950/90 px-4 py-3 text-white shadow-lg backdrop-blur-sm"><p className="font-semibold">Mark 3–8 examples that look different</p><p className="mt-1 text-sm leading-5 text-gray-300">Choose plants that vary in size, colour, lighting, and background.</p><p className="mt-2 text-sm"><span className="font-semibold text-emerald-300">{boxes.length}</span> of 3–8 examples marked</p><div className="mt-2 flex gap-1.5">{Array.from({ length: 8 }, (_, index) => <span key={index} className={`h-1.5 flex-1 rounded-full ${index < boxes.length ? "bg-emerald-400" : "bg-gray-600"}`} />)}</div></div>
-              {boxes.map((box, index) => <div key={box.id} className="pointer-events-none absolute border-2 border-emerald-400 bg-emerald-400/10" style={styleBox(box)}><span className="absolute -left-0.5 -top-7 flex h-7 min-w-7 items-center justify-center rounded-t-md bg-emerald-500 px-1 text-xs font-bold text-white">{index + 1}</span><button type="button" aria-label={`Remove example ${index + 1}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setBoxes((current) => current.filter((item) => item.id !== box.id)); }} className="pointer-events-auto absolute -right-3 -top-3 flex h-7 w-7 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-700 shadow"><X className="h-3.5 w-3.5" /></button></div>)}
+              {boxes.map((box, index) => <div key={box.id} className="pointer-events-none absolute border-2 border-emerald-400 bg-emerald-400/10" style={styleBox(box)}><span className="absolute -left-0.5 -top-7 flex h-7 min-w-7 items-center justify-center rounded-t-md bg-emerald-500 px-1 text-xs font-bold text-white">{index + 1}</span><button type="button" aria-label={`Remove example ${index + 1}`} disabled={batchLocked} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setBoxes((current) => current.filter((item) => item.id !== box.id)); }} className="pointer-events-auto absolute -right-3 -top-3 flex h-7 w-7 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-700 shadow disabled:cursor-not-allowed disabled:opacity-60"><X className="h-3.5 w-3.5" /></button></div>)}
               {draft && <div className="pointer-events-none absolute border-2 border-dashed border-emerald-300 bg-emerald-300/10" style={styleBox(draft)} />}
               {keyboardActive && <Crosshair className="pointer-events-none absolute h-6 w-6 -translate-x-1/2 -translate-y-1/2 text-white drop-shadow" style={stylePoint(keyboardCursor)} aria-hidden="true" />}
               {guideOpen && <aside className="absolute bottom-3 right-3 top-3 w-[270px] overflow-y-auto rounded-lg border border-gray-200 bg-white p-4 shadow-xl"><div className="flex items-center justify-between"><h2 className="font-semibold">How to mark good examples</h2><button type="button" aria-label="Close example guide" onClick={() => setGuideOpen(false)} className="rounded p-1 text-gray-500 hover:bg-gray-100"><X className="h-4 w-4" /></button></div><div className="mt-4 space-y-4">{GUIDE_ITEMS.map(({ icon: Icon, title, body }) => <div key={title} className="flex gap-3"><Icon className="mt-0.5 h-4 w-4 flex-none text-gray-600" /><div><p className="text-sm font-semibold">{title}</p><p className="mt-1 text-xs leading-5 text-gray-600">{body}</p></div></div>)}</div></aside>}
@@ -415,13 +617,13 @@ export default function TeachWorkspace() {
           </section>
 
           <section className="border-b border-gray-200 bg-white px-5 pb-3 pt-3 lg:px-7">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3"><div className="flex items-baseline gap-3"><h2 className="text-sm font-semibold">Batch images ({batchCount})</h2><p className="text-xs text-gray-500">Choose the best image, then mark all examples on it.</p></div><div className="flex items-center gap-2"><label className="relative hidden sm:block"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" /><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Jump to image…" className="h-9 w-56 rounded-lg border border-gray-200 pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" /></label><button type="button" aria-label="Previous images" onClick={() => scrollFilmstrip(-1)} className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200"><ChevronLeft className="h-4 w-4" /></button><button type="button" aria-label="Next images" onClick={() => scrollFilmstrip(1)} className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200"><ChevronRight className="h-4 w-4" /></button></div></div>
-            <div ref={filmstripRef} data-testid="teach-filmstrip" className="flex gap-2 overflow-x-auto pb-1">{visibleAssets.map((item) => <Thumbnail key={item.id} asset={item} active={item.id === assetId} demo={demo} onSelect={() => selectAsset(item)} />)}</div>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3"><div className="flex items-baseline gap-3"><h2 className="text-sm font-semibold">Batch images ({batchCount})</h2><p className="text-xs text-gray-500">Choose the best image, then mark all examples on it.</p></div><div className="flex items-center gap-2"><label className="relative hidden sm:block"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" /><input value={filter} onChange={(event) => setFilter(event.target.value)} disabled={batchLocked} placeholder="Jump to image…" className="h-9 w-56 rounded-lg border border-gray-200 pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-gray-50" /></label><button type="button" aria-label="Previous images" disabled={batchLocked} onClick={() => scrollFilmstrip(-1)} className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 disabled:cursor-not-allowed disabled:opacity-50"><ChevronLeft className="h-4 w-4" /></button><button type="button" aria-label="Next images" disabled={batchLocked} onClick={() => scrollFilmstrip(1)} className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 disabled:cursor-not-allowed disabled:opacity-50"><ChevronRight className="h-4 w-4" /></button></div></div>
+            <div ref={filmstripRef} data-testid="teach-filmstrip" className="flex gap-2 overflow-x-auto pb-1">{visibleAssets.map((item) => <Thumbnail key={item.id} asset={item} active={item.id === assetId} demo={demo} disabled={batchLocked} onSelect={() => selectAsset(item)} />)}</div>
           </section>
 
           <footer className="sticky bottom-0 z-20 bg-white px-5 pb-3 pt-3 shadow-[0_-8px_30px_rgba(15,23,42,0.06)] lg:px-7">
             <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-950"><ShieldCheck className="mt-0.5 h-4 w-4 flex-none text-amber-600" /><span><strong>Safety first:</strong> Matches are suggestions for review. They are never used for spraying automatically.</span></div>
-            <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex w-full gap-2 sm:w-auto"><button type="button" onClick={() => setBoxes([])} disabled={!boxes.length} className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-gray-200 px-3 text-sm font-medium text-gray-700 disabled:opacity-40 sm:flex-none sm:px-4"><Trash2 className="h-4 w-4" />Clear examples</button><Link href="/review-queue" className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-gray-200 px-3 text-sm font-medium text-gray-700 sm:flex-none sm:px-4"><Eye className="h-4 w-4" />Open review</Link></div><button type="button" onClick={searchBatch} disabled={submitting || boxes.length < 3 || !asset} className="inline-flex h-12 w-full min-w-0 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-emerald-500 to-blue-500 px-4 text-sm font-semibold text-white shadow-sm hover:from-emerald-600 hover:to-blue-600 disabled:cursor-not-allowed disabled:from-gray-300 disabled:to-gray-300 sm:w-auto sm:min-w-[330px] sm:px-6">{submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}{submitting ? "Starting search…" : `Search this batch${batchCount ? ` (${batchCount})` : ""}`} {!submitting && <ArrowRight className="h-4 w-4" />}</button></div>
+            <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex w-full gap-2 sm:w-auto"><button type="button" onClick={() => setBoxes([])} disabled={!boxes.length || batchLocked} className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-gray-200 px-3 text-sm font-medium text-gray-700 disabled:opacity-40 sm:flex-none sm:px-4"><Trash2 className="h-4 w-4" />Clear examples</button><Link href="/review-queue" className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-gray-200 px-3 text-sm font-medium text-gray-700 sm:flex-none sm:px-4"><Eye className="h-4 w-4" />Review queue</Link></div><button type="button" onClick={searchBatch} disabled={submitting || batchBusy || boxes.length < 3 || !asset} className="inline-flex h-12 w-full min-w-0 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-emerald-500 to-blue-500 px-4 text-sm font-semibold text-white shadow-sm hover:from-emerald-600 hover:to-blue-600 disabled:cursor-not-allowed disabled:from-gray-300 disabled:to-gray-300 sm:w-auto sm:min-w-[330px] sm:px-6">{submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}{submitting ? "Starting search…" : batchBusy ? "Search in progress" : `Search this batch${batchCount ? ` (${batchCount})` : ""}`} {!submitting && !batchBusy && <ArrowRight className="h-4 w-4" />}</button></div>
           </footer>
         </main>
       </div>

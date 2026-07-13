@@ -241,6 +241,7 @@ export interface Sam3BatchV2StageLogEntry {
   visualCropSource?: 'operator' | 'operator_crops' | 'server_built_crops' | 'source_detections' | 'concept_exemplar';
   backendMode?: string;
   backendWarning?: string;
+  candidateExpansionUsed?: boolean;
   detectionCount?: number;
   candidateCount?: number;
   conceptExemplarCount?: number;
@@ -436,6 +437,7 @@ interface AssetInferenceResult {
   errorMessage?: string;
   backendMode?: string;
   backendWarning?: string;
+  candidateExpansionUsed?: boolean;
   candidateCount?: number;
   refinementBoxCount?: number;
   refinementDetectionCount?: number;
@@ -453,6 +455,11 @@ interface ConceptRefinementResult {
 interface ConceptExemplarRef {
   exemplarId: string;
   sourceBoxIndex?: number;
+}
+
+interface ConceptCandidateResult {
+  detections: SAM3ConceptDetection[];
+  candidateExpansionUsed: boolean;
 }
 
 interface GpuAdmissionResult {
@@ -1528,6 +1535,7 @@ export class Sam3BatchV2Service {
           visualCropSource: prepared.mode === 'visual_crop_match' ? prepared.visualCropSource : undefined,
           backendMode: result.backendMode,
           backendWarning: result.backendWarning,
+          candidateExpansionUsed: result.candidateExpansionUsed,
           candidateCount: result.candidateCount,
           conceptExemplarCount:
             prepared.mode === 'concept_propagation' ? conceptExemplars.length : undefined,
@@ -1728,7 +1736,7 @@ export class Sam3BatchV2Service {
       };
     }
 
-    const candidates = await this.getConceptCandidatesWithFallback({
+    const candidateResult = await this.getConceptCandidatesWithFallback({
       asset,
       imageBuffer,
       exemplarId,
@@ -1741,7 +1749,7 @@ export class Sam3BatchV2Service {
       asset,
       imageBuffer,
       className,
-      candidates
+      candidateResult.detections
     );
 
     return {
@@ -1750,6 +1758,7 @@ export class Sam3BatchV2Service {
       outcome: refinement.detections.length > 0 ? 'success' : 'zero_detections',
       backendMode: refinement.usedCandidateFallback ? 'concept_candidates_unrefined' : 'concept_refined',
       backendWarning: refinement.backendWarning,
+      candidateExpansionUsed: candidateResult.candidateExpansionUsed,
       candidateCount: refinement.candidateCount,
       refinementBoxCount: refinement.refinementBoxCount,
       refinementDetectionCount: refinement.refinementDetectionCount,
@@ -1816,7 +1825,7 @@ export class Sam3BatchV2Service {
     // enters the pending review gate before export or YOLO training.
     const reviewProfile: Sam3BatchV2ReviewProfile = 'high_recall';
     const conceptOptions = buildBatchV2ConceptApplyOptions(reviewProfile);
-    const candidates = await this.getConceptCandidatesFromEnsemble({
+    const candidateResult = await this.getConceptCandidatesFromEnsemble({
       asset,
       imageBuffer,
       exemplars: exemplarRefs,
@@ -1828,7 +1837,7 @@ export class Sam3BatchV2Service {
       asset,
       imageBuffer,
       weedType,
-      candidates
+      candidateResult.detections
     );
 
     return {
@@ -1839,6 +1848,7 @@ export class Sam3BatchV2Service {
         ? 'concept_ensemble_candidates_unrefined'
         : 'concept_ensemble_refined',
       backendWarning: refinement.backendWarning,
+      candidateExpansionUsed: candidateResult.candidateExpansionUsed,
       candidateCount: refinement.candidateCount,
       refinementBoxCount: refinement.refinementBoxCount,
       refinementDetectionCount: refinement.refinementDetectionCount,
@@ -1859,7 +1869,7 @@ export class Sam3BatchV2Service {
     primaryOptions: SAM3ConceptApplyOptions;
     reviewProfile?: Sam3BatchV2ReviewProfile;
     failureCode: string;
-  }): Promise<SAM3ConceptDetection[]> {
+  }): Promise<ConceptCandidateResult> {
     const minTargetCandidates = getBatchV2MinTargetCandidates(reviewProfile);
     const maxTargetCandidates = getBatchV2MaxTargetCandidates(reviewProfile);
     const primaryCandidates = await this.collectConceptCandidatesForExemplars({
@@ -1876,7 +1886,10 @@ export class Sam3BatchV2Service {
     );
 
     if (mergedPrimaryCandidates.length >= minTargetCandidates) {
-      return mergedPrimaryCandidates;
+      return {
+        detections: mergedPrimaryCandidates,
+        candidateExpansionUsed: false,
+      };
     }
 
     const fallbackOptions = buildBatchV2ConceptFallbackApplyOptions(reviewProfile);
@@ -1902,7 +1915,10 @@ export class Sam3BatchV2Service {
       );
     }
 
-    return mergedCandidates;
+    return {
+      detections: mergedCandidates,
+      candidateExpansionUsed: true,
+    };
   }
 
   private async collectConceptCandidatesForExemplars({
@@ -1963,12 +1979,15 @@ export class Sam3BatchV2Service {
     primaryOptions: SAM3ConceptApplyOptions;
     reviewProfile?: Sam3BatchV2ReviewProfile;
     failureCode: string;
-  }): Promise<SAM3ConceptDetection[]> {
+  }): Promise<ConceptCandidateResult> {
     const minTargetCandidates = getBatchV2MinTargetCandidates(reviewProfile);
     const maxTargetCandidates = getBatchV2MaxTargetCandidates(reviewProfile);
     const primaryCandidates = filterBatchV2ConceptDetections(primaryDetections, primaryOptions);
     if (primaryCandidates.length >= minTargetCandidates) {
-      return dedupeAndLimitConceptDetections(primaryCandidates, primaryOptions, maxTargetCandidates);
+      return {
+        detections: dedupeAndLimitConceptDetections(primaryCandidates, primaryOptions, maxTargetCandidates),
+        candidateExpansionUsed: false,
+      };
     }
 
     const fallbackOptions = buildBatchV2ConceptFallbackApplyOptions(reviewProfile);
@@ -2008,7 +2027,10 @@ export class Sam3BatchV2Service {
       );
     }
 
-    return mergedCandidates;
+    return {
+      detections: mergedCandidates,
+      candidateExpansionUsed: true,
+    };
   }
 
   private async refineConceptDetectionsWithBoxPrompts(
