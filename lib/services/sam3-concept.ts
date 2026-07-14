@@ -13,7 +13,6 @@ const SAM3_CONCEPT_API_KEY =
   process.env.SAM3_CONCEPT_API_KEY ||
   process.env.SAM3_API_KEY ||
   process.env.NDSD_SAM3_SERVICE_API_KEY;
-const REQUEST_TIMEOUT_MS = 180000;
 
 const parseOptionalNumber = (value: string | undefined): number | undefined => {
   if (!value) return undefined;
@@ -26,6 +25,11 @@ const parseOptionalInt = (value: string | undefined): number | undefined => {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : undefined;
 };
+
+const REQUEST_TIMEOUT_MS =
+  parseOptionalInt(process.env.SAM3_CONCEPT_REQUEST_TIMEOUT_MS) ?? 180000;
+const WARMUP_TIMEOUT_MS =
+  parseOptionalInt(process.env.SAM3_CONCEPT_WARMUP_TIMEOUT_MS) ?? 900000;
 
 const DEFAULT_SIMILARITY_THRESHOLD = parseOptionalNumber(
   process.env.SAM3_CONCEPT_SIMILARITY_THRESHOLD
@@ -278,7 +282,7 @@ class SAM3ConceptService {
       fetch(`${resolvedBaseUrl}/warmup`, {
         method: 'POST',
         headers: this.buildHeaders(),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(WARMUP_TIMEOUT_MS),
       })
     );
 
