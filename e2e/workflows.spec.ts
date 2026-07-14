@@ -82,17 +82,25 @@ test.describe("Workflow UI Coverage", () => {
     await expect(page.getByRole("heading", { name: "Autotest Plan" })).toBeVisible();
   });
 
-  test("orthomosaic and review queue screens show expected actions", async ({ page }) => {
+  test("orthomosaic screen shows expected actions", async ({ page }) => {
     await page.goto("/orthomosaics");
     await expect(page.getByText("Upload New Orthomosaic")).toBeVisible();
     await expect(page.getByRole("button", { name: "View Map" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Add to Map" })).toBeVisible();
+  });
 
+  test("review queue reveals all sessions by default", async ({ page }) => {
+    const initialQueueRequest = page.waitForRequest((request) =>
+      request.url().includes("/api/review/queue")
+    );
     await page.goto("/review-queue");
+    const queueRequestUrl = new URL((await initialQueueRequest).url());
+    expect(queueRequestUrl.searchParams.get("assigned")).toBe("all");
+    await expect(page.getByText("North Farm Survey")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open Review" })).toBeVisible();
+
     await page.getByRole("button", { name: "Unassigned" }).click();
     await expect(page.getByText("North Farm Survey")).toBeVisible();
     await expect(page.getByRole("button", { name: "Assign to me" })).toBeVisible();
-    await page.getByRole("button", { name: "All Sessions" }).click();
-    await expect(page.getByRole("link", { name: "Open Review" })).toBeVisible();
   });
 });
