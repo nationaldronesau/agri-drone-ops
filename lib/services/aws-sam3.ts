@@ -29,7 +29,18 @@ const SAM3_CONCEPT_API_KEY =
   process.env.NDSD_SAM3_SERVICE_API_KEY;
 const IDLE_TIMEOUT_MS = parseInt(process.env.SAM3_IDLE_TIMEOUT_MS || '3600000'); // 1 hour default
 const MAX_IMAGE_SIZE = 2048;
-const STARTUP_TIMEOUT_MS = 180000; // 3 minutes to start and warm up
+export const DEFAULT_SAM3_STARTUP_TIMEOUT_MS = 480000;
+
+export function resolveSam3StartupTimeoutMs(value = process.env.SAM3_STARTUP_TIMEOUT_MS): number {
+  if (!value) return DEFAULT_SAM3_STARTUP_TIMEOUT_MS;
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 60000
+    ? parsed
+    : DEFAULT_SAM3_STARTUP_TIMEOUT_MS;
+}
+
+const STARTUP_TIMEOUT_MS = resolveSam3StartupTimeoutMs();
 const HEALTH_CHECK_INTERVAL_MS = 5000; // Check every 5 seconds during startup
 const CONCEPT_REQUEST_TIMEOUT_MS = 180000;
 
