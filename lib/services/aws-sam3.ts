@@ -20,7 +20,22 @@ import sharp from 'sharp';
 
 // Configuration - Support both naming conventions for backward compatibility
 const AWS_REGION = process.env.SAM3_EC2_REGION || process.env.AWS_REGION || 'ap-southeast-2';
-const SAM3_INSTANCE_ID = process.env.SAM3_EC2_INSTANCE_ID || process.env.SAM3_INSTANCE_ID;
+const LEGACY_SAM3_INSTANCE_ID = process.env.SAM3_EC2_INSTANCE_ID || process.env.SAM3_INSTANCE_ID;
+
+export function resolveSam3InstanceIds(
+  poolValue?: string,
+  primaryValue?: string
+): string[] {
+  const candidates = [
+    primaryValue,
+    ...(poolValue || '').split(','),
+  ];
+
+  return [...new Set(candidates.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))];
+}
+
+const SAM3_INSTANCE_IDS = resolveSam3InstanceIds(process.env.SAM3_INSTANCE_IDS, LEGACY_SAM3_INSTANCE_ID);
+const SAM3_INSTANCE_ID = SAM3_INSTANCE_IDS[0];
 const SAM3_PORT = process.env.SAM3_EC2_PORT || process.env.SAM3_PORT || '8000';
 const SAM3_CONCEPT_PORT = process.env.SAM3_CONCEPT_PORT || '8002';
 const SAM3_CONCEPT_API_KEY =
@@ -47,6 +62,7 @@ const CONCEPT_REQUEST_TIMEOUT_MS = 180000;
 
 const RETRYABLE_EC2_START_ERRORS = new Set([
   'EC2ThrottledException',
+  'IncorrectInstanceState',
   'InsufficientInstanceCapacity',
   'InternalError',
   'InternalFailure',
@@ -72,6 +88,41 @@ export function isRetryableSam3StartError(error: unknown): boolean {
 
   const statusCode = candidate.$metadata?.httpStatusCode;
   return typeof statusCode === 'number' && statusCode >= 500;
+}
+
+export interface Sam3InstancePoolStartResult {
+  instanceId: string | null;
+  lastError?: unknown;
+}
+
+export async function tryStartSam3InstancePool(
+  instanceIds: string[],
+  attemptStart: (instanceId: string) => Promise<unknown>,
+  startIndex = 0,
+  onRetryableError?: (instanceId: string, error: unknown) => void
+): Promise<Sam3InstancePoolStartResult> {
+  if (instanceIds.length === 0) {
+    return { instanceId: null };
+  }
+
+  let lastError: unknown;
+  const normalizedStartIndex = ((startIndex % instanceIds.length) + instanceIds.length) % instanceIds.length;
+
+  for (let offset = 0; offset < instanceIds.length; offset += 1) {
+    const instanceId = instanceIds[(normalizedStartIndex + offset) % instanceIds.length];
+    try {
+      await attemptStart(instanceId);
+      return { instanceId };
+    } catch (error) {
+      if (!isRetryableSam3StartError(error)) {
+        throw error;
+      }
+      onRetryableError?.(instanceId, error);
+      lastError = error;
+    }
+  }
+
+  return { instanceId: null, lastError };
 }
 
 // Fun loading messages for the UI
@@ -254,6 +305,7 @@ class AWSSAM3Service {
   private configured: boolean = false;
   private apiFlavor: SAM3ApiFlavor = 'unknown';
   private supportsExemplarCrops: boolean | null = null;
+  private activeInstanceId: string | null = SAM3_INSTANCE_ID || null;
 
   constructor() {
     this.validateAndInitialize();
@@ -266,8 +318,8 @@ class AWSSAM3Service {
   private validateAndInitialize(): void {
     // Check for instance ID first
     if (!SAM3_INSTANCE_ID) {
-      this.configError = 'SAM3_INSTANCE_ID environment variable not set';
-      console.log('[AWS-SAM3] AWS SAM3 not configured: missing SAM3_INSTANCE_ID');
+      this.configError = 'SAM3_INSTANCE_ID or SAM3_INSTANCE_IDS environment variable not set';
+      console.log('[AWS-SAM3] AWS SAM3 not configured: missing instance pool configuration');
       return;
     }
 
@@ -284,7 +336,7 @@ class AWSSAM3Service {
           },
         });
         this.configured = true;
-        console.log(`[AWS-SAM3] Initialized with explicit credentials, instance: ${SAM3_INSTANCE_ID}, region: ${AWS_REGION}`);
+        console.log(`[AWS-SAM3] Initialized with explicit credentials, instance pool: ${SAM3_INSTANCE_IDS.join(', ')}, region: ${AWS_REGION}`);
       } catch (error) {
         this.configError = `Failed to initialize EC2 client: ${error instanceof Error ? error.message : 'Unknown error'}`;
         console.error('[AWS-SAM3] Failed to initialize:', this.configError);
@@ -294,7 +346,7 @@ class AWSSAM3Service {
       try {
         this.ec2Client = new EC2Client({ region: AWS_REGION });
         this.configured = true;
-        console.log(`[AWS-SAM3] Initialized with default credentials, instance: ${SAM3_INSTANCE_ID}, region: ${AWS_REGION}`);
+        console.log(`[AWS-SAM3] Initialized with default credentials, instance pool: ${SAM3_INSTANCE_IDS.join(', ')}, region: ${AWS_REGION}`);
       } catch (error) {
         this.configError = `No AWS credentials available: ${error instanceof Error ? error.message : 'Unknown error'}`;
         console.error('[AWS-SAM3] Failed to initialize:', this.configError);
@@ -336,19 +388,29 @@ class AWSSAM3Service {
    * Query EC2 API to discover the current public IP of the instance
    */
   async discoverInstanceIp(): Promise<string | null> {
-    if (!SAM3_INSTANCE_ID || !this.ec2Client) return null;
+    if (SAM3_INSTANCE_IDS.length === 0 || !this.ec2Client) return null;
 
     try {
       const command = new DescribeInstancesCommand({
-        InstanceIds: [SAM3_INSTANCE_ID],
+        InstanceIds: SAM3_INSTANCE_IDS,
       });
       const response = await this.ec2Client.send(command);
-      const instance = response.Reservations?.[0]?.Instances?.[0];
+      const instances = response.Reservations?.flatMap((reservation) => reservation.Instances || []) || [];
+      const currentInstance = instances.find((instance) => instance.InstanceId === this.activeInstanceId);
+      const runningInstance = instances.find((instance) => instance.State?.Name === 'running');
+      const pendingInstance = instances.find((instance) => instance.State?.Name === 'pending');
+      const currentState = currentInstance?.State?.Name;
+      const instance = currentState === 'running'
+        ? currentInstance
+        : runningInstance || (currentState === 'pending' ? currentInstance : pendingInstance) || currentInstance || instances[0];
 
       if (instance) {
+        if (instance.InstanceId) {
+          this.setActiveInstance(instance.InstanceId);
+        }
         this.instanceIp = instance.PublicIpAddress || null;
         this.updateEC2State(instance.State?.Name);
-        console.log(`[AWS-SAM3] Instance IP: ${this.instanceIp}, State: ${instance.State?.Name}`);
+        console.log(`[AWS-SAM3] Active instance ${this.activeInstanceId} IP: ${this.instanceIp}, State: ${instance.State?.Name}`);
       }
 
       return this.instanceIp;
@@ -362,7 +424,7 @@ class AWSSAM3Service {
    * Start the EC2 instance
    */
   async startInstance(): Promise<boolean> {
-    if (!SAM3_INSTANCE_ID || !this.ec2Client) {
+    if (SAM3_INSTANCE_IDS.length === 0 || !this.ec2Client) {
       console.error('[AWS-SAM3] Cannot start instance: not configured');
       return false;
     }
@@ -392,7 +454,7 @@ class AWSSAM3Service {
   }
 
   async kickoffStartInstance(): Promise<SAM3StartKickoffResult> {
-    if (!SAM3_INSTANCE_ID || !this.ec2Client) {
+    if (SAM3_INSTANCE_IDS.length === 0 || !this.ec2Client) {
       return {
         accepted: false,
         ready: false,
@@ -445,12 +507,9 @@ class AWSSAM3Service {
         };
       }
 
-      console.log('[AWS-SAM3] Requesting EC2 instance start...');
+      console.log('[AWS-SAM3] Requesting EC2 instance pool start...');
       this.instanceState = 'starting';
-      const command = new StartInstancesCommand({
-        InstanceIds: [SAM3_INSTANCE_ID!],
-      });
-      await this.ec2Client!.send(command);
+      await this.requestStartFromPool();
 
       this.trackStartupPromise(this.waitForReady());
       return {
@@ -461,7 +520,7 @@ class AWSSAM3Service {
     } catch (error) {
       if (isRetryableSam3StartError(error)) {
         const errorName = error instanceof Error ? error.name : 'transient AWS error';
-        console.warn(`[AWS-SAM3] EC2 start deferred by ${errorName}; retrying within the startup window`);
+        console.warn(`[AWS-SAM3] Instance pool start deferred by ${errorName}; retrying within the startup window`);
         this.instanceState = 'starting';
         this.trackStartupPromise(this.retryStartInstance(error));
         return {
@@ -491,6 +550,45 @@ class AWSSAM3Service {
     this.startupPromise = trackedPromise;
   }
 
+  private setActiveInstance(instanceId: string): void {
+    if (this.activeInstanceId === instanceId) return;
+
+    this.activeInstanceId = instanceId;
+    this.instanceIp = null;
+    this.modelLoaded = false;
+    this.gpuAvailable = false;
+    this.apiFlavor = 'unknown';
+    this.supportsExemplarCrops = null;
+    console.log(`[AWS-SAM3] Selected pool instance ${instanceId}`);
+  }
+
+  private async requestStartFromPool(): Promise<void> {
+    const activeIndex = Math.max(0, SAM3_INSTANCE_IDS.indexOf(this.activeInstanceId || ''));
+    const result = await tryStartSam3InstancePool(
+      SAM3_INSTANCE_IDS,
+      async (instanceId) => {
+        console.log(`[AWS-SAM3] Trying pool instance ${instanceId}`);
+        await this.ec2Client!.send(
+          new StartInstancesCommand({
+            InstanceIds: [instanceId],
+          })
+        );
+      },
+      activeIndex,
+      (instanceId, error) => {
+        const errorName = error instanceof Error ? error.name : 'transient AWS error';
+        console.warn(`[AWS-SAM3] Pool instance ${instanceId} deferred by ${errorName}; trying the next candidate`);
+      }
+    );
+
+    if (result.instanceId) {
+      this.setActiveInstance(result.instanceId);
+      return;
+    }
+
+    throw result.lastError || new Error('No SAM3 instance in the configured pool could be started');
+  }
+
   private async retryStartInstance(initialError: unknown): Promise<boolean> {
     const startedAt = Date.now();
     let lastError = initialError;
@@ -502,12 +600,8 @@ class AWSSAM3Service {
       );
 
       try {
-        console.log('[AWS-SAM3] Retrying EC2 instance start...');
-        await this.ec2Client!.send(
-          new StartInstancesCommand({
-            InstanceIds: [SAM3_INSTANCE_ID!],
-          })
-        );
+        console.log('[AWS-SAM3] Retrying EC2 instance pool start...');
+        await this.requestStartFromPool();
 
         const remainingForReadiness = STARTUP_TIMEOUT_MS - (Date.now() - startedAt);
         if (remainingForReadiness <= 0) break;
@@ -521,7 +615,7 @@ class AWSSAM3Service {
 
         lastError = error;
         const errorName = error instanceof Error ? error.name : 'transient AWS error';
-        console.warn(`[AWS-SAM3] EC2 start still deferred by ${errorName}; will retry`);
+        console.warn(`[AWS-SAM3] Instance pool start still deferred by ${errorName}; will retry`);
       }
     }
 
@@ -581,14 +675,14 @@ class AWSSAM3Service {
    * Stop the EC2 instance
    */
   async stopInstance(): Promise<void> {
-    if (!SAM3_INSTANCE_ID || !this.ec2Client) return;
+    if (!this.activeInstanceId || !this.ec2Client) return;
 
     try {
       console.log('[AWS-SAM3] Stopping EC2 instance...');
       this.instanceState = 'stopping';
 
       const command = new StopInstancesCommand({
-        InstanceIds: [SAM3_INSTANCE_ID],
+        InstanceIds: [this.activeInstanceId],
       });
       await this.ec2Client.send(command);
 
@@ -1679,7 +1773,14 @@ class AWSSAM3Service {
    * Get the instance ID for logging
    */
   getInstanceId(): string | undefined {
-    return SAM3_INSTANCE_ID;
+    return this.activeInstanceId || undefined;
+  }
+
+  /**
+   * Get all configured pool members in priority order.
+   */
+  getInstanceIds(): string[] {
+    return [...SAM3_INSTANCE_IDS];
   }
 
   /**
