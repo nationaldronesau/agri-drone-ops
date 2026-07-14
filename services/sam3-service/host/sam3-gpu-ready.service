@@ -1,0 +1,17 @@
+[Unit]
+Description=Wait for NVIDIA and restore the SAM3 GPU container
+After=network-online.target docker.service nvidia_gpu_settings_service.service
+Wants=network-online.target nvidia_gpu_settings_service.service
+Requires=docker.service
+Before=sam3-concept.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/sam3-gpu-ready
+RemainAfterExit=yes
+TimeoutStartSec=660
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
