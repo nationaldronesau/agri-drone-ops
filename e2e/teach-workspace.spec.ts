@@ -36,6 +36,52 @@ async function mockTeachProject(page: import("@playwright/test").Page) {
 }
 
 test.describe("Guided Teach AI workspace", () => {
+  test("defaults to the first project that contains images", async ({ page }) => {
+    const emptyProjectId = "cproject00000000000000000001";
+    await page.route("**/api/projects?**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          projects: [
+            { id: emptyProjectId, name: "Empty New Project", _count: { assets: 0 } },
+            { id: projectId, name: "Project With Images", _count: { assets: assetIds.length } },
+          ],
+        }),
+      });
+    });
+    await page.route("**/api/assets?**", async (route) => {
+      const requestedProjectId = new URL(route.request().url()).searchParams.get("projectId");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          assets: requestedProjectId === projectId
+            ? assetIds.map((id, index) => ({
+                id,
+                fileName: `Default_${index + 1}.jpg`,
+                storageUrl: "/demo/lantana-batch-aerial.jpg",
+                imageWidth: 1536,
+                imageHeight: 1024,
+              }))
+            : [],
+        }),
+      });
+    });
+    await page.route("**/api/assets/*/signed-url", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ url: "/demo/lantana-batch-aerial.jpg", storageType: "local" }),
+      });
+    });
+
+    await page.goto("/teach");
+
+    await expect(page.getByRole("combobox", { name: "Project" })).toHaveValue(projectId);
+    await expect(page.getByText("Batch images (4)")).toBeVisible();
+  });
+
   test("marks examples and queues a review-gated demo search", async ({ page }) => {
     await page.goto("/teach?demo=1");
 
