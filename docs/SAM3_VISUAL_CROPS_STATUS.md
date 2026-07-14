@@ -14,6 +14,8 @@
 ## Key Environment Variables
 - `SAM3_CONCEPT_API_URL` or `SAM3_CONCEPT_URL` (optional, full base URL to port 8002)
 - `SAM3_CONCEPT_PORT` (default `8002`)
+- `SAM3_CONCEPT_WARMUP_TIMEOUT_MS` (default `900000`; cold model load only)
+- `SAM3_CONCEPT_REQUEST_TIMEOUT_MS` (default `180000`; exemplar create/apply requests)
 - `SAM3_SERVICE_URL` or `SAM3_API_URL` (used to derive concept URL when not explicitly set)
 - `SAM3_CONCEPT_API_KEY` or `SAM3_API_KEY` (used as `X-API-Key`)
 - `SAM3_EC2_INSTANCE_ID`, `SAM3_EC2_REGION`, `SAM3_EC2_PORT` (AWS instance config)
