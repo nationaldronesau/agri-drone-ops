@@ -42,7 +42,37 @@ export function resolveSam3StartupTimeoutMs(value = process.env.SAM3_STARTUP_TIM
 
 const STARTUP_TIMEOUT_MS = resolveSam3StartupTimeoutMs();
 const HEALTH_CHECK_INTERVAL_MS = 5000; // Check every 5 seconds during startup
+const EC2_START_RETRY_INTERVAL_MS = 15000;
 const CONCEPT_REQUEST_TIMEOUT_MS = 180000;
+
+const RETRYABLE_EC2_START_ERRORS = new Set([
+  'EC2ThrottledException',
+  'InsufficientInstanceCapacity',
+  'InternalError',
+  'InternalFailure',
+  'RequestLimitExceeded',
+  'ServiceUnavailable',
+  'Throttling',
+  'ThrottlingException',
+]);
+
+export function isRetryableSam3StartError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+
+  const candidate = error as {
+    name?: unknown;
+    Code?: unknown;
+    code?: unknown;
+    $metadata?: { httpStatusCode?: unknown };
+  };
+  const errorName = [candidate.name, candidate.Code, candidate.code].find(
+    (value): value is string => typeof value === 'string'
+  );
+  if (errorName && RETRYABLE_EC2_START_ERRORS.has(errorName)) return true;
+
+  const statusCode = candidate.$metadata?.httpStatusCode;
+  return typeof statusCode === 'number' && statusCode >= 500;
+}
 
 // Fun loading messages for the UI
 export const FUN_LOADING_MESSAGES = [
@@ -429,6 +459,18 @@ class AWSSAM3Service {
         state: this.instanceState,
       };
     } catch (error) {
+      if (isRetryableSam3StartError(error)) {
+        const errorName = error instanceof Error ? error.name : 'transient AWS error';
+        console.warn(`[AWS-SAM3] EC2 start deferred by ${errorName}; retrying within the startup window`);
+        this.instanceState = 'starting';
+        this.trackStartupPromise(this.retryStartInstance(error));
+        return {
+          accepted: true,
+          ready: false,
+          state: this.instanceState,
+        };
+      }
+
       console.error('[AWS-SAM3] Failed to request instance start:', error);
       this.instanceState = 'error';
       return {
@@ -449,13 +491,52 @@ class AWSSAM3Service {
     this.startupPromise = trackedPromise;
   }
 
+  private async retryStartInstance(initialError: unknown): Promise<boolean> {
+    const startedAt = Date.now();
+    let lastError = initialError;
+
+    while (Date.now() - startedAt < STARTUP_TIMEOUT_MS) {
+      const remainingBeforeRetry = STARTUP_TIMEOUT_MS - (Date.now() - startedAt);
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(EC2_START_RETRY_INTERVAL_MS, remainingBeforeRetry))
+      );
+
+      try {
+        console.log('[AWS-SAM3] Retrying EC2 instance start...');
+        await this.ec2Client!.send(
+          new StartInstancesCommand({
+            InstanceIds: [SAM3_INSTANCE_ID!],
+          })
+        );
+
+        const remainingForReadiness = STARTUP_TIMEOUT_MS - (Date.now() - startedAt);
+        if (remainingForReadiness <= 0) break;
+        return await this.waitForReady(remainingForReadiness);
+      } catch (error) {
+        if (!isRetryableSam3StartError(error)) {
+          console.error('[AWS-SAM3] EC2 start retry failed permanently:', error);
+          this.instanceState = 'error';
+          return false;
+        }
+
+        lastError = error;
+        const errorName = error instanceof Error ? error.name : 'transient AWS error';
+        console.warn(`[AWS-SAM3] EC2 start still deferred by ${errorName}; will retry`);
+      }
+    }
+
+    console.error('[AWS-SAM3] Timeout retrying EC2 instance start:', lastError);
+    this.instanceState = 'error';
+    return false;
+  }
+
   /**
    * Wait for the instance to be running and the model to be ready
    */
-  private async waitForReady(): Promise<boolean> {
+  private async waitForReady(timeoutMs = STARTUP_TIMEOUT_MS): Promise<boolean> {
     const startTime = Date.now();
 
-    while (Date.now() - startTime < STARTUP_TIMEOUT_MS) {
+    while (Date.now() - startTime < timeoutMs) {
       await new Promise((resolve) => setTimeout(resolve, HEALTH_CHECK_INTERVAL_MS));
 
       // Discover IP
