@@ -11,6 +11,7 @@ import { fetchImageSafely, isUrlAllowed } from '@/lib/utils/security';
 import { rescaleToOriginalWithMeta } from '@/lib/utils/georeferencing';
 import { buildTrainingAugmentationFromInput } from '@/lib/services/training-augmentation';
 import { resolveReviewSessionAssetIds } from '@/lib/services/review-session-assets';
+import { resolveTrainingReadyAssetIds } from '@/lib/services/review-training-readiness';
 import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
 import type { AnnotationBox } from '@/types/roboflow';
 
@@ -133,8 +134,26 @@ export async function POST(
     if (assetIds.length === 0) {
       return NextResponse.json({ error: 'No assets available for this session' }, { status: 400 });
     }
+    const trainingAssetIds = await resolveTrainingReadyAssetIds(prisma, session, assetIds);
 
-    const results: Record<string, unknown> = {};
+    if (trainingAssetIds.length === 0) {
+      return NextResponse.json(
+        {
+          error:
+            session.workflowType === 'batch_review'
+              ? 'Review every SAM3 suggestion on at least one image before training. Images with pending suggestions are excluded.'
+              : 'No reviewed assets are available for training.',
+        },
+        { status: 400 }
+      );
+    }
+
+    const results: Record<string, unknown> = {
+      trainingScope: {
+        eligibleAssetCount: trainingAssetIds.length,
+        excludedIncompleteAssetCount: assetIds.length - trainingAssetIds.length,
+      },
+    };
 
     if (target === 'roboflow' || target === 'both') {
       const projectId = roboflowProjectId || session.roboflowProjectId || undefined;
@@ -149,7 +168,7 @@ export async function POST(
         where: {
           verified: true,
           session: {
-            assetId: { in: assetIds },
+            assetId: { in: trainingAssetIds },
           },
         },
         select: { id: true },
@@ -165,7 +184,7 @@ export async function POST(
 
       const detections = await prisma.detection.findMany({
         where: {
-          assetId: { in: assetIds },
+          assetId: { in: trainingAssetIds },
           rejected: false,
           OR: [{ verified: true }, { userCorrected: true }],
         },
@@ -279,7 +298,7 @@ export async function POST(
 
       const dataset = await datasetPreparation.prepareDataset(session.teamId, yoloConfig.datasetName, {
         projectId: session.projectId,
-        assetIds,
+        assetIds: trainingAssetIds,
         classes: dedupedClasses,
         classMapping: yoloConfig.classMapping,
         splitRatio: yoloConfig.splitRatio || { train: 0.7, val: 0.2, test: 0.1 },

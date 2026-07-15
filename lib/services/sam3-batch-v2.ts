@@ -20,6 +20,7 @@ import {
   type Sam3BatchJobKind,
 } from '@/lib/utils/sam3-batch-jobs';
 import { scaleExemplarBoxes, type BoxCoordinate } from '@/lib/utils/exemplar-scaling';
+import { filterSam3ReviewDetections } from '@/lib/utils/sam3-review-quality';
 import { fetchImageSafely } from '@/lib/utils/security';
 
 const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
@@ -100,6 +101,22 @@ export const SAM3_BATCH_V2_SOURCE_DETECTION_MIN_ANCHOR_OVERLAP = Math.max(
     1,
     parseOptionalNumber(process.env.SAM3_SOURCE_DETECTION_MIN_ANCHOR_OVERLAP) ?? 0.2
   )
+);
+export const SAM3_BATCH_V2_FINAL_NMS_THRESHOLD = Math.max(
+  0,
+  Math.min(1, parseOptionalNumber(process.env.SAM3_REVIEW_FINAL_NMS_IOU) ?? 0.35)
+);
+export const SAM3_BATCH_V2_FINAL_CONTAINMENT_THRESHOLD = Math.max(
+  0,
+  Math.min(1, parseOptionalNumber(process.env.SAM3_REVIEW_CONTAINMENT_THRESHOLD) ?? 0.82)
+);
+export const SAM3_BATCH_V2_MAX_EXEMPLAR_DIMENSION_RATIO = Math.max(
+  1,
+  parseOptionalNumber(process.env.SAM3_REVIEW_MAX_DIMENSION_RATIO) ?? 2.5
+);
+export const SAM3_BATCH_V2_MAX_EXEMPLAR_AREA_RATIO = Math.max(
+  1,
+  parseOptionalNumber(process.env.SAM3_REVIEW_MAX_AREA_RATIO) ?? 5
 );
 export function resolveBatchV2ReviewProfileForMode(
   mode: Sam3BatchV2Mode
@@ -247,6 +264,10 @@ export interface Sam3BatchV2StageLogEntry {
   conceptExemplarCount?: number;
   refinementBoxCount?: number;
   refinementDetectionCount?: number;
+  qualityInputCount?: number;
+  duplicateSuppressedCount?: number;
+  geometryFilteredCount?: number;
+  qualityOutputCount?: number;
   durationMs?: number;
   gpuMemoryMb?: number;
   estimatedMemoryMb?: number;
@@ -413,6 +434,8 @@ interface PreparedBatchContext {
   textPrompt: string;
   sourceAssetId: string;
   sourceImageBuffer: Buffer;
+  sourceImageWidth?: number;
+  sourceImageHeight?: number;
   exemplars: BoxCoordinate[];
   exemplarSourceWidth?: number;
   exemplarSourceHeight?: number;
@@ -441,6 +464,10 @@ interface AssetInferenceResult {
   candidateCount?: number;
   refinementBoxCount?: number;
   refinementDetectionCount?: number;
+  qualityInputCount?: number;
+  duplicateSuppressedCount?: number;
+  geometryFilteredCount?: number;
+  qualityOutputCount?: number;
 }
 
 interface ConceptRefinementResult {
@@ -1193,6 +1220,8 @@ export class Sam3BatchV2Service {
       textPrompt: data.textPrompt?.trim().substring(0, 100) || data.weedType,
       sourceAssetId,
       sourceImageBuffer,
+      sourceImageWidth: sourceAsset.imageWidth ?? data.exemplarSourceWidth,
+      sourceImageHeight: sourceAsset.imageHeight ?? data.exemplarSourceHeight,
       exemplars: data.exemplars,
       exemplarSourceWidth: data.exemplarSourceWidth,
       exemplarSourceHeight: data.exemplarSourceHeight,
@@ -1513,7 +1542,13 @@ export class Sam3BatchV2Service {
         if (prepared.mode === 'visual_crop_match') {
           result = await this.runVisualCropMatch(asset, imageBuffer, prepared);
         } else {
-          result = await this.runConceptPropagation(asset, imageBuffer, conceptExemplars, prepared.weedType);
+          result = await this.runConceptPropagation(
+            asset,
+            imageBuffer,
+            conceptExemplars,
+            prepared.weedType,
+            prepared
+          );
         }
 
         await this.appendStageLog(batchJobId, stageLog, {
@@ -1541,6 +1576,10 @@ export class Sam3BatchV2Service {
             prepared.mode === 'concept_propagation' ? conceptExemplars.length : undefined,
           refinementBoxCount: result.refinementBoxCount,
           refinementDetectionCount: result.refinementDetectionCount,
+          qualityInputCount: result.qualityInputCount,
+          duplicateSuppressedCount: result.duplicateSuppressedCount,
+          geometryFilteredCount: result.geometryFilteredCount,
+          qualityOutputCount: result.qualityOutputCount,
           durationMs: this.now().getTime() - runStartedAt,
         });
       } catch (error) {
@@ -1808,7 +1847,8 @@ export class Sam3BatchV2Service {
     asset: AssetRecord,
     imageBuffer: Buffer,
     conceptExemplars: string | ConceptExemplarRef[] | null,
-    weedType: string
+    weedType: string,
+    qualityContext?: PreparedBatchContext
   ): Promise<AssetInferenceResult> {
     const exemplarRefs = normalizeConceptExemplarRefs(conceptExemplars);
     if (exemplarRefs.length === 0) {
@@ -1839,19 +1879,45 @@ export class Sam3BatchV2Service {
       weedType,
       candidateResult.detections
     );
+    const quality = filterSam3ReviewDetections({
+      detections: refinement.detections,
+      exemplars: qualityContext?.exemplars ?? [],
+      sourceWidth: qualityContext?.exemplarSourceWidth ?? qualityContext?.sourceImageWidth,
+      sourceHeight: qualityContext?.exemplarSourceHeight ?? qualityContext?.sourceImageHeight,
+      targetWidth: asset.imageWidth,
+      targetHeight: asset.imageHeight,
+      dedupeIouThreshold: SAM3_BATCH_V2_FINAL_NMS_THRESHOLD,
+      containmentThreshold: SAM3_BATCH_V2_FINAL_CONTAINMENT_THRESHOLD,
+      maxDimensionRatio: SAM3_BATCH_V2_MAX_EXEMPLAR_DIMENSION_RATIO,
+      maxAreaRatio: SAM3_BATCH_V2_MAX_EXEMPLAR_AREA_RATIO,
+    });
+    const qualityWarning = [
+      quality.stats.duplicateSuppressedCount > 0
+        ? `${quality.stats.duplicateSuppressedCount} duplicate refined detection(s) suppressed.`
+        : null,
+      quality.stats.geometryFilteredCount > 0
+        ? `${quality.stats.geometryFilteredCount} implausibly large or invalid refined detection(s) suppressed.`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(' ');
 
     return {
       assetId: asset.id,
-      detections: refinement.detections,
-      outcome: refinement.detections.length > 0 ? 'success' : 'zero_detections',
+      detections: quality.detections,
+      outcome: quality.detections.length > 0 ? 'success' : 'zero_detections',
       backendMode: refinement.usedCandidateFallback
         ? 'concept_ensemble_candidates_unrefined'
         : 'concept_ensemble_refined',
-      backendWarning: refinement.backendWarning,
+      backendWarning: [refinement.backendWarning, qualityWarning].filter(Boolean).join(' ') || undefined,
       candidateExpansionUsed: candidateResult.candidateExpansionUsed,
       candidateCount: refinement.candidateCount,
       refinementBoxCount: refinement.refinementBoxCount,
       refinementDetectionCount: refinement.refinementDetectionCount,
+      qualityInputCount: quality.stats.inputCount,
+      duplicateSuppressedCount: quality.stats.duplicateSuppressedCount,
+      geometryFilteredCount: quality.stats.geometryFilteredCount,
+      qualityOutputCount: quality.stats.outputCount,
     };
   }
 

@@ -6,6 +6,11 @@ import { normalizeDetectionType } from '@/lib/utils/detection-types';
 type ReviewAction = 'accept' | 'reject';
 type ReviewSource = 'manual' | 'pending' | 'detection';
 
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry) => typeof entry === 'string') as string[];
+}
+
 function confidenceToEnum(confidence: number): 'CERTAIN' | 'LIKELY' | 'UNCERTAIN' {
   if (confidence >= 0.8) return 'CERTAIN';
   if (confidence >= 0.5) return 'LIKELY';
@@ -84,6 +89,34 @@ export async function POST(
 
     if (!membership) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+    }
+
+    if (session.workflowType === 'batch_review' && action === 'accept') {
+      const batchJobIds = toStringArray(session.batchJobIds);
+      const pendingItemIds = items
+        .filter((item) => item.source === 'pending')
+        .map((item) => item.itemId);
+      if (batchJobIds.length === 0 || pendingItemIds.length !== items.length) {
+        return NextResponse.json(
+          { error: 'SAM3 batch acceptance is limited to pending suggestions on one image.' },
+          { status: 400 }
+        );
+      }
+
+      const scopedItems = await prisma.pendingAnnotation.findMany({
+        where: {
+          id: { in: pendingItemIds },
+          batchJobId: { in: batchJobIds },
+        },
+        select: { id: true, assetId: true },
+      });
+      const scopedAssetIds = new Set(scopedItems.map((item) => item.assetId));
+      if (scopedItems.length !== pendingItemIds.length || scopedAssetIds.size !== 1) {
+        return NextResponse.json(
+          { error: 'SAM3 batch acceptance cannot span multiple images or jobs.' },
+          { status: 400 }
+        );
+      }
     }
 
     const now = new Date();
