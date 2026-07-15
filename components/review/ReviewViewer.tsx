@@ -75,9 +75,16 @@ interface ReviewViewerProps {
   assets?: ReviewItemAsset[];
   onAction: (item: ReviewItem, action: 'accept' | 'reject' | 'correct' | 'restore', correctedClass?: string) => Promise<void>;
   onEdit: (item: ReviewItem) => void;
+  onCurrentAssetChange?: (assetId: string | null) => void;
 }
 
-export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewViewerProps) {
+export function ReviewViewer({
+  items,
+  assets = [],
+  onAction,
+  onEdit,
+  onCurrentAssetChange,
+}: ReviewViewerProps) {
   const groupedAssets = useMemo(() => {
     const map = new Map<string, { asset: ReviewItemAsset; items: ReviewItem[] }>();
     for (const asset of assets) {
@@ -108,6 +115,10 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
 
   const currentGroup = groupedAssets[currentIndex];
   const currentItems = currentGroup?.items || [];
+
+  useEffect(() => {
+    onCurrentAssetChange?.(currentGroup?.asset.id ?? null);
+  }, [currentGroup?.asset.id, onCurrentAssetChange]);
 
   useEffect(() => {
     setZoomLevel(1);

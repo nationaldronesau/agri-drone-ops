@@ -90,6 +90,7 @@ function ReviewPageContent() {
   const [exportLoading, setExportLoading] = useState(false);
   const [exportDefaultsInitialized, setExportDefaultsInitialized] = useState(false);
   const [summary, setSummary] = useState<ReviewSummary | null>(null);
+  const [currentReviewAssetId, setCurrentReviewAssetId] = useState<string | null>(null);
 
   const [showYoloModal, setShowYoloModal] = useState(false);
   const [pushMessage, setPushMessage] = useState<string | null>(null);
@@ -189,8 +190,14 @@ function ReviewPageContent() {
     : null;
 
   const bulkCandidates = useMemo(
-    () => filteredItems.filter((item) => item.status === 'pending'),
-    [filteredItems]
+    () =>
+      filteredItems.filter(
+        (item) =>
+          item.status === 'pending' &&
+          (session?.workflowType !== 'batch_review' ||
+            (item.source === 'pending' && item.assetId === currentReviewAssetId))
+      ),
+    [currentReviewAssetId, filteredItems, session?.workflowType]
   );
 
   const pendingItems = useMemo(
@@ -218,16 +225,44 @@ function ReviewPageContent() {
     (preset) => preset.value === minConfidence
   );
 
+  const trainingReadyAssetIds = useMemo(() => {
+    if (session?.workflowType !== 'batch_review') {
+      return new Set(items.filter((item) => item.status === 'accepted').map((item) => item.assetId));
+    }
+
+    const assetReviewState = new Map<string, { hasPending: boolean; hasAccepted: boolean }>();
+    for (const item of items) {
+      const state = assetReviewState.get(item.assetId) || { hasPending: false, hasAccepted: false };
+      if (item.status === 'pending') state.hasPending = true;
+      if (item.status === 'accepted') state.hasAccepted = true;
+      assetReviewState.set(item.assetId, state);
+    }
+
+    return new Set(
+      Array.from(assetReviewState.entries())
+        .filter(([, state]) => !state.hasPending && state.hasAccepted)
+        .map(([assetId]) => assetId)
+    );
+  }, [items, session?.workflowType]);
+
+  const trainingReadyAcceptedCount = useMemo(
+    () =>
+      items.filter(
+        (item) => item.status === 'accepted' && trainingReadyAssetIds.has(item.assetId)
+      ).length,
+    [items, trainingReadyAssetIds]
+  );
+
   const availableClasses = useMemo(() => {
     const counts = new Map<string, number>();
     for (const item of items) {
-      if (item.status !== 'accepted') continue;
+      if (item.status !== 'accepted' || !trainingReadyAssetIds.has(item.assetId)) continue;
       counts.set(item.className, (counts.get(item.className) || 0) + 1);
     }
     return Array.from(counts.entries())
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-  }, [items]);
+  }, [items, trainingReadyAssetIds]);
 
   const visibleGeoWarningCount = useMemo(
     () => filteredItems.filter((item) => item.status === 'accepted' && !item.hasGeoData).length,
@@ -345,7 +380,8 @@ function ReviewPageContent() {
 
   const handleBulkAccept = useCallback(async () => {
     if (!sessionId || bulkCandidates.length === 0) return;
-    if (!window.confirm(`Accept ${bulkCandidates.length} visible pending predictions?`)) return;
+    const scope = session?.workflowType === 'batch_review' ? 'on this image' : 'in this view';
+    if (!window.confirm(`Accept ${bulkCandidates.length} visible pending predictions ${scope}?`)) return;
     setActionLoading(true);
     setActionError(null);
     try {
@@ -373,7 +409,7 @@ function ReviewPageContent() {
     } finally {
       setActionLoading(false);
     }
-  }, [bulkCandidates, loadItems, loadSession, sessionId]);
+  }, [bulkCandidates, loadItems, loadSession, session?.workflowType, sessionId]);
 
   const handleExport = useCallback(async () => {
     if (!sessionId || exportLoading) return;
@@ -502,7 +538,11 @@ function ReviewPageContent() {
               <Button
                 variant="outline"
                 onClick={() => handlePush('roboflow')}
-                disabled={pushLoading || !session?.roboflowProjectId}
+                disabled={
+                  pushLoading ||
+                  !session?.roboflowProjectId ||
+                  (session?.workflowType === 'batch_review' && availableClasses.length === 0)
+                }
               >
                 Push to Roboflow
               </Button>
@@ -710,8 +750,15 @@ function ReviewPageContent() {
                 onClick={handleBulkAccept}
                 disabled={actionLoading || bulkCandidates.length === 0}
               >
-                Accept visible pending ({bulkCandidates.length})
+                {session?.workflowType === 'batch_review'
+                  ? `Accept pending on this image (${bulkCandidates.length})`
+                  : `Accept visible pending (${bulkCandidates.length})`}
               </Button>
+              {session?.workflowType === 'batch_review' && (
+                <span className="max-w-sm rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs text-sky-800">
+                  This shortcut is limited to the current image. Images with pending suggestions stay out of training.
+                </span>
+              )}
               {minConfidence <= 72 && (
                 <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
                   High recall mode: expect more false positives to reject.
@@ -772,7 +819,13 @@ function ReviewPageContent() {
           </div>
         )}
 
-        <ReviewViewer assets={assets} items={filteredItems} onAction={handleAction} onEdit={handleEdit} />
+        <ReviewViewer
+          assets={assets}
+          items={filteredItems}
+          onAction={handleAction}
+          onEdit={handleEdit}
+          onCurrentAssetChange={setCurrentReviewAssetId}
+        />
 
         {/* Next Steps Card - shown when there are accepted items */}
         {(summary?.acceptedCount ?? 0) > 0 && (
@@ -785,7 +838,10 @@ function ReviewPageContent() {
                     Ready for next steps
                   </div>
                   <p className="text-xs text-gray-600 mt-1">
-                    {summary?.acceptedCount ?? 0} accepted annotations can be exported or used for training.
+                    {summary?.acceptedCount ?? 0} accepted annotations are available for approved export.{' '}
+                    {session?.workflowType === 'batch_review'
+                      ? `${trainingReadyAcceptedCount} accepted annotations across ${trainingReadyAssetIds.size} fully reviewed image${trainingReadyAssetIds.size === 1 ? '' : 's'} are eligible for training.`
+                      : `${trainingReadyAcceptedCount} accepted annotations are eligible for training.`}
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
