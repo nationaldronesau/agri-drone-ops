@@ -37,7 +37,7 @@ export interface Sam3ReviewQualityResult {
   stats: Sam3ReviewQualityStats;
 }
 
-const DEFAULT_DEDUPE_IOU_THRESHOLD = 0.35;
+const DEFAULT_DEDUPE_IOU_THRESHOLD = 0.5;
 const DEFAULT_CONTAINMENT_THRESHOLD = 0.82;
 const DEFAULT_MAX_DIMENSION_RATIO = 2.5;
 const DEFAULT_MAX_AREA_RATIO = 5;

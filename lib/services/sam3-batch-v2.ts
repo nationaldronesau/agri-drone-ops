@@ -104,7 +104,7 @@ export const SAM3_BATCH_V2_SOURCE_DETECTION_MIN_ANCHOR_OVERLAP = Math.max(
 );
 export const SAM3_BATCH_V2_FINAL_NMS_THRESHOLD = Math.max(
   0,
-  Math.min(1, parseOptionalNumber(process.env.SAM3_REVIEW_FINAL_NMS_IOU) ?? 0.35)
+  Math.min(1, parseOptionalNumber(process.env.SAM3_REVIEW_FINAL_NMS_IOU) ?? 0.5)
 );
 export const SAM3_BATCH_V2_FINAL_CONTAINMENT_THRESHOLD = Math.max(
   0,

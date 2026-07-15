@@ -37,6 +37,22 @@ describe('SAM3 review quality guardrails', () => {
     });
   });
 
+  it('keeps nearby same-sized objects when overlap is below the final NMS threshold', () => {
+    const first: [number, number, number, number] = [100, 100, 140, 140];
+    const nearby: [number, number, number, number] = [117, 100, 157, 140];
+    const result = filterSam3ReviewDetections({
+      detections: [first, nearby].map((bbox, index) => ({
+        bbox,
+        polygon: polygonFor(bbox),
+        confidence: [0.91, 0.89][index],
+      })),
+      exemplars: [{ x1: 10, y1: 10, x2: 50, y2: 50 }],
+    });
+
+    expect(result.detections.map((detection) => detection.bbox)).toEqual([first, nearby]);
+    expect(result.stats.duplicateSuppressedCount).toBe(0);
+  });
+
   it('drops implausibly large boxes while preserving similarly scaled saplings', () => {
     const valid: [number, number, number, number] = [500, 400, 545, 445];
     const adjacent: [number, number, number, number] = [580, 405, 620, 448];

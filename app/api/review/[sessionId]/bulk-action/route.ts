@@ -107,6 +107,7 @@ export async function POST(
         where: {
           id: { in: pendingItemIds },
           batchJobId: { in: batchJobIds },
+          status: 'PENDING',
         },
         select: { id: true, assetId: true },
       });
