@@ -9,6 +9,7 @@ import {
   getBatchV2MaxTargetCandidates,
   getBatchV2MinTargetCandidates,
   getGpuAdmissionCropCount,
+  resolveBatchV2VegetationPrior,
   resolveBatchV2ReviewProfileForMode,
   Sam3BatchV2Service,
 } from '@/lib/services/sam3-batch-v2';
@@ -27,6 +28,29 @@ describe('sam3-batch-v2', () => {
     ] as [number, number][],
     class_name: 'pine sapling',
   });
+  const makeVegetationImage = async (
+    width: number,
+    height: number,
+    greenRectangles: Array<{ left: number; top: number; width: number; height: number }>
+  ) => {
+    const pixels = Buffer.alloc(width * height * 3);
+    for (let index = 0; index < width * height; index += 1) {
+      pixels[index * 3] = 140;
+      pixels[index * 3 + 1] = 90;
+      pixels[index * 3 + 2] = 40;
+    }
+    for (const rectangle of greenRectangles) {
+      for (let y = rectangle.top; y < rectangle.top + rectangle.height; y += 1) {
+        for (let x = rectangle.left; x < rectangle.left + rectangle.width; x += 1) {
+          const offset = (y * width + x) * 3;
+          pixels[offset] = 20;
+          pixels[offset + 1] = 180;
+          pixels[offset + 2] = 20;
+        }
+      }
+    }
+    return sharp(pixels, { raw: { width, height, channels: 3 } }).png().toBuffer();
+  };
 
   beforeEach(() => {
     global.fetch = vi.fn().mockImplementation(async () =>
@@ -160,6 +184,326 @@ describe('sam3-batch-v2', () => {
     });
     expect(getBatchV2MinTargetCandidates(profile)).toBe(50);
     expect(getBatchV2MaxTargetCandidates(profile)).toBe(180);
+  });
+
+  it('defaults the vegetation prior on and honors both rollback switches', () => {
+    expect(resolveBatchV2VegetationPrior(undefined, undefined)).toBe(true);
+    expect(resolveBatchV2VegetationPrior(false, undefined)).toBe(false);
+    expect(resolveBatchV2VegetationPrior(true, 'false')).toBe(false);
+  });
+
+  it('gates dirt candidates, recentres a green candidate, and post-gates a dirt mask', async () => {
+    const image = await makeVegetationImage(120, 80, [
+      { left: 16, top: 0, width: 24, height: 40 },
+    ]);
+    const segment = vi.fn().mockResolvedValue({
+      success: true,
+      response: {
+        detections: [
+          {
+            bbox: [8, 0, 48, 40],
+            confidence: 0.95,
+            polygon: [[8, 0], [15, 0], [15, 40], [8, 40]],
+          },
+          {
+            bbox: [8, 0, 48, 40],
+            confidence: 0.91,
+            polygon: [[16, 0], [40, 0], [40, 40], [16, 40]],
+          },
+        ],
+        count: 2,
+      },
+    });
+    const service = new Sam3BatchV2Service({
+      prisma: {} as never,
+      awsSam3Service: {
+        refreshStatus: vi.fn().mockResolvedValue({
+          modelLoaded: true,
+          instanceState: 'ready',
+          ipAddress: '127.0.0.1',
+        }),
+        isReady: vi.fn().mockReturnValue(true),
+        resizeImage: vi.fn().mockImplementation(async (buffer: Buffer) => ({
+          buffer,
+          scaling: { scaleFactor: 1 },
+        })),
+        segment,
+      } as any,
+      acquireGpuLock: vi.fn(),
+      refreshGpuLock: vi.fn(),
+      releaseGpuLock: vi.fn(),
+      sleep: vi.fn(),
+      now: () => new Date('2026-07-16T00:00:00.000Z'),
+    });
+
+    const result = await (service as any).refineConceptDetectionsWithBoxPrompts(
+      {
+        id: 'asset-vegetation',
+        imageWidth: 120,
+        imageHeight: 80,
+      },
+      image,
+      'Pine Sapling',
+      [
+        {
+          bbox: [0, 0, 40, 40],
+          confidence: 0.88,
+          similarity: 0.88,
+          class_name: 'pine sapling',
+        },
+        {
+          bbox: [70, 0, 110, 40],
+          confidence: 0.86,
+          similarity: 0.86,
+          class_name: 'pine sapling',
+        },
+      ],
+      { enabled: true, exemplarGreenMedian: 0.8 }
+    );
+
+    expect(segment).toHaveBeenCalledWith(expect.objectContaining({
+      boxes: [{ x1: 8, y1: 0, x2: 48, y2: 40 }],
+      className: 'Pine Sapling',
+    }));
+    expect(result).toMatchObject({
+      candidateCount: 2,
+      refinementBoxCount: 1,
+      refinementDetectionCount: 2,
+      vegetationThreshold: 0.4,
+      vegetationGatedCandidates: 1,
+      vegetationRecenteredCandidates: 1,
+      vegetationGatedMasks: 1,
+      vegetationDeduplicatedMasks: 0,
+      maskGreenFractionMedian: 1,
+    });
+    expect(result.detections).toHaveLength(1);
+    expect(result.detections[0].polygon).toEqual([[16, 0], [40, 0], [40, 40], [16, 40]]);
+  });
+
+  it('deduplicates overlapping green masks and keeps the higher-confidence detection', async () => {
+    const image = await makeVegetationImage(80, 80, [
+      { left: 0, top: 0, width: 80, height: 80 },
+    ]);
+    const segment = vi.fn().mockResolvedValue({
+      success: true,
+      response: {
+        detections: [
+          {
+            bbox: [10, 10, 50, 50],
+            confidence: 0.95,
+            polygon: [[10, 10], [50, 10], [50, 50], [10, 50]],
+          },
+          {
+            bbox: [20, 10, 60, 50],
+            confidence: 0.95,
+            polygon: [[15, 10], [55, 10], [55, 50], [15, 50]],
+          },
+        ],
+        count: 2,
+      },
+    });
+    const service = new Sam3BatchV2Service({
+      prisma: {} as never,
+      awsSam3Service: {
+        refreshStatus: vi.fn().mockResolvedValue({
+          modelLoaded: true,
+          instanceState: 'ready',
+          ipAddress: '127.0.0.1',
+        }),
+        isReady: vi.fn().mockReturnValue(true),
+        resizeImage: vi.fn().mockImplementation(async (buffer: Buffer) => ({
+          buffer,
+          scaling: { scaleFactor: 1 },
+        })),
+        segment,
+      } as any,
+      acquireGpuLock: vi.fn(),
+      refreshGpuLock: vi.fn(),
+      releaseGpuLock: vi.fn(),
+      sleep: vi.fn(),
+      now: () => new Date('2026-07-16T00:00:00.000Z'),
+    });
+
+    const result = await (service as any).refineConceptDetectionsWithBoxPrompts(
+      { id: 'asset-dedup', imageWidth: 80, imageHeight: 80 },
+      image,
+      'Pine Sapling',
+      [
+        { bbox: [10, 10, 50, 50], confidence: 0.7, similarity: 0.7, class_name: 'pine' },
+        { bbox: [20, 10, 60, 50], confidence: 0.9, similarity: 0.9, class_name: 'pine' },
+      ],
+      { enabled: true, exemplarGreenMedian: 1 }
+    );
+
+    expect(result.vegetationDeduplicatedMasks).toBe(1);
+    expect(result.detections).toHaveLength(1);
+    expect(result.detections[0]).toMatchObject({
+      confidence: 0.9,
+      similarity: 0.9,
+      bbox: [20, 10, 60, 50],
+    });
+  });
+
+  it('leaves candidates and refined masks untouched when vegetationPrior is false', async () => {
+    const segment = vi.fn().mockResolvedValue({
+      success: true,
+      response: {
+        detections: [
+          { bbox: [0, 0, 40, 40], confidence: 0.9, polygon: [[0, 0], [40, 0], [40, 40], [0, 40]] },
+          { bbox: [5, 0, 45, 40], confidence: 0.8, polygon: [[5, 0], [45, 0], [45, 40], [5, 40]] },
+        ],
+        count: 2,
+      },
+    });
+    const service = new Sam3BatchV2Service({
+      prisma: {} as never,
+      awsSam3Service: {
+        refreshStatus: vi.fn().mockResolvedValue({
+          modelLoaded: true,
+          instanceState: 'ready',
+          ipAddress: '127.0.0.1',
+        }),
+        isReady: vi.fn().mockReturnValue(true),
+        resizeImage: vi.fn().mockImplementation(async (buffer: Buffer) => ({
+          buffer,
+          scaling: { scaleFactor: 1 },
+        })),
+        segment,
+      } as any,
+      acquireGpuLock: vi.fn(),
+      refreshGpuLock: vi.fn(),
+      releaseGpuLock: vi.fn(),
+      sleep: vi.fn(),
+      now: () => new Date('2026-07-16T00:00:00.000Z'),
+    });
+    const candidates = [
+      { bbox: [0, 0, 40, 40], confidence: 0.8, similarity: 0.8, class_name: 'pine' },
+      { bbox: [5, 0, 45, 40], confidence: 0.7, similarity: 0.7, class_name: 'pine' },
+    ];
+
+    const result = await (service as any).refineConceptDetectionsWithBoxPrompts(
+      { id: 'asset-off', imageWidth: 80, imageHeight: 80 },
+      Buffer.from('not-an-image'),
+      'Pine Sapling',
+      candidates,
+      { enabled: false, exemplarGreenMedian: 1 }
+    );
+
+    expect(segment.mock.calls[0][0].boxes).toEqual([
+      { x1: 0, y1: 0, x2: 40, y2: 40 },
+      { x1: 5, y1: 0, x2: 45, y2: 40 },
+    ]);
+    expect(result.detections).toHaveLength(2);
+    expect(result.vegetationGatedCandidates).toBeUndefined();
+    expect(result.vegetationGatedMasks).toBeUndefined();
+    expect(result.vegetationDeduplicatedMasks).toBeUndefined();
+  });
+
+  it('persists the calibrated exemplar green median in the prepare stage log', async () => {
+    const image = await makeVegetationImage(100, 100, [
+      { left: 10, top: 10, width: 20, height: 20 },
+    ]);
+    global.fetch = vi.fn().mockResolvedValue(new Response(image, {
+      status: 200,
+      headers: {
+        'content-type': 'image/png',
+        'content-length': String(image.length),
+      },
+    })) as typeof fetch;
+    let persistedStageLog: unknown[] = [];
+    const service = new Sam3BatchV2Service({
+      prisma: {
+        batchJob: {
+          findUnique: vi.fn().mockResolvedValue({
+            parentBatchJobId: null,
+            sourceAssetId: 'asset-source',
+          }),
+          update: vi.fn().mockImplementation(async ({ data }) => {
+            if (data.stageLog) persistedStageLog = data.stageLog;
+          }),
+        },
+        asset: {
+          findMany: vi.fn().mockResolvedValue([{
+            id: 'asset-source',
+            storageUrl: 'http://localhost/source.png',
+            s3Key: null,
+            s3Bucket: null,
+            storageType: 'local',
+            imageWidth: 100,
+            imageHeight: 100,
+          }]),
+          findUnique: vi.fn(),
+        },
+      } as any,
+      awsSam3Service: {} as never,
+      acquireGpuLock: vi.fn(),
+      refreshGpuLock: vi.fn(),
+      releaseGpuLock: vi.fn(),
+      sleep: vi.fn(),
+      now: () => new Date('2026-07-16T00:00:00.000Z'),
+    });
+    const stageLog: unknown[] = [];
+
+    const prepared = await (service as any).prepareBatch(
+      {
+        batchJobId: 'batch-calibration',
+        projectId: 'project-1',
+        weedType: 'Pine Sapling',
+        mode: 'concept_propagation',
+        exemplars: [{ x1: 10, y1: 10, x2: 30, y2: 30 }],
+        exemplarSourceWidth: 100,
+        exemplarSourceHeight: 100,
+        sourceAssetId: 'asset-source',
+        assetIds: ['asset-source'],
+        vegetationPrior: true,
+      },
+      0,
+      stageLog
+    );
+
+    expect(prepared.exemplarGreenMedian).toBe(1);
+    expect(persistedStageLog).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stage: 'prepare',
+        status: 'completed',
+        vegetationPrior: true,
+        exemplarGreenMedian: 1,
+      }),
+    ]));
+  });
+
+  it('warns when a surviving asset has a low median mask green fraction', async () => {
+    const image = await makeVegetationImage(100, 100, [
+      { left: 0, top: 0, width: 20, height: 100 },
+    ]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const service = new Sam3BatchV2Service({
+      prisma: {} as never,
+      awsSam3Service: {} as never,
+      acquireGpuLock: vi.fn(),
+      refreshGpuLock: vi.fn(),
+      releaseGpuLock: vi.fn(),
+      sleep: vi.fn(),
+      now: () => new Date('2026-07-16T00:00:00.000Z'),
+    });
+
+    const result = await (service as any).applyVegetationMaskHygiene(
+      'asset-low-green',
+      image,
+      [{
+        bbox: [0, 0, 100, 100],
+        polygon: [[0, 0], [100, 0], [100, 100], [0, 100]],
+        confidence: 0.9,
+      }],
+      100,
+      100,
+      0.15
+    );
+
+    expect(result.median).toBeCloseTo(0.2, 2);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('[SAM3 V2] VEGETATION_ALARM asset=asset-low-green')
+    );
   });
 
   it('falls back to lower-confidence target candidates when strict matching returns zero', async () => {
@@ -1099,6 +1443,7 @@ describe('sam3-batch-v2', () => {
         sourceAssetId: 'asset-1',
         assetIds: ['asset-1'],
         textPrompt: 'Lantana',
+        vegetationPrior: false,
       },
       attemptsMade: 0,
       updateProgress: vi.fn().mockResolvedValue(undefined),
@@ -1356,6 +1701,7 @@ describe('sam3-batch-v2', () => {
         sourceAssetId: 'asset-source',
         assetIds: ['asset-target', 'asset-source'],
         textPrompt: 'Pine Sapling',
+        vegetationPrior: false,
       },
       attemptsMade: 0,
       updateProgress: vi.fn().mockResolvedValue(undefined),
@@ -1559,6 +1905,7 @@ describe('sam3-batch-v2', () => {
         sourceAssetId: 'asset-source',
         assetIds: ['asset-target', 'asset-source'],
         textPrompt: 'Pine Sapling',
+        vegetationPrior: false,
       },
       attemptsMade: 0,
       updateProgress: vi.fn().mockResolvedValue(undefined),
@@ -1745,6 +2092,7 @@ describe('sam3-batch-v2', () => {
         sourceAssetId: 'asset-source',
         assetIds: ['asset-target', 'asset-source'],
         textPrompt: 'Pine Sapling',
+        vegetationPrior: false,
       },
       attemptsMade: 0,
       updateProgress: vi.fn().mockResolvedValue(undefined),
