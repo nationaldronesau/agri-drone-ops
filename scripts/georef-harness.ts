@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -33,7 +34,10 @@ type HarnessRow = {
   flightSession: string;
   elevation: {
     source: 'lrf_target_alt_metadata' | 'fixed_elevation';
+    /** Elevation the projection actually used (after service fallbacks). */
     metres: number;
+    /** Elevation the harness asked the stub to serve. */
+    requestedMetres: number;
   };
   imageSize: { width: number; height: number };
   centrePixel: { x: number; y: number };
@@ -253,12 +257,16 @@ function percentile(values: number[], quantile: number): number | null {
 }
 
 function slug(value: string): string {
-  const result = value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60);
-  return result || 'unassigned';
+  const base =
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 52) || 'unassigned';
+  // Distinct raw values must never share an output path, even when they
+  // differ only by case, punctuation, or truncated characters.
+  const digest = createHash('sha1').update(value).digest('hex').slice(0, 7);
+  return `${base}-${digest}`;
 }
 
 function formatMetric(value: number | null): string {
@@ -593,7 +601,12 @@ async function main(): Promise<void> {
         flightSession: asset.flightSession?.trim() || 'unassigned',
         elevation: {
           source: lrfTargetAltitude == null ? 'fixed_elevation' : 'lrf_target_alt_metadata',
-          metres: offlineElevationM,
+          // getTerrainElevation applies `result?.elevation || 100`, so a
+          // stubbed elevation of exactly 0 reaches the projection as 100 m.
+          // Record what the projection actually used, not just what we asked
+          // for. PR 3 fixes the accessor's falsy fallback itself.
+          metres: offlineElevationM || 100,
+          requestedMetres: offlineElevationM,
         },
         imageSize: { width, height },
         centrePixel,
