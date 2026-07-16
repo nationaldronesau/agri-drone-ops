@@ -751,7 +751,7 @@ export async function GET(request: NextRequest) {
           gimbalPitch: asset.gimbalPitch,
           gimbalRoll: asset.gimbalRoll,
           gimbalYaw: asset.gimbalYaw,
-          geoMethod: 'pixelToGeoFastExport',
+          geoMethod: 'projection-core',
         });
         const computedGeo = await computeExportProjectionGeo(asset, { x: centerBox.x, y: centerBox.y });
         if (computedGeo) {
@@ -761,7 +761,7 @@ export async function GET(request: NextRequest) {
 
       if (!finalGeo) {
         const reason = centerBox
-          ? 'Georeferencing failed (fast export mode)'
+          ? 'Georeferencing failed (projection core)'
           : (validation.warnings[0] || 'Missing EXIF data');
         skippedItems.push({
           assetId: asset.id,
@@ -829,7 +829,7 @@ export async function GET(request: NextRequest) {
           gimbalPitch: asset.gimbalPitch,
           gimbalRoll: asset.gimbalRoll,
           gimbalYaw: asset.gimbalYaw,
-          geoMethod: 'pixelToGeoFastExport',
+          geoMethod: 'projection-core',
         });
         const computedGeo = await computeExportProjectionGeo(asset, { x: centerBox.x, y: centerBox.y });
         if (computedGeo) {
@@ -839,7 +839,7 @@ export async function GET(request: NextRequest) {
 
       if (!finalGeo) {
         const reason = centerBox
-          ? 'Georeferencing failed (fast export mode)'
+          ? 'Georeferencing failed (projection core)'
           : (validation.warnings[0] || 'Invalid polygon geometry');
         skippedItems.push({
           assetId: asset.id,
@@ -909,7 +909,7 @@ export async function GET(request: NextRequest) {
           gimbalPitch: asset.gimbalPitch,
           gimbalRoll: asset.gimbalRoll,
           gimbalYaw: asset.gimbalYaw,
-          geoMethod: 'pixelToGeoFastExport',
+          geoMethod: 'projection-core',
         });
         const computedGeo = await computeExportProjectionGeo(asset, { x: centerBox.x, y: centerBox.y });
         if (computedGeo) {
@@ -919,7 +919,7 @@ export async function GET(request: NextRequest) {
 
       if (!finalGeo) {
         const reason = centerBox
-          ? 'Georeferencing failed (fast export mode)'
+          ? 'Georeferencing failed (projection core)'
           : (validation.warnings[0] || 'Invalid pending annotation geometry');
         skippedItems.push({
           assetId: asset.id,

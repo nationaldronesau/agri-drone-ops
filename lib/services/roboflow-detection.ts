@@ -54,7 +54,6 @@ export interface RoboflowDetectionResult {
   errors: string[];
 }
 
-const DEFAULT_ALTITUDE = 100;
 const DEFAULT_BATCH_SIZE = 10;
 
 function getImageUrl(asset: RoboflowDetectionAsset): string {
@@ -229,7 +228,7 @@ export async function processRoboflowDetectionJob(options: {
             {
               gpsLatitude: asset.gpsLatitude,
               gpsLongitude: asset.gpsLongitude,
-              altitude: asset.altitude ?? DEFAULT_ALTITUDE,
+              altitude: asset.altitude,
               gimbalPitch: asset.gimbalPitch ?? 0,
               gimbalRoll: asset.gimbalRoll ?? 0,
               gimbalYaw: asset.gimbalYaw ?? 0,
@@ -288,6 +287,7 @@ export async function processRoboflowDetectionJob(options: {
                 detection.class,
               color: detection.color,
               geoMethod: resolved.method,
+              geoQualityFlags: resolved.qualityFlags,
             },
           });
         }

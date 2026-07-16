@@ -677,6 +677,7 @@ export async function POST(request: NextRequest) {
               detection: InferenceDetection;
               geoCoords: { lat: number; lon: number };
               geoMethod: string;
+              geoQualityFlags: string[];
             }> = [];
 
             const geoContext = {
@@ -715,7 +716,12 @@ export async function POST(request: NextRequest) {
                   continue;
                 }
 
-                validDetections.push({ detection, geoCoords, geoMethod: resolved.method });
+                validDetections.push({
+                  detection,
+                  geoCoords,
+                  geoMethod: resolved.method,
+                  geoQualityFlags: resolved.qualityFlags,
+                });
               } catch (geoError) {
                 // SAFETY: Skip this detection if georeferencing fails, don't abort entire upload
                 console.warn(`[SAFETY] Georeferencing failed for detection in ${file.name}, class=${detection.class}:`, geoError);
@@ -724,7 +730,7 @@ export async function POST(request: NextRequest) {
             }
 
             // Create all detections within the transaction
-            for (const { detection, geoCoords, geoMethod } of validDetections) {
+            for (const { detection, geoCoords, geoMethod, geoQualityFlags } of validDetections) {
               const savedDetection = await tx.detection.create({
                 data: {
                   jobId: job.id,
@@ -748,6 +754,7 @@ export async function POST(request: NextRequest) {
                     modelType: detection.modelType,
                     color: detection.color,
                     geoMethod,
+                    geoQualityFlags,
                   },
                 },
               });

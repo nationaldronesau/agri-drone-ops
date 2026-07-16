@@ -2,9 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import type { Prisma } from '@prisma/client';
 import prisma from '@/lib/db';
 import {
-  pixelToGeo,
-  resolveProjectionAltitude,
-  resolveProjectionCameraFov,
+  computeExportProjectionGeo,
   resolveProjectionImageDimensions,
 } from '@/lib/utils/georeferencing';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
@@ -231,45 +229,17 @@ export async function PUT(
             if (imageWidth == null || imageHeight == null) {
               throw new Error('Image dimensions unavailable for georeferencing');
             }
-            const altitude =
-              resolveProjectionAltitude(
-                existingAnnotation.session.asset.altitude,
-                existingAnnotation.session.asset.metadata
-              ) ?? 100;
-            const cameraFov = resolveProjectionCameraFov(
-              existingAnnotation.session.asset.cameraFov,
-              resolvedDimensions.imageWidth,
-              existingAnnotation.session.asset.metadata,
-              84
-            );
-
             // Convert each point in the polygon
-            const geoPoints: [number, number][] = coordinates.map(([x, y]: [number, number]) => {
-              const geoPoint = pixelToGeo(
-                {
-                  gpsLatitude: existingAnnotation.session.asset.gpsLatitude!,
-                  gpsLongitude: existingAnnotation.session.asset.gpsLongitude!,
-                  altitude,
-                  gimbalPitch: existingAnnotation.session.asset.gimbalPitch || 0,
-                  gimbalRoll: existingAnnotation.session.asset.gimbalRoll || 0,
-                  gimbalYaw: existingAnnotation.session.asset.gimbalYaw || 0,
-                  imageWidth,
-                  imageHeight,
-                  cameraFov,
-                  lrfDistance: existingAnnotation.session.asset.lrfDistance || undefined,
-                  lrfTargetLat: existingAnnotation.session.asset.lrfTargetLat || undefined,
-                  lrfTargetLon: existingAnnotation.session.asset.lrfTargetLon || undefined,
-                },
-                { x, y }
-              );
-              
-              // Handle both sync and async return types
-              if (geoPoint instanceof Promise) {
-                throw new Error('Async coordinate conversion not supported in this context');
-              }
-              
-              return [geoPoint.lon, geoPoint.lat] as [number, number];
-            });
+            const geoPoints: [number, number][] = await Promise.all(
+              coordinates.map(async ([x, y]: [number, number]) => {
+                const geoPoint = await computeExportProjectionGeo(
+                  existingAnnotation.session.asset,
+                  { x, y }
+                );
+                if (!geoPoint) throw new Error('Projection failed');
+                return [geoPoint.lon, geoPoint.lat] as [number, number];
+              })
+            );
             
             // Create GeoJSON polygon
             updateData.geoCoordinates = {

@@ -2,9 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import type { Prisma } from '@prisma/client';
 import prisma from '@/lib/db';
 import {
-  pixelToGeo,
-  resolveProjectionAltitude,
-  resolveProjectionCameraFov,
+  computeExportProjectionGeo,
   resolveProjectionImageDimensions,
 } from '@/lib/utils/georeferencing';
 import { getAuthenticatedUser, getUserTeamIds } from '@/lib/auth/api-auth';
@@ -246,42 +244,14 @@ export async function POST(request: NextRequest) {
         if (imageWidth == null || imageHeight == null) {
           throw new Error('Image dimensions unavailable for georeferencing');
         }
-        const altitude =
-          resolveProjectionAltitude(session.asset.altitude, session.asset.metadata) ?? 100;
-        const cameraFov = resolveProjectionCameraFov(
-          session.asset.cameraFov,
-          resolvedDimensions.imageWidth,
-          session.asset.metadata,
-          84
-        );
-
         // Convert each point in the polygon
-        const geoPoints: [number, number][] = coordinates.map(([x, y]: [number, number]) => {
-          const geoPoint = pixelToGeo(
-            {
-              gpsLatitude: session.asset.gpsLatitude!,
-              gpsLongitude: session.asset.gpsLongitude!,
-              altitude,
-              gimbalPitch: session.asset.gimbalPitch || 0,
-              gimbalRoll: session.asset.gimbalRoll || 0,
-              gimbalYaw: session.asset.gimbalYaw || 0,
-              imageWidth,
-              imageHeight,
-              cameraFov,
-              lrfDistance: session.asset.lrfDistance || undefined,
-              lrfTargetLat: session.asset.lrfTargetLat || undefined,
-              lrfTargetLon: session.asset.lrfTargetLon || undefined,
-            },
-            { x, y }
-          );
-
-          // Handle both sync and async return types
-          if (geoPoint instanceof Promise) {
-            throw new Error('Async coordinate conversion not supported in this context');
-          }
-
-          return [geoPoint.lon, geoPoint.lat] as [number, number];
-        });
+        const geoPoints: [number, number][] = await Promise.all(
+          coordinates.map(async ([x, y]: [number, number]) => {
+            const geoPoint = await computeExportProjectionGeo(session.asset, { x, y });
+            if (!geoPoint) throw new Error('Projection failed');
+            return [geoPoint.lon, geoPoint.lat] as [number, number];
+          })
+        );
 
         // Create GeoJSON polygon
         geoCoordinates = {
