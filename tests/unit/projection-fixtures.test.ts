@@ -1,13 +1,22 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/services/elevation', () => ({
   getTerrainElevation: vi.fn(async () => 0),
 }));
 
 import {
+  extractPrecisionParams,
   precisionPixelToGeo,
   type PrecisionGeoreferenceParams,
 } from '@/lib/utils/precision-georeferencing';
+import { projectPixelToGeo } from '@/lib/utils/projection-core';
+import { getTerrainElevation } from '@/lib/services/elevation';
+import {
+  computeExportProjectionGeo,
+  pixelToGeoWithDSM,
+  resolveGeoCoordinates,
+  type GeoAssetParams,
+} from '@/lib/utils/georeferencing';
 
 type ReferenceInput = {
   px: number;
@@ -111,14 +120,41 @@ function expectWithinMillimetre(actual: number, expected: number): void {
   expect(Math.abs(actual - expected)).toBeLessThanOrEqual(0.001);
 }
 
-describe('future projection-core golden fixtures', () => {
+describe('projection-core golden fixtures', () => {
   it.each(goldenFixtures)(
-    'fixture $id locks the normative offsets to +/-0.001 m',
-    (fixture) => {
-      const result = referenceProject({ ...referenceDefaults, ...fixture });
+    'fixture $id matches the independent reference and golden offsets to +/-0.001 m',
+    async (fixture) => {
+      const reference = referenceProject({ ...referenceDefaults, ...fixture });
+      const production = await projectPixelToGeo({
+        pixel: { x: fixture.px, y: fixture.py },
+        imageWidth: 2000,
+        imageHeight: 1500,
+        intrinsics: {
+          f: referenceDefaults.f,
+          cx: referenceDefaults.cx,
+          cy: referenceDefaults.cy,
+        },
+        gimbalPitchDeg: fixture.pitchDeg,
+        gimbalRollDeg: referenceDefaults.rollDeg,
+        gimbalYawDeg: fixture.yawDeg,
+        droneLat: referenceDefaults.lat0,
+        droneLon: referenceDefaults.lon0,
+        heightAboveGroundM: referenceDefaults.heightM,
+      });
 
-      expectWithinMillimetre(result.offsetEastM, fixture.east);
-      expectWithinMillimetre(result.offsetNorthM, fixture.north);
+      expect(production).not.toBeNull();
+      const productionEast =
+        (production!.lon - referenceDefaults.lon0) *
+        111111 *
+        Math.cos((referenceDefaults.lat0 * Math.PI) / 180);
+      const productionNorth = (production!.lat - referenceDefaults.lat0) * 111111;
+
+      expectWithinMillimetre(reference.offsetEastM, fixture.east);
+      expectWithinMillimetre(reference.offsetNorthM, fixture.north);
+      expectWithinMillimetre(productionEast, fixture.east);
+      expectWithinMillimetre(productionNorth, fixture.north);
+      expectWithinMillimetre(productionEast, reference.offsetEastM);
+      expectWithinMillimetre(productionNorth, reference.offsetNorthM);
     }
   );
 });
@@ -152,12 +188,8 @@ function offsetsFromLrf(latitude: number, longitude: number): { east: number; no
   };
 }
 
-describe('current precision path known deviations (PR 1 characterization)', () => {
-  beforeEach(() => {
-    vi.spyOn(console, 'log').mockImplementation(() => undefined);
-  });
-
-  it('documents bug 1: normalized camera coordinates receive a second tan()', async () => {
+describe('projection math bug fixes', () => {
+  it('fix 1: edge offset uses normalized tangent exactly once', async () => {
     const current = await precisionPixelToGeo(
       { x: 1100, y: 750 },
       currentLrfParams
@@ -165,11 +197,11 @@ describe('current precision path known deviations (PR 1 characterization)', () =
 
     expect(current).not.toBeNull();
     const offset = offsetsFromLrf(current!.latitude, current!.longitude);
-    expect(offset.east).toBeCloseTo(100 * Math.tan(0.1), 3);
-    expect(Math.abs(offset.east - 10)).toBeGreaterThan(0.03);
+    expect(offset.east).toBeCloseTo(10, 3);
+    expect(offset.north).toBeCloseTo(0, 3);
   });
 
-  it('documents bug 2: vertical height is added to the LRF slant range', async () => {
+  it('fix 2: LRF slant range has no square-root-of-two inflation', async () => {
     const current = await precisionPixelToGeo(
       { x: 1100, y: 750 },
       { ...currentLrfParams, droneAltitude: 130 }
@@ -177,11 +209,11 @@ describe('current precision path known deviations (PR 1 characterization)', () =
 
     expect(current).not.toBeNull();
     const offset = offsetsFromLrf(current!.latitude, current!.longitude);
-    expect(offset.east).toBeCloseTo(Math.SQRT2 * 100 * Math.tan(0.1), 3);
-    expect(offset.east).toBeGreaterThan(14);
+    expect(offset.east).toBeCloseTo(10, 3);
+    expect(offset.east).toBeLessThan(11);
   });
 
-  it('documents bug 3: DJI yaw=90 rotates image-right north instead of south', async () => {
+  it('fix 3: DJI yaw=90 sends image-right south', async () => {
     const current = await precisionPixelToGeo(
       { x: 1100, y: 750 },
       { ...currentLrfParams, gimbalYaw: 90 }
@@ -189,7 +221,255 @@ describe('current precision path known deviations (PR 1 characterization)', () =
 
     expect(current).not.toBeNull();
     const offset = offsetsFromLrf(current!.latitude, current!.longitude);
-    expect(offset.north).toBeGreaterThan(10);
-    expect(offset.north).not.toBeCloseTo(-10, 3);
+    expect(offset.east).toBeCloseTo(0, 3);
+    expect(offset.north).toBeCloseTo(-10, 3);
+  });
+});
+
+describe('projection-core production guardrails', () => {
+  it('anchors LRF pixel offsets at the gated DJI target', async () => {
+    const droneLat = -26;
+    const droneLon = 153;
+    const targetLon =
+      droneLon + 3 / (111111 * Math.cos((droneLat * Math.PI) / 180));
+    const result = await computeExportProjectionGeo(
+      {
+        gpsLatitude: droneLat,
+        gpsLongitude: droneLon,
+        altitude: 100,
+        gimbalPitch: -90,
+        gimbalRoll: 0,
+        gimbalYaw: 90,
+        imageWidth: 2000,
+        imageHeight: 1500,
+        lrfDistance: 100,
+        lrfTargetLat: droneLat,
+        lrfTargetLon: targetLon,
+        metadata: {
+          CalibratedFocalLength: 1000,
+          CalibratedOpticalCenterX: 1000,
+          CalibratedOpticalCenterY: 750,
+        },
+      },
+      { x: 1100, y: 750 }
+    );
+
+    expect(result).not.toBeNull();
+    const eastFromTarget =
+      (result!.lon - targetLon) *
+      111111 *
+      Math.cos((droneLat * Math.PI) / 180);
+    const northFromTarget = (result!.lat - droneLat) * 111111;
+    expectWithinMillimetre(eastFromTarget, 0);
+    expectWithinMillimetre(northFromTarget, -10);
+    expect(result!.method).toBe('lrf');
+    expect(result!.qualityFlags).toContain('lrf_anchored');
+  });
+
+  it('keeps drone-GPS anchoring when an LRF target is absent', async () => {
+    const droneLat = -26;
+    const droneLon = 153;
+    const result = await computeExportProjectionGeo(
+      {
+        gpsLatitude: droneLat,
+        gpsLongitude: droneLon,
+        altitude: 100,
+        gimbalPitch: -90,
+        gimbalRoll: 0,
+        gimbalYaw: 90,
+        imageWidth: 2000,
+        imageHeight: 1500,
+        lrfDistance: 100,
+        metadata: {
+          CalibratedFocalLength: 1000,
+          CalibratedOpticalCenterX: 1000,
+          CalibratedOpticalCenterY: 750,
+        },
+      },
+      { x: 1100, y: 750 }
+    );
+
+    expect(result).not.toBeNull();
+    const eastFromDrone =
+      (result!.lon - droneLon) *
+      111111 *
+      Math.cos((droneLat * Math.PI) / 180);
+    const northFromDrone = (result!.lat - droneLat) * 111111;
+    expectWithinMillimetre(eastFromDrone, 0);
+    expectWithinMillimetre(northFromDrone, -10);
+    expect(result!.method).toBe('lrf');
+    expect(result!.qualityFlags).not.toContain('lrf_anchored');
+  });
+
+  it('uses FOV-derived focal length when calibration metadata is absent', async () => {
+    const result = await projectPixelToGeo({
+      pixel: { x: 1100, y: 750 },
+      imageWidth: 2000,
+      imageHeight: 1500,
+      fieldOfViewDeg: 90,
+      gimbalPitchDeg: -90,
+      gimbalRollDeg: 0,
+      gimbalYawDeg: 0,
+      droneLat: -26,
+      droneLon: 153,
+      heightAboveGroundM: 100,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.offsetFromCentreM).toBeCloseTo(10, 6);
+    expect(result!.qualityFlags).toContain('fov_intrinsics');
+  });
+
+  it('does not inject Matrice 4E intrinsics into uncalibrated metadata', () => {
+    const params = extractPrecisionParams({
+      ExifImageWidth: 2000,
+      ExifImageHeight: 1500,
+      FieldOfView: 90,
+    });
+
+    expect(params.calibratedFocalLength).toBeUndefined();
+    expect(params.opticalCenterX).toBeUndefined();
+    expect(params.opticalCenterY).toBeUndefined();
+    expect(params.fieldOfView).toBe(90);
+  });
+
+  it('records an explicit quality flag when the altitude defaults', async () => {
+    const result = await projectPixelToGeo({
+      pixel: { x: 1000, y: 750 },
+      imageWidth: 2000,
+      imageHeight: 1500,
+      fieldOfViewDeg: 90,
+      gimbalPitchDeg: -90,
+      gimbalRollDeg: 0,
+      gimbalYawDeg: 0,
+      droneLat: -26,
+      droneLon: 153,
+      defaultAltitudeM: 100,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.method).toBe('default_altitude');
+    expect(result!.qualityFlags).toContain('default_altitude');
+  });
+
+  it('applies roll in the normative camera rotation', async () => {
+    const result = await projectPixelToGeo({
+      pixel: { x: 1100, y: 750 },
+      imageWidth: 2000,
+      imageHeight: 1500,
+      intrinsics: { f: 1000, cx: 1000, cy: 750 },
+      gimbalPitchDeg: -90,
+      gimbalRollDeg: 90,
+      gimbalYawDeg: 0,
+      droneLat: -26,
+      droneLon: 153,
+      heightAboveGroundM: 100,
+    });
+
+    expect(result).not.toBeNull();
+    const north = (result!.lat + 26) * 111111;
+    expect(north).toBeCloseTo(-10, 3);
+  });
+
+  it('clips unsafe offsets and records the safety flag', async () => {
+    const result = await projectPixelToGeo({
+      pixel: { x: 2000, y: 750 },
+      imageWidth: 2000,
+      imageHeight: 1500,
+      intrinsics: { f: 1000, cx: 1000, cy: 750 },
+      gimbalPitchDeg: -90,
+      gimbalRollDeg: 0,
+      gimbalYawDeg: 0,
+      droneLat: -26,
+      droneLon: 153,
+      heightAboveGroundM: 100,
+      maxOffsetM: 20,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.qualityFlags).toContain('clipped_offset');
+    const east =
+      (result!.lon - 153) * 111111 * Math.cos((-26 * Math.PI) / 180);
+    expect(east).toBeCloseTo(20, 1);
+  });
+
+  it('applies the final absolute-altitude distance before a convergence break', async () => {
+    const terrain = vi.mocked(getTerrainElevation);
+    terrain.mockReset();
+    terrain.mockResolvedValueOnce(100).mockResolvedValueOnce(100.25);
+
+    const result = await projectPixelToGeo({
+      pixel: { x: 1000, y: 750 },
+      imageWidth: 2000,
+      imageHeight: 1500,
+      intrinsics: { f: 1000, cx: 1000, cy: 750 },
+      gimbalPitchDeg: -45,
+      gimbalRollDeg: 0,
+      gimbalYawDeg: 0,
+      droneLat: -26,
+      droneLon: 153,
+      absoluteAltitudeM: 230,
+    });
+
+    expect(result).not.toBeNull();
+    const north = (result!.lat + 26) * 111111;
+    expect(north).toBeCloseTo(99.75, 3);
+    terrain.mockResolvedValue(0);
+  });
+
+  it('rejects and flags a near-horizon ray', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const result = await projectPixelToGeo({
+      pixel: { x: 1000, y: 750 },
+      imageWidth: 2000,
+      imageHeight: 1500,
+      intrinsics: { f: 1000, cx: 1000, cy: 750 },
+      gimbalPitchDeg: 0,
+      gimbalRollDeg: 0,
+      gimbalYawDeg: 0,
+      droneLat: -26,
+      droneLon: 153,
+      heightAboveGroundM: 100,
+    });
+
+    expect(result).toBeNull();
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('NEAR_HORIZON'));
+    warning.mockRestore();
+  });
+
+  it('routes detections, export/review, and DSM compatibility through identical math', async () => {
+    const asset: GeoAssetParams = {
+      gpsLatitude: -26,
+      gpsLongitude: 153,
+      altitude: 100,
+      gimbalPitch: -90,
+      gimbalRoll: 0,
+      gimbalYaw: 90,
+      cameraFov: 90,
+      imageWidth: 2000,
+      imageHeight: 1500,
+      lrfDistance: 100,
+      lrfTargetLat: -26,
+      lrfTargetLon: 153,
+      metadata: {
+        CalibratedFocalLength: 1000,
+        CalibratedOpticalCenterX: 1000,
+        CalibratedOpticalCenterY: 750,
+      },
+    };
+    const pixel = { x: 1100, y: 750 };
+
+    const resolved = await resolveGeoCoordinates(asset, pixel);
+    const exported = await computeExportProjectionGeo(asset, pixel);
+    const dsm = await pixelToGeoWithDSM(asset, pixel);
+
+    expect(resolved).not.toBeNull();
+    expect(exported).not.toBeNull();
+    expect(dsm).not.toBeNull();
+    expect(exported!.lat).toBe(resolved!.geo.lat);
+    expect(exported!.lon).toBe(resolved!.geo.lon);
+    expect(dsm!.lat).toBe(resolved!.geo.lat);
+    expect(dsm!.lon).toBe(resolved!.geo.lon);
+    expect(resolved!.method).toBe('lrf');
   });
 });

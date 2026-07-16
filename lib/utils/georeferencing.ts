@@ -1,10 +1,14 @@
 import type { CenterBox, YOLOPreprocessingMeta } from '@/lib/types/detection';
 import {
-  precisionPixelToGeo,
-  extractPrecisionParams,
   getPrecisionMetadataStatus,
   getCameraFovFromMetadata,
 } from '@/lib/utils/precision-georeferencing';
+import {
+  projectPixelToGeo,
+  projectPixelToGeoAtHeight,
+  type ProjectionCoreResult,
+  type ProjectionMethod,
+} from '@/lib/utils/projection-core';
 
 export interface GeoreferenceParams {
   gpsLatitude: number;
@@ -32,6 +36,9 @@ export interface PixelPoint {
 export interface GeoPoint {
   lat: number;
   lon: number;
+  method?: ProjectionMethod;
+  offsetFromCentreM?: number;
+  qualityFlags?: string[];
 }
 
 export interface PixelCoordinates {
@@ -59,7 +66,6 @@ export interface GeoCoordinates {
   lon: number;
 }
 
-const METERS_PER_DEGREE_LAT = 111111;
 const DEFAULT_MAX_LRF_OFFSET_M = 2000;
 const DEFAULT_CAMERA_FOV = 84;
 const DEFAULT_ALTITUDE = 100;
@@ -97,6 +103,9 @@ const OPTICAL_CENTER_Y_META_KEYS = [
 ];
 const IMAGE_WIDTH_META_KEYS = ['ExifImageWidth', 'ImageWidth', 'PixelXDimension', 'imageWidth'];
 const IMAGE_HEIGHT_META_KEYS = ['ExifImageHeight', 'ImageHeight', 'PixelYDimension', 'imageHeight'];
+const LRF_DISTANCE_META_KEYS = ['LRFTargetDistance', 'drone-dji:LRFTargetDistance'];
+const LRF_LAT_META_KEYS = ['LRFTargetLat', 'drone-dji:LRFTargetLat'];
+const LRF_LON_META_KEYS = ['LRFTargetLon', 'drone-dji:LRFTargetLon'];
 
 function toFiniteNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -399,52 +408,6 @@ function computeProjectionMaxOffsetMeters(
   );
 }
 
-function capProjectedOffset(
-  originLat: number,
-  originLon: number,
-  projectedLat: number,
-  projectedLon: number,
-  maxOffsetMeters: number
-): { lat: number; lon: number; clipped: boolean } {
-  const distanceMeters = haversineDistanceMeters(
-    originLat,
-    originLon,
-    projectedLat,
-    projectedLon
-  );
-  if (
-    !Number.isFinite(distanceMeters) ||
-    !Number.isFinite(maxOffsetMeters) ||
-    distanceMeters <= maxOffsetMeters
-  ) {
-    return { lat: projectedLat, lon: projectedLon, clipped: false };
-  }
-
-  const scale = maxOffsetMeters / distanceMeters;
-  return {
-    lat: originLat + (projectedLat - originLat) * scale,
-    lon: originLon + (projectedLon - originLon) * scale,
-    clipped: true,
-  };
-}
-
-function rotateOffsetsByYaw(
-  offsetEast: number,
-  offsetNorth: number,
-  yawDegrees: number
-): { east: number; north: number } {
-  if (!Number.isFinite(yawDegrees)) {
-    return { east: offsetEast, north: offsetNorth };
-  }
-
-  // DJI yaw metadata is a compass bearing: clockwise-positive from true north.
-  const yaw = (yawDegrees * Math.PI) / 180;
-  return {
-    east: offsetEast * Math.cos(yaw) + offsetNorth * Math.sin(yaw),
-    north: -offsetEast * Math.sin(yaw) + offsetNorth * Math.cos(yaw),
-  };
-}
-
 type GeoFeaturePolygon = {
   type: 'Feature';
   geometry: {
@@ -486,14 +449,24 @@ function hasPlausibleLrfTarget(asset: GeoAssetParams): boolean {
     typeof asset.gpsLatitude !== 'number' ||
     typeof asset.gpsLongitude !== 'number' ||
     typeof asset.lrfDistance !== 'number' ||
-    typeof asset.lrfTargetLat !== 'number' ||
-    typeof asset.lrfTargetLon !== 'number' ||
     !Number.isFinite(asset.gpsLatitude) ||
     !Number.isFinite(asset.gpsLongitude) ||
     !Number.isFinite(asset.lrfDistance) ||
-    !Number.isFinite(asset.lrfTargetLat) ||
-    !Number.isFinite(asset.lrfTargetLon) ||
     asset.lrfDistance <= 0
+  ) {
+    return false;
+  }
+
+  // The range alone is sufficient to resolve AGL from the boresight. When DJI
+  // also supplies target coordinates, retain the legacy plausibility guard.
+  if (asset.lrfTargetLat == null && asset.lrfTargetLon == null) {
+    return true;
+  }
+  if (
+    typeof asset.lrfTargetLat !== 'number' ||
+    typeof asset.lrfTargetLon !== 'number' ||
+    !Number.isFinite(asset.lrfTargetLat) ||
+    !Number.isFinite(asset.lrfTargetLon)
   ) {
     return false;
   }
@@ -515,25 +488,28 @@ function isValidGeoPoint(lat: number, lon: number): boolean {
   return validateGeoCoordinates(lat, lon).valid;
 }
 
-/**
- * Export-safe pixel to geo projection used by both export and review map view.
- *
- * Behavior:
- * - Uses full pixelToGeo path only when LRF metadata is plausibly valid.
- * - Falls back to a stable footprint projection that is resilient to pitch singularities.
- * - Applies max-offset guardrails and clips implausible output.
- */
-export async function computeExportProjectionGeo(
+function resultToGeoPoint(result: ProjectionCoreResult): GeoPoint {
+  return {
+    lat: result.lat,
+    lon: result.lon,
+    method: result.method,
+    offsetFromCentreM: result.offsetFromCentreM,
+    qualityFlags: result.qualityFlags,
+  };
+}
+
+async function projectAssetThroughCore(
   asset: GeoAssetParams,
   pixel: PixelPoint,
   options?: { fallbackAltitude?: number; fallbackFov?: number }
-): Promise<GeoPoint | null> {
+): Promise<ProjectionCoreResult | null> {
   const gpsLat = asset.gpsLatitude;
   const gpsLon = asset.gpsLongitude;
+  const metadata = asMetadataRecord(asset.metadata);
   const resolvedDimensions = resolveProjectionImageDimensions(
     asset.imageWidth,
     asset.imageHeight,
-    asset.metadata
+    metadata
   );
   const width = resolvedDimensions.imageWidth;
   const height = resolvedDimensions.imageHeight;
@@ -559,108 +535,104 @@ export async function computeExportProjectionGeo(
     return null;
   }
 
-  const altitude = resolveProjectionAltitude(asset.altitude, asset.metadata)
-    ?? options?.fallbackAltitude
-    ?? DEFAULT_ALTITUDE;
-  const resolvedYaw = resolveProjectionYaw(asset.gimbalYaw, asset.metadata);
+  const resolvedAltitude = resolveProjectionAltitude(asset.altitude, metadata);
+  const fallbackAltitude = options?.fallbackAltitude ?? DEFAULT_ALTITUDE;
+  const resolvedYaw = resolveProjectionYaw(asset.gimbalYaw, metadata);
   const cameraFov = resolveProjectionCameraFov(
     asset.cameraFov,
     width,
-    asset.metadata,
+    metadata,
     options?.fallbackFov ?? DEFAULT_CAMERA_FOV
   );
-  const opticalCenter = resolveProjectionOpticalCenter(width, height, asset.metadata);
+  const opticalCenter = resolveProjectionOpticalCenter(width, height, metadata);
+  const precisionStatus = getPrecisionMetadataStatus(metadata);
+  const calibratedFocalLength = readMetadataNumber(metadata, CALIBRATED_FOCAL_META_KEYS);
+  const relativeAltitude = readMetadataNumber(metadata, RELATIVE_ALTITUDE_META_KEYS);
+  const absoluteAltitude = readMetadataNumber(metadata, ABSOLUTE_ALTITUDE_META_KEYS);
+  const lrfTargetElevation = readMetadataNumber(metadata, [
+    'LRFTargetAlt',
+    'drone-dji:LRFTargetAlt',
+  ]);
+  const lrfDistance = asset.lrfDistance ?? readMetadataNumber(metadata, LRF_DISTANCE_META_KEYS);
+  const lrfTargetLat = asset.lrfTargetLat ?? readMetadataNumber(metadata, LRF_LAT_META_KEYS);
+  const lrfTargetLon = asset.lrfTargetLon ?? readMetadataNumber(metadata, LRF_LON_META_KEYS);
+  const lrfAsset: GeoAssetParams = {
+    ...asset,
+    lrfDistance,
+    lrfTargetLat,
+    lrfTargetLon,
+  };
+  const hasPlausibleLrf = hasPlausibleLrfTarget(lrfAsset);
+  const hasTypedAltitude = isPositiveFinite(relativeAltitude) || isPositiveFinite(absoluteAltitude);
+  const qualityFlags: string[] = [];
+  if (
+    !precisionStatus.hasCalibration &&
+    !isValidFov(asset.cameraFov) &&
+    !isValidFov(readMetadataNumber(metadata, CAMERA_FOV_META_KEYS)) &&
+    !isPositiveFinite(readMetadataNumber(metadata, FOCAL_LENGTH_35MM_META_KEYS))
+  ) {
+    qualityFlags.push('default_fov');
+  }
+
   const maxOffsetMeters = computeProjectionMaxOffsetMeters(
-    altitude,
+    resolvedAltitude ?? fallbackAltitude,
     cameraFov,
     width,
     height
   );
 
-  if (hasPlausibleLrfTarget(asset)) {
-    try {
-      const standardGeoResult = pixelToGeo(
-        {
-          gpsLatitude: gpsLat,
-          gpsLongitude: gpsLon,
-          altitude,
-          gimbalRoll: asset.gimbalRoll ?? 0,
-          gimbalPitch: asset.gimbalPitch ?? 0,
-          gimbalYaw: resolvedYaw,
-          cameraFov,
-          imageWidth: width,
-          imageHeight: height,
-          opticalCenterX: opticalCenter.opticalCenterX,
-          opticalCenterY: opticalCenter.opticalCenterY,
-          lrfDistance: asset.lrfDistance ?? undefined,
-          lrfTargetLat: asset.lrfTargetLat ?? undefined,
-          lrfTargetLon: asset.lrfTargetLon ?? undefined,
-        },
-        normalizedPixel,
-        true
-      );
-      const standardGeo = standardGeoResult instanceof Promise
-        ? await standardGeoResult
-        : standardGeoResult;
-      if (isValidGeoPoint(standardGeo.lat, standardGeo.lon)) {
-        const projectedOffsetMeters = haversineDistanceMeters(
-          gpsLat,
-          gpsLon,
-          standardGeo.lat,
-          standardGeo.lon
-        );
-        if (Number.isFinite(projectedOffsetMeters) && projectedOffsetMeters <= maxOffsetMeters) {
-          return standardGeo;
-        }
-      }
-    } catch {
-      // Continue to stable projection fallback
-    }
-  }
+  const result = await projectPixelToGeo({
+    pixel: normalizedPixel,
+    imageWidth: width,
+    imageHeight: height,
+    intrinsics:
+      precisionStatus.hasCalibration && calibratedFocalLength != null
+        ? {
+            f: calibratedFocalLength,
+            cx: opticalCenter.opticalCenterX,
+            cy: opticalCenter.opticalCenterY,
+          }
+        : undefined,
+    fieldOfViewDeg: cameraFov,
+    gimbalPitchDeg: asset.gimbalPitch ?? 0,
+    gimbalRollDeg: asset.gimbalRoll ?? 0,
+    gimbalYawDeg: resolvedYaw,
+    droneLat: gpsLat,
+    droneLon: gpsLon,
+    lrfDistanceM: hasPlausibleLrf ? lrfDistance : undefined,
+    lrfTargetLat: hasPlausibleLrf ? lrfTargetLat : undefined,
+    lrfTargetLon: hasPlausibleLrf ? lrfTargetLon : undefined,
+    relativeAltitudeM: isPositiveFinite(relativeAltitude)
+      ? resolvedAltitude
+      : undefined,
+    absoluteAltitudeM:
+      !isPositiveFinite(relativeAltitude) && isPositiveFinite(absoluteAltitude)
+        ? absoluteAltitude
+        : undefined,
+    heightAboveGroundM:
+      !hasTypedAltitude && isPositiveFinite(resolvedAltitude)
+        ? resolvedAltitude
+        : undefined,
+    lrfTargetElevationM: lrfTargetElevation,
+    defaultAltitudeM: resolvedAltitude == null ? fallbackAltitude : undefined,
+    maxOffsetM: maxOffsetMeters,
+    qualityFlags,
+  });
 
-  const normalizedX = (normalizedPixel.x - opticalCenter.opticalCenterX) / width;
-  const normalizedY = (normalizedPixel.y - opticalCenter.opticalCenterY) / height;
-  const hFovRad = (cameraFov * Math.PI) / 180;
-  const vFovRad = hFovRad * (height / width);
-  const angleX = normalizedX * hFovRad;
-  const angleY = normalizedY * vFovRad;
-  if (!Number.isFinite(angleX) || !Number.isFinite(angleY)) {
+  if (!result || !isValidGeoPoint(result.lat, result.lon)) {
     return null;
   }
+  return result;
+}
 
-  // Stable projection avoids singularities from extreme gimbal pitch.
-  let offsetEast = altitude * Math.tan(angleX);
-  let offsetNorth = -altitude * Math.tan(angleY);
-  if (!Number.isFinite(offsetEast) || !Number.isFinite(offsetNorth)) {
-    return null;
-  }
-
-  const rotated = rotateOffsetsByYaw(offsetEast, offsetNorth, resolvedYaw);
-  offsetEast = rotated.east;
-  offsetNorth = rotated.north;
-
-  const metersPerLon = METERS_PER_DEGREE_LAT * Math.cos((gpsLat * Math.PI) / 180);
-  if (!Number.isFinite(metersPerLon) || Math.abs(metersPerLon) < 1e-6) {
-    return null;
-  }
-
-  const projectedLat = gpsLat + offsetNorth / METERS_PER_DEGREE_LAT;
-  const projectedLon = gpsLon + offsetEast / metersPerLon;
-  if (!isValidGeoPoint(projectedLat, projectedLon)) {
-    return null;
-  }
-
-  const capped = capProjectedOffset(
-    gpsLat,
-    gpsLon,
-    projectedLat,
-    projectedLon,
-    maxOffsetMeters
-  );
-  if (!isValidGeoPoint(capped.lat, capped.lon)) {
-    return null;
-  }
-  return { lat: capped.lat, lon: capped.lon };
+/** Export/review projection. Uses the exact same adapter as detection resolution. */
+export async function computeExportProjectionGeo(
+  asset: GeoAssetParams,
+  pixel: PixelPoint,
+  options?: { fallbackAltitude?: number; fallbackFov?: number }
+): Promise<GeoPoint | null> {
+  const result = await projectAssetThroughCore(asset, pixel, options);
+  return result ? resultToGeoPoint(result) : null;
 }
 
 /**
@@ -715,6 +687,7 @@ export function assertValidGeoCoordinates(lat: number, lon: number, context: str
 
 export function validateGeoParams(asset: GeoAssetParams): GeoParamsValidationResult {
   const missing: string[] = [];
+  const metadata = asMetadataRecord(asset.metadata);
   if (asset.gpsLatitude == null) missing.push('gpsLatitude');
   if (asset.gpsLongitude == null) missing.push('gpsLongitude');
   if (asset.gimbalPitch == null) missing.push('gimbalPitch');
@@ -722,7 +695,10 @@ export function validateGeoParams(asset: GeoAssetParams): GeoParamsValidationRes
   if (asset.gimbalYaw == null) missing.push('gimbalYaw');
 
   const resolvedAltitude = resolveProjectionAltitude(asset.altitude, asset.metadata);
-  if (resolvedAltitude == null) {
+  const hasUsableLrf =
+    isPositiveFinite(asset.lrfDistance) ||
+    isPositiveFinite(readMetadataNumber(metadata, LRF_DISTANCE_META_KEYS));
+  if (resolvedAltitude == null && !hasUsableLrf) {
     missing.push('altitude');
   }
 
@@ -745,111 +721,32 @@ export function validateGeoParams(asset: GeoAssetParams): GeoParamsValidationRes
   };
 }
 
-export type GeoResolutionMethod = 'precision_dsm' | 'precision_lrf_dsm' | 'standard';
+export type GeoResolutionMethod = ProjectionMethod;
 
 export interface GeoResolution {
   geo: GeoPoint;
   method: GeoResolutionMethod;
+  qualityFlags: string[];
 }
 
 export async function resolveGeoCoordinates(
   asset: GeoAssetParams,
   pixel: PixelPoint
 ): Promise<GeoResolution | null> {
-  if (asset.gpsLatitude == null || asset.gpsLongitude == null) {
-    return null;
-  }
-
-  const metadata =
-    asset.metadata && typeof asset.metadata === 'object'
-      ? (asset.metadata as Record<string, unknown>)
-      : {};
-  const resolvedDimensions = resolveProjectionImageDimensions(
-    asset.imageWidth,
-    asset.imageHeight,
-    metadata
-  );
-  if (resolvedDimensions.imageWidth == null || resolvedDimensions.imageHeight == null) {
-    return null;
-  }
-  const projectionAltitude = resolveProjectionAltitude(asset.altitude, metadata);
-  let normalizedPixel: PixelPoint;
-  try {
-    normalizedPixel = normalizePixelPoint(
-      pixel,
-      resolvedDimensions.imageWidth,
-      resolvedDimensions.imageHeight
-    );
-  } catch {
-    return null;
-  }
-
-  const precisionStatus = getPrecisionMetadataStatus(metadata);
-  const shouldUsePrecision = precisionStatus.hasCalibration || precisionStatus.hasLRF;
-
-  if (shouldUsePrecision) {
-    const precision = await pixelToGeoWithDSM(
-      {
-        ...asset,
-        altitude: projectionAltitude,
-        imageWidth: resolvedDimensions.imageWidth,
-        imageHeight: resolvedDimensions.imageHeight,
-      },
-      normalizedPixel
-    );
-    if (precision) {
-      return {
-        geo: precision,
-        method: precisionStatus.hasLRF ? 'precision_lrf_dsm' : 'precision_dsm',
-      };
-    }
-  }
-
-  const cameraFov = resolveProjectionCameraFov(
-    asset.cameraFov,
-    resolvedDimensions.imageWidth,
-    metadata,
-    DEFAULT_CAMERA_FOV
-  );
-  const resolvedYaw = resolveProjectionYaw(asset.gimbalYaw, metadata);
-  const opticalCenter = resolveProjectionOpticalCenter(
-    resolvedDimensions.imageWidth,
-    resolvedDimensions.imageHeight,
-    metadata
-  );
-
-  const geoParams: GeoreferenceParams = {
-    gpsLatitude: asset.gpsLatitude,
-    gpsLongitude: asset.gpsLongitude,
-    altitude: projectionAltitude ?? DEFAULT_ALTITUDE,
-    gimbalRoll: asset.gimbalRoll ?? 0,
-    gimbalPitch: asset.gimbalPitch ?? 0,
-    gimbalYaw: resolvedYaw,
-    cameraFov,
-    imageWidth: resolvedDimensions.imageWidth,
-    imageHeight: resolvedDimensions.imageHeight,
-    opticalCenterX: opticalCenter.opticalCenterX,
-    opticalCenterY: opticalCenter.opticalCenterY,
-    lrfDistance: asset.lrfDistance ?? undefined,
-    lrfTargetLat: asset.lrfTargetLat ?? undefined,
-    lrfTargetLon: asset.lrfTargetLon ?? undefined,
+  const result = await projectAssetThroughCore(asset, pixel);
+  if (!result) return null;
+  return {
+    geo: resultToGeoPoint(result),
+    method: result.method,
+    qualityFlags: result.qualityFlags,
   };
-
-  try {
-    const geoResult = pixelToGeo(geoParams, normalizedPixel);
-    const geo = geoResult instanceof Promise ? await geoResult : geoResult;
-    return { geo, method: 'standard' };
-  } catch {
-    return null;
-  }
 }
 
-export function pixelToGeo(
+export async function pixelToGeo(
   params: GeoreferenceParams,
   pixel: PixelPoint,
   useLrf: boolean = true
-): GeoPoint | Promise<GeoPoint> {
-  // Input validation
+): Promise<GeoPoint> {
   if (!params || !pixel) {
     throw new Error('Invalid parameters');
   }
@@ -872,200 +769,47 @@ export function pixelToGeo(
       ? params.opticalCenterY
       : params.imageHeight / 2;
 
-  const metersPerLat = METERS_PER_DEGREE_LAT; // approximately
-  const metersPerLon = METERS_PER_DEGREE_LAT * Math.cos(params.gpsLatitude * Math.PI / 180);
-
-  const hasLrfTarget =
-    typeof params.lrfTargetLat === 'number' &&
-    typeof params.lrfTargetLon === 'number' &&
-    Number.isFinite(params.lrfTargetLat) &&
-    Number.isFinite(params.lrfTargetLon);
-  const hasLrfDistance =
-    typeof params.lrfDistance === 'number' &&
-    Number.isFinite(params.lrfDistance) &&
-    params.lrfDistance > 0;
-
-  let lrfLooksPlausible = false;
-  if (useLrf && hasLrfTarget && hasLrfDistance) {
-    const lrfTargetLat = params.lrfTargetLat as number;
-    const lrfTargetLon = params.lrfTargetLon as number;
-    const lrfDistance = params.lrfDistance as number;
-    const gpsToLrfMeters = haversineDistanceMeters(
-      params.gpsLatitude,
-      params.gpsLongitude,
-      lrfTargetLat,
-      lrfTargetLon
-    );
-    const maxExpectedOffset = Math.max(
-      DEFAULT_MAX_LRF_OFFSET_M,
-      lrfDistance * 8 + 500
-    );
-    lrfLooksPlausible = Number.isFinite(gpsToLrfMeters) && gpsToLrfMeters <= maxExpectedOffset;
-    if (!lrfLooksPlausible) {
-      console.warn(
-        `[GEO] Ignoring implausible LRF target offset (${gpsToLrfMeters.toFixed(1)}m > ${maxExpectedOffset.toFixed(1)}m)`
-      );
-    }
-  }
-
-  if (lrfLooksPlausible && params.lrfTargetLat !== undefined && params.lrfTargetLon !== undefined && params.lrfDistance !== undefined) {
-    // Off-center LRF targeting and projection
-    const normalizedX = (normalizedPixel.x - opticalCenterX) / params.imageWidth;
-    const normalizedY = (normalizedPixel.y - opticalCenterY) / params.imageHeight;
-    
-    // Calculate offset based on camera FOV and normalized coordinates
-    const hFov = params.cameraFov * Math.PI / 180;
-    const vFov = hFov * params.imageHeight / params.imageWidth;
-    
-    const angleX = normalizedX * hFov;
-    const angleY = normalizedY * vFov;
-    
-    // Apply camera-frame offsets from the LRF target point
-    const distance = params.lrfDistance;
-    const offsetEast = distance * Math.tan(angleX);
-    // Image Y increases downward, so northing offset is inverted.
-    const offsetNorth = -distance * Math.tan(angleY);
-
-    const rotated = rotateOffsetsByYaw(
-      offsetEast,
-      offsetNorth,
-      params.gimbalYaw
-    );
-
-    const metersPerLonAtTarget =
-      111111 * Math.cos(params.lrfTargetLat * Math.PI / 180);
-    if (!Number.isFinite(metersPerLonAtTarget) || Math.abs(metersPerLonAtTarget) < 1e-6) {
-      throw new Error('Invalid longitude scale for LRF georeferencing');
-    }
-
-    const resultLat = params.lrfTargetLat + rotated.north / metersPerLat;
-    const resultLon = params.lrfTargetLon + rotated.east / metersPerLonAtTarget;
-
-    // SAFETY: Validate before returning (throws on invalid)
-    assertValidGeoCoordinates(resultLat, resultLon, 'LRF-based');
-
-    return { lat: resultLat, lon: resultLon };
-  }
-
-  // Standard method without LRF
-  const normalizedX = (normalizedPixel.x - opticalCenterX) / params.imageWidth;
-  const normalizedY = (normalizedPixel.y - opticalCenterY) / params.imageHeight;
-  
-  // Calculate field of view angles
-  const hFov = params.cameraFov * Math.PI / 180;
-  const vFov = hFov * params.imageHeight / params.imageWidth;
-  
-  // Calculate ray angles
-  const rayAngleX = normalizedX * hFov;
-  const rayAngleY = normalizedY * vFov;
-  
-  // Apply gimbal rotations (simplified)
-  const pitch = params.gimbalPitch * Math.PI / 180;
-  const yawDeg = params.gimbalYaw;
-  const yaw = yawDeg * Math.PI / 180;
-
-  const pitchPlusRay = pitch + rayAngleY;
-  const pitchCos = Math.cos(pitchPlusRay);
-  let rotatedOffsetX: number;
-  let rotatedOffsetY: number;
-
-  // Near-nadir pitch can make cos(pitch + rayAngleY) approach zero and explode offsets.
-  if (!Number.isFinite(pitchCos) || Math.abs(pitchCos) < 0.15) {
-    const stableOffsetEast = params.altitude * Math.tan(rayAngleX);
-    const stableOffsetNorth = -params.altitude * Math.tan(rayAngleY);
-    if (!Number.isFinite(stableOffsetEast) || !Number.isFinite(stableOffsetNorth)) {
-      throw new Error('Projection became unstable for current pixel and camera angles');
-    }
-    const rotated = rotateOffsetsByYaw(
-      stableOffsetEast,
-      stableOffsetNorth,
-      yawDeg
-    );
-    rotatedOffsetX = rotated.east;
-    rotatedOffsetY = rotated.north;
-  } else {
-    // Calculate ground distance
-    const groundDistance = params.altitude / pitchCos;
-    if (!Number.isFinite(groundDistance)) {
-      throw new Error('Invalid ground distance computed from camera pitch');
-    }
-
-    // Calculate offsets
-    const offsetX = groundDistance * Math.tan(rayAngleX);
-    const offsetY = groundDistance * Math.sin(pitchPlusRay);
-
-    // Rotate by yaw
-    const bearingRad = yaw;
-    rotatedOffsetX = offsetX * Math.sin(bearingRad) + offsetY * Math.cos(bearingRad);
-    rotatedOffsetY = offsetX * Math.cos(bearingRad) - offsetY * Math.sin(bearingRad);
-  }
-  
-  // Convert to lat/lon
-  const latOffset = rotatedOffsetY / metersPerLat;
-  const lonOffset = rotatedOffsetX / metersPerLon;
-  
-  const finalLatRaw = params.gpsLatitude + latOffset;
-  const finalLonRaw = params.gpsLongitude + lonOffset;
   const maxOffsetMeters = computeProjectionMaxOffsetMeters(
     params.altitude,
     params.cameraFov,
     params.imageWidth,
     params.imageHeight
   );
-  const cappedStandard = capProjectedOffset(
-    params.gpsLatitude,
-    params.gpsLongitude,
-    finalLatRaw,
-    finalLonRaw,
-    maxOffsetMeters
-  );
-  const finalLat = cappedStandard.lat;
-  const finalLon = cappedStandard.lon;
-  if (cappedStandard.clipped) {
-    console.warn(
-      `[GEO] Clipped standard projection offset to ${maxOffsetMeters.toFixed(1)}m guardrail`
-    );
+  const lrfAsset: GeoAssetParams = {
+    gpsLatitude: params.gpsLatitude,
+    gpsLongitude: params.gpsLongitude,
+    altitude: params.altitude,
+    gimbalPitch: params.gimbalPitch,
+    gimbalRoll: params.gimbalRoll,
+    gimbalYaw: params.gimbalYaw,
+    imageWidth: params.imageWidth,
+    imageHeight: params.imageHeight,
+    lrfDistance: params.lrfDistance ?? null,
+    lrfTargetLat: params.lrfTargetLat ?? null,
+    lrfTargetLon: params.lrfTargetLon ?? null,
+  };
+  const result = await projectPixelToGeo({
+    pixel: normalizedPixel,
+    imageWidth: params.imageWidth,
+    imageHeight: params.imageHeight,
+    fieldOfViewDeg: params.cameraFov,
+    intrinsics: { cx: opticalCenterX, cy: opticalCenterY },
+    gimbalPitchDeg: params.gimbalPitch,
+    gimbalRollDeg: params.gimbalRoll,
+    gimbalYawDeg: params.gimbalYaw,
+    droneLat: params.gpsLatitude,
+    droneLon: params.gpsLongitude,
+    lrfDistanceM: useLrf && hasPlausibleLrfTarget(lrfAsset) ? params.lrfDistance : undefined,
+    relativeAltitudeM: params.dtmData ? params.altitude : undefined,
+    heightAboveGroundM: params.dtmData ? undefined : params.altitude,
+    terrainElevation: params.dtmData,
+    maxOffsetM: maxOffsetMeters,
+  });
+  if (!result) {
+    throw new Error('Projection failed validation or ray was near the horizon');
   }
-
-  // If DTM data is available, refine with terrain height
-  if (params.dtmData) {
-    return params.dtmData(finalLat, finalLon).then(terrainHeight => {
-      const adjustedAltitude = params.altitude - terrainHeight;
-      const adjustedPitchCos = Math.cos(pitchPlusRay);
-      if (!Number.isFinite(adjustedPitchCos) || Math.abs(adjustedPitchCos) < 1e-6) {
-        return { lat: finalLat, lon: finalLon };
-      }
-      const adjustedDistance = adjustedAltitude / adjustedPitchCos;
-      if (!Number.isFinite(adjustedDistance)) {
-        return { lat: finalLat, lon: finalLon };
-      }
-      const adjustedOffsetX = adjustedDistance * Math.tan(rayAngleX);
-      const adjustedOffsetY = adjustedDistance * Math.sin(pitchPlusRay);
-
-      const adjustedRotatedX = adjustedOffsetX * Math.sin(yaw) + adjustedOffsetY * Math.cos(yaw);
-      const adjustedRotatedY = adjustedOffsetX * Math.cos(yaw) - adjustedOffsetY * Math.sin(yaw);
-
-      const dtmLatRaw = params.gpsLatitude + adjustedRotatedY / metersPerLat;
-      const dtmLonRaw = params.gpsLongitude + adjustedRotatedX / metersPerLon;
-      const cappedDtm = capProjectedOffset(
-        params.gpsLatitude,
-        params.gpsLongitude,
-        dtmLatRaw,
-        dtmLonRaw,
-        maxOffsetMeters
-      );
-
-      // SAFETY: Validate DTM-adjusted coordinates before returning (throws on invalid)
-      assertValidGeoCoordinates(cappedDtm.lat, cappedDtm.lon, 'DTM-adjusted');
-
-      return { lat: cappedDtm.lat, lon: cappedDtm.lon };
-    });
-  }
-
-  // SAFETY: Validate standard coordinates before returning (throws on invalid)
-  assertValidGeoCoordinates(finalLat, finalLon, 'standard');
-
-  return { lat: finalLat, lon: finalLon };
+  assertValidGeoCoordinates(result.lat, result.lon, 'projection-core');
+  return resultToGeoPoint(result);
 }
 
 // Simplified version for client-side use without DTM
@@ -1081,39 +825,25 @@ export function pixelToGeoSimple(
     imageWidth,
     imageHeight
   );
-  const normalizedX = (normalizedPixel.x / imageWidth) - 0.5;
-  const normalizedY = (normalizedPixel.y / imageHeight) - 0.5;
-  
-  const hFov = cameraParams.fov * Math.PI / 180;
-  const vFov = hFov * imageHeight / imageWidth;
-  
-  const angleX = normalizedX * hFov;
-  const angleY = normalizedY * vFov;
-  
-  const pitch = dronePosition.pitch * Math.PI / 180;
-  const yaw = dronePosition.yaw * Math.PI / 180;
-  
-  const groundDistance = dronePosition.altitude / Math.cos(pitch + angleY);
-  const offsetX = groundDistance * Math.tan(angleX);
-  const offsetY = groundDistance * Math.sin(pitch + angleY);
-  
-  const bearingRad = yaw;
-  const rotatedOffsetX = offsetX * Math.sin(bearingRad) + offsetY * Math.cos(bearingRad);
-  const rotatedOffsetY = offsetX * Math.cos(bearingRad) - offsetY * Math.sin(bearingRad);
-  
-  const metersPerDegreeLat = 111111;
-  const metersPerDegreeLon = 111111 * Math.cos(dronePosition.lat * Math.PI / 180);
-  
-  const latOffset = rotatedOffsetY / metersPerDegreeLat;
-  const lonOffset = rotatedOffsetX / metersPerDegreeLon;
-
-  const resultLat = dronePosition.lat + latOffset;
-  const resultLon = dronePosition.lon + lonOffset;
-
-  // SAFETY: Validate coordinates before returning (throws on invalid)
-  assertValidGeoCoordinates(resultLat, resultLon, 'simplified');
-
-  return { lat: resultLat, lon: resultLon };
+  const result = projectPixelToGeoAtHeight(
+    {
+      pixel: normalizedPixel,
+      imageWidth,
+      imageHeight,
+      fieldOfViewDeg: cameraParams.fov,
+      gimbalPitchDeg: dronePosition.pitch,
+      gimbalRollDeg: dronePosition.roll,
+      gimbalYawDeg: dronePosition.yaw,
+      droneLat: dronePosition.lat,
+      droneLon: dronePosition.lon,
+    },
+    dronePosition.altitude
+  );
+  if (!result) {
+    throw new Error('Simplified projection failed validation or ray was near the horizon');
+  }
+  assertValidGeoCoordinates(result.lat, result.lon, 'simplified');
+  return { lat: result.lat, lon: result.lon };
 }
 
 export function boundingBoxToGeoPolygon(
@@ -1261,95 +991,6 @@ export async function pixelToGeoWithDSM(
   asset: GeoAssetParams,
   pixel: PixelPoint
 ): Promise<GeoPoint | null> {
-  const validation = validateGeoParams(asset);
-  if (!validation.valid) {
-    return null;
-  }
-
-  const metadata =
-    asset.metadata && typeof asset.metadata === 'object'
-      ? (asset.metadata as Record<string, unknown>)
-      : {};
-  const resolvedDimensions = resolveProjectionImageDimensions(
-    asset.imageWidth,
-    asset.imageHeight,
-    metadata
-  );
-  const resolvedAltitude = resolveProjectionAltitude(asset.altitude, metadata);
-  if (
-    resolvedDimensions.imageWidth == null ||
-    resolvedDimensions.imageHeight == null ||
-    resolvedAltitude == null
-  ) {
-    return null;
-  }
-  const normalizedPixel = normalizePixelPoint(
-    pixel,
-    resolvedDimensions.imageWidth,
-    resolvedDimensions.imageHeight
-  );
-  const precisionStatus = getPrecisionMetadataStatus(metadata);
-  const resolvedYaw = resolveProjectionYaw(asset.gimbalYaw, metadata);
-  const opticalCenter = resolveProjectionOpticalCenter(
-    resolvedDimensions.imageWidth,
-    resolvedDimensions.imageHeight,
-    metadata
-  );
-
-  // Avoid Matrice-specific defaults when calibration/LRF metadata is absent.
-  if (!precisionStatus.hasCalibration && !precisionStatus.hasLRF) {
-    try {
-      const standardResult = pixelToGeo(
-        {
-          gpsLatitude: asset.gpsLatitude!,
-          gpsLongitude: asset.gpsLongitude!,
-          altitude: resolvedAltitude,
-          gimbalPitch: asset.gimbalPitch ?? 0,
-          gimbalRoll: asset.gimbalRoll ?? 0,
-          gimbalYaw: resolvedYaw,
-          cameraFov: resolveProjectionCameraFov(
-            asset.cameraFov,
-            resolvedDimensions.imageWidth,
-            metadata,
-            DEFAULT_CAMERA_FOV
-          ),
-          imageWidth: resolvedDimensions.imageWidth,
-          imageHeight: resolvedDimensions.imageHeight,
-          opticalCenterX: opticalCenter.opticalCenterX,
-          opticalCenterY: opticalCenter.opticalCenterY,
-          lrfDistance: asset.lrfDistance ?? undefined,
-          lrfTargetLat: asset.lrfTargetLat ?? undefined,
-          lrfTargetLon: asset.lrfTargetLon ?? undefined,
-        },
-        normalizedPixel,
-        false
-      );
-      const geo = standardResult instanceof Promise ? await standardResult : standardResult;
-      return { lat: geo.lat, lon: geo.lon };
-    } catch {
-      return null;
-    }
-  }
-
-  const precisionParams = extractPrecisionParams({
-    ...metadata,
-    ExifImageWidth: resolvedDimensions.imageWidth,
-    ExifImageHeight: resolvedDimensions.imageHeight,
-    GpsLatitude: asset.gpsLatitude,
-    GpsLongitude: asset.gpsLongitude,
-    AbsoluteAltitude: resolvedAltitude,
-    GimbalPitchDegree: asset.gimbalPitch,
-    GimbalRollDegree: asset.gimbalRoll,
-    GimbalYawDegree: resolvedYaw,
-    LRFTargetDistance: asset.lrfDistance ?? undefined,
-    LRFTargetLat: asset.lrfTargetLat ?? undefined,
-    LRFTargetLon: asset.lrfTargetLon ?? undefined,
-  });
-
-  const result = await precisionPixelToGeo(normalizedPixel, precisionParams);
-  if (!result) {
-    return null;
-  }
-
-  return { lat: result.latitude, lon: result.longitude };
+  const result = await projectAssetThroughCore(asset, pixel);
+  return result ? resultToGeoPoint(result) : null;
 }

@@ -76,7 +76,6 @@ export interface InferenceResult {
   tiling?: InferenceTilingSummary;
 }
 
-const DEFAULT_ALTITUDE = 100;
 const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_YOLO_GPU_LOCK_TTL_MS = 30 * 60 * 1000;
 
@@ -385,7 +384,7 @@ export async function processInferenceJob(options: {
             {
               gpsLatitude: asset.gpsLatitude,
               gpsLongitude: asset.gpsLongitude,
-              altitude: asset.altitude ?? DEFAULT_ALTITUDE,
+              altitude: asset.altitude,
               gimbalPitch: asset.gimbalPitch ?? 0,
               gimbalRoll: asset.gimbalRoll ?? 0,
               gimbalYaw: asset.gimbalYaw ?? 0,
@@ -425,6 +424,7 @@ export async function processInferenceJob(options: {
                 modelId,
                 modelName,
                 geoMethod: resolved.method,
+                geoQualityFlags: resolved.qualityFlags,
                 backend: response.backend,
                 ...(response.tiling ? { tiling: response.tiling } : {}),
               } as unknown as Prisma.InputJsonObject,
