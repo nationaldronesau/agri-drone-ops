@@ -938,19 +938,35 @@ function polygonArea(polygon: [number, number][]): number {
   return Math.abs(twiceArea) / 2;
 }
 
+function polygonBounds(
+  polygon: [number, number][]
+): [number, number, number, number] {
+  // Loop instead of Math.min(...points): spread arguments overflow the call
+  // stack on very detailed polygons.
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [x, y] of polygon) {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  return [minX, minY, maxX, maxY];
+}
+
 function polygonOverlap(
   first: [number, number][],
   second: [number, number][]
 ): { iou: number; containment: number } {
   if (first.length < 3 || second.length < 3) return { iou: 0, containment: 0 };
-  const firstXs = first.map((point) => point[0]);
-  const firstYs = first.map((point) => point[1]);
-  const secondXs = second.map((point) => point[0]);
-  const secondYs = second.map((point) => point[1]);
-  const left = Math.max(Math.min(...firstXs), Math.min(...secondXs));
-  const right = Math.min(Math.max(...firstXs), Math.max(...secondXs));
-  const top = Math.max(Math.min(...firstYs), Math.min(...secondYs));
-  const bottom = Math.min(Math.max(...firstYs), Math.max(...secondYs));
+  const firstBounds = polygonBounds(first);
+  const secondBounds = polygonBounds(second);
+  const left = Math.max(firstBounds[0], secondBounds[0]);
+  const right = Math.min(firstBounds[2], secondBounds[2]);
+  const top = Math.max(firstBounds[1], secondBounds[1]);
+  const bottom = Math.min(firstBounds[3], secondBounds[3]);
   const width = right - left;
   const height = bottom - top;
   if (width <= 0 || height <= 0) return { iou: 0, containment: 0 };
@@ -996,13 +1012,26 @@ function dedupeDetectionsByPolygon(
   greenFraction: number;
   index: number;
 }> {
-  const selected: typeof detections = [];
   const ranked = [...detections].sort((left, right) =>
     right.detection.confidence - left.detection.confidence || left.index - right.index
   );
+  const bounds = new Map(
+    ranked.map((entry) => [entry, polygonBounds(entry.detection.polygon)])
+  );
+  const selected: typeof detections = [];
 
   for (const candidate of ranked) {
+    const candidateBounds = bounds.get(candidate)!;
     const duplicate = selected.some((existing) => {
+      const existingBounds = bounds.get(existing)!;
+      if (
+        candidateBounds[2] <= existingBounds[0] ||
+        existingBounds[2] <= candidateBounds[0] ||
+        candidateBounds[3] <= existingBounds[1] ||
+        existingBounds[3] <= candidateBounds[1]
+      ) {
+        return false;
+      }
       const overlap = polygonOverlap(candidate.detection.polygon, existing.detection.polygon);
       return overlap.iou >= 0.5 || overlap.containment >= 0.7;
     });
@@ -1042,6 +1071,20 @@ export class Sam3BatchV2Service {
     const imageHeight = metadata.height ?? 0;
     if (imageWidth <= 0 || imageHeight <= 0) return 0;
 
+    if (
+      (sourceWidth != null && sourceWidth !== imageWidth) ||
+      (sourceHeight != null && sourceHeight !== imageHeight)
+    ) {
+      // Calibration measures true image pixels; concept creation currently
+      // submits the raw exemplar boxes. When these dimensions differ the two
+      // stages see different pixels — a pre-existing inconsistency worth
+      // surfacing, not silently absorbing.
+      console.warn(
+        `[SAM3 V2] Exemplar source dimensions (${sourceWidth}x${sourceHeight}) ` +
+          `differ from decoded source image (${imageWidth}x${imageHeight}); ` +
+          'vegetation calibration uses decoded-image coordinates.'
+      );
+    }
     const scaled = scaleExemplarBoxes({
       exemplars,
       sourceWidth,
