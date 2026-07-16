@@ -22,6 +22,12 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { InteractiveDetectionOverlay } from '@/components/training/InteractiveDetectionOverlay';
+import {
+  calculatePolygonBoxIoU,
+  GEOMETRY_MISMATCH_IOU_THRESHOLD,
+  getValidPolygon,
+} from '@/lib/utils/detection-geometry';
+import { isReviewMaskOverlayEnabled } from '@/lib/utils/feature-flags';
 
 type ReviewStatus = 'pending' | 'accepted' | 'rejected';
 
@@ -78,6 +84,7 @@ interface ReviewViewerProps {
 }
 
 export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewViewerProps) {
+  const maskOverlayEnabled = isReviewMaskOverlayEnabled();
   const groupedAssets = useMemo(() => {
     const map = new Map<string, { asset: ReviewItemAsset; items: ReviewItem[] }>();
     for (const asset of assets) {
@@ -107,7 +114,7 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
   }, [currentIndex, groupedAssets.length]);
 
   const currentGroup = groupedAssets[currentIndex];
-  const currentItems = currentGroup?.items || [];
+  const currentItems = useMemo(() => currentGroup?.items || [], [currentGroup]);
 
   useEffect(() => {
     setZoomLevel(1);
@@ -135,15 +142,40 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
     return Array.from(unique.values()).sort();
   }, [items]);
 
+  const geometryInsights = useMemo(() => {
+    const insights = new Map<
+      string,
+      { polygon: [number, number][] | null; bboxPolygonIou: number | null }
+    >();
+    if (!maskOverlayEnabled) return insights;
+
+    for (const item of currentItems) {
+      const polygon = getValidPolygon(item.geometry.polygon);
+      insights.set(item.id, {
+        polygon,
+        bboxPolygonIou: polygon
+          ? calculatePolygonBoxIoU(item.geometry.bbox, polygon)
+          : null,
+      });
+    }
+
+    return insights;
+  }, [currentItems, maskOverlayEnabled]);
+
   const overlayItems = currentItems
-    .filter((item) => item.geometry.bbox)
-    .map((item) => ({
-      id: item.id,
-      status: item.status.toUpperCase() as 'PENDING' | 'ACCEPTED' | 'REJECTED',
-      confidence: item.confidence,
-      weedType: item.className,
-      bbox: item.geometry.bbox as number[],
-    }));
+    .filter((item) => item.geometry.bbox || geometryInsights.get(item.id)?.polygon)
+    .map((item) => {
+      const geometry = geometryInsights.get(item.id);
+      return {
+        id: item.id,
+        status: item.status.toUpperCase() as 'PENDING' | 'ACCEPTED' | 'REJECTED',
+        confidence: item.confidence,
+        weedType: item.className,
+        bbox: item.geometry.bbox,
+        polygon: geometry?.polygon ?? undefined,
+        bboxPolygonIou: geometry?.bboxPolygonIou ?? null,
+      };
+    });
 
   const currentAssetGeoCount = currentItems.filter(
     (item) =>
@@ -211,6 +243,7 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
               zoomLevel={zoomLevel}
               panOffset={panOffset}
               onPanOffsetChange={setPanOffset}
+              showMaskOverlay={maskOverlayEnabled}
             />
           ) : (
             <ReviewGeoMap items={items} selectedAssetId={currentGroup.asset.id} />
@@ -284,6 +317,13 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
             {currentItems.map((item) => {
               const warningText = item.warnings.join('; ');
               const isSelected = selectedItemId === item.id;
+              const geometry = geometryInsights.get(item.id);
+              const isBoxOnly =
+                maskOverlayEnabled && Boolean(item.geometry.bbox) && !geometry?.polygon;
+              const hasGeometryMismatch =
+                maskOverlayEnabled &&
+                geometry?.bboxPolygonIou != null &&
+                geometry.bboxPolygonIou < GEOMETRY_MISMATCH_IOU_THRESHOLD;
               return (
                 <div
                   key={item.id}
@@ -310,6 +350,27 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
                       <div className="truncate text-xs text-gray-500" title={`${Math.round(item.confidence * 100)}% confidence · ${item.source}`}>
                         {Math.round(item.confidence * 100)}% confidence · {item.source}
                       </div>
+                      {maskOverlayEnabled && (isBoxOnly || hasGeometryMismatch) && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {isBoxOnly && (
+                            <span
+                              className="rounded-full border border-gray-300 bg-gray-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-600"
+                              title="No stored polygon is available for this suggestion."
+                            >
+                              Box-only
+                            </span>
+                          )}
+                          {hasGeometryMismatch && geometry?.bboxPolygonIou != null && (
+                            <span
+                              className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800"
+                              title={`Stored bbox vs polygon bounding rect IoU: ${geometry.bboxPolygonIou.toFixed(3)}`}
+                            >
+                              <AlertTriangle className="h-3 w-3" />
+                              Geometry mismatch · IoU {geometry.bboxPolygonIou.toFixed(2)}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
                     <div className="flex flex-shrink-0 items-center gap-2">
                       {item.status === 'accepted' && <CheckCircle2 className="h-4 w-4 text-green-500" />}
