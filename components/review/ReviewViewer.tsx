@@ -26,6 +26,7 @@ import {
   calculatePolygonBoxIoU,
   GEOMETRY_MISMATCH_IOU_THRESHOLD,
   getValidPolygon,
+  isSyntheticRectanglePolygon,
 } from '@/lib/utils/detection-geometry';
 import { isReviewMaskOverlayEnabled } from '@/lib/utils/feature-flags';
 
@@ -150,7 +151,11 @@ export function ReviewViewer({ items, assets = [], onAction, onEdit }: ReviewVie
     if (!maskOverlayEnabled) return insights;
 
     for (const item of currentItems) {
-      const polygon = getValidPolygon(item.geometry.polygon);
+      const rawPolygon = getValidPolygon(item.geometry.polygon);
+      // Rectangles synthesized from bboxes upstream are not real masks;
+      // treat them as box-only so provenance stays honest.
+      const polygon =
+        rawPolygon && !isSyntheticRectanglePolygon(rawPolygon) ? rawPolygon : null;
       insights.set(item.id, {
         polygon,
         bboxPolygonIou: polygon

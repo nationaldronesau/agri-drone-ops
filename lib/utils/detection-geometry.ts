@@ -2,8 +2,13 @@ export type CornerBox = [number, number, number, number];
 export type PolygonPoint = [number, number];
 export const GEOMETRY_MISMATCH_IOU_THRESHOLD = 0.85;
 
-function isFinitePoint(point: number[]): point is PolygonPoint {
-  return point.length >= 2 && Number.isFinite(point[0]) && Number.isFinite(point[1]);
+function isFinitePoint(point: unknown): point is PolygonPoint {
+  return (
+    Array.isArray(point) &&
+    point.length >= 2 &&
+    Number.isFinite(point[0]) &&
+    Number.isFinite(point[1])
+  );
 }
 
 export function getValidPolygon(polygon: number[][] | undefined): PolygonPoint[] | null {
@@ -18,6 +23,30 @@ export function getValidPolygon(polygon: number[][] | undefined): PolygonPoint[]
   }, 0);
 
   return Math.abs(signedDoubleArea) > Number.EPSILON ? points : null;
+}
+
+/**
+ * Upstream fallbacks (SAM3 orchestrator, batch normalizePolygon) synthesize
+ * rectangular "polygons" straight from bounding boxes. Rendering those as
+ * masks would misrepresent box-only data as genuine segmentation, so the
+ * review UI treats near-perfect rectangles with few vertices as box-only.
+ */
+export function isSyntheticRectanglePolygon(polygon: PolygonPoint[]): boolean {
+  const distinct = new Set(polygon.map(([x, y]) => `${x},${y}`));
+  if (distinct.size > 5) return false;
+
+  const rect = getPolygonBoundingRect(polygon);
+  if (!rect) return false;
+  const rectArea = (rect[2] - rect[0]) * (rect[3] - rect[1]);
+  if (rectArea <= 0) return false;
+
+  const signedDoubleArea = polygon.reduce((area, [x, y], index) => {
+    const [nextX, nextY] = polygon[(index + 1) % polygon.length];
+    return area + x * nextY - nextX * y;
+  }, 0);
+  const polygonArea = Math.abs(signedDoubleArea) / 2;
+
+  return polygonArea / rectArea >= 0.995;
 }
 
 export function getPolygonBoundingRect(polygon: number[][] | undefined): CornerBox | null {
