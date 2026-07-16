@@ -26,6 +26,7 @@
     "worker:temporal": "tsx -r tsconfig-paths/register workers/temporal-worker.ts",
     "worker:temporal:dev": "tsx -r tsconfig-paths/register --env-file=.env workers/temporal-worker.ts",
     "calibrate:camera-profile": "tsx -r tsconfig-paths/register scripts/calibrate-camera-profile.ts",
+    "georef:harness": "node --import tsx -r tsconfig-paths/register scripts/georef-harness.ts",
     "feature:dataset-versions": "tsx -r tsconfig-paths/register scripts/feature-dataset-versions.ts",
     "migrate:model-weights": "tsx -r tsconfig-paths/register scripts/migrate-model-weights.ts",
     "sam3:replay": "tsx -r tsconfig-paths/register scripts/sam3-replay.ts",
