@@ -232,17 +232,6 @@ function intersectAtHeight(
   return { east, north, centreEast, centreNorth };
 }
 
-function haversineDistanceM(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const radians = Math.PI / 180;
-  const earthRadiusM = 6371000;
-  const dLat = (lat2 - lat1) * radians;
-  const dLon = (lon2 - lon1) * radians;
-  const value =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * radians) * Math.cos(lat2 * radians) * Math.sin(dLon / 2) ** 2;
-  return earthRadiusM * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
-}
-
 function resultAtHeight(
   input: ProjectionCoreInput,
   intrinsics: ProjectionIntrinsics,
@@ -289,17 +278,19 @@ function resultAtHeight(
     return null;
   }
 
-  if (isPositiveFinite(input.maxOffsetM)) {
-    const distanceM = haversineDistanceM(input.droneLat, input.droneLon, lat, lon);
-    if (!Number.isFinite(distanceM)) {
-      return null;
-    }
-    if (distanceM > input.maxOffsetM) {
-      const scale = input.maxOffsetM / distanceM;
-      lat = input.droneLat + (lat - input.droneLat) * scale;
-      lon = input.droneLon + (lon - input.droneLon) * scale;
-      flags.push('clipped_offset');
-    }
+  const offsetFromCentreM = Math.hypot(
+    offsets.east - offsets.centreEast,
+    offsets.north - offsets.centreNorth
+  );
+  if (!Number.isFinite(offsetFromCentreM)) {
+    return null;
+  }
+  if (isPositiveFinite(input.maxOffsetM) && offsetFromCentreM > input.maxOffsetM) {
+    console.warn(
+      `[GEO] OFFSET_CAP: pixel ground offset ${offsetFromCentreM.toFixed(3)}m exceeds ` +
+        `${input.maxOffsetM.toFixed(3)}m; rejecting projection`
+    );
+    return null;
   }
 
   if (!validateProjectedCoordinates(lat, lon)) {
@@ -310,10 +301,7 @@ function resultAtHeight(
     lat,
     lon,
     method,
-    offsetFromCentreM: Math.hypot(
-      offsets.east - offsets.centreEast,
-      offsets.north - offsets.centreNorth
-    ),
+    offsetFromCentreM,
     qualityFlags: uniqueFlags(flags),
   };
 }
@@ -428,6 +416,17 @@ export async function projectPixelToGeo(
   const terrainElevation = input.terrainElevation ?? getTerrainElevation;
 
   if (isPositiveFinite(input.relativeAltitudeM)) {
+    if (!isFiniteNumber(input.takeoffTerrainElevationM)) {
+      flags.push('takeoff_reference_unknown');
+      return resultAtHeight(
+        input,
+        intrinsics,
+        input.relativeAltitudeM,
+        'relative_altitude_dem',
+        flags
+      );
+    }
+
     try {
       const initial = resultAtHeight(
         input,
@@ -439,11 +438,9 @@ export async function projectPixelToGeo(
       if (!initial) {
         return null;
       }
-      const takeoffElevation = isFiniteNumber(input.takeoffTerrainElevationM)
-        ? input.takeoffTerrainElevationM
-        : await terrainElevation(input.droneLat, input.droneLon);
       const targetElevation = await terrainElevation(initial.lat, initial.lon);
-      const finalHeight = input.relativeAltitudeM + takeoffElevation - targetElevation;
+      const finalHeight =
+        input.relativeAltitudeM + input.takeoffTerrainElevationM - targetElevation;
       return resultAtHeight(
         input,
         intrinsics,

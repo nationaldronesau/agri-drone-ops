@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/services/elevation', () => ({
   getTerrainElevation: vi.fn(async () => 0),
@@ -120,6 +120,11 @@ function expectWithinMillimetre(actual: number, expected: number): void {
   expect(Math.abs(actual - expected)).toBeLessThanOrEqual(0.001);
 }
 
+beforeEach(() => {
+  vi.mocked(getTerrainElevation).mockReset();
+  vi.mocked(getTerrainElevation).mockResolvedValue(0);
+});
+
 describe('projection-core golden fixtures', () => {
   it.each(goldenFixtures)(
     'fixture $id matches the independent reference and golden offsets to +/-0.001 m',
@@ -227,6 +232,33 @@ describe('projection math bug fixes', () => {
 });
 
 describe('projection-core production guardrails', () => {
+  it('forwards LRF target coordinates through the precision compatibility wrapper', async () => {
+    const droneLat = -26;
+    const droneLon = 153;
+    const targetLon =
+      droneLon + 3 / (111111 * Math.cos((droneLat * Math.PI) / 180));
+    const result = await precisionPixelToGeo(
+      { x: 1000, y: 750 },
+      {
+        ...currentLrfParams,
+        droneLatitude: droneLat,
+        droneLongitude: droneLon,
+        lrfTargetLatitude: droneLat,
+        lrfTargetLongitude: targetLon,
+      }
+    );
+
+    expect(result).not.toBeNull();
+    const eastFromTarget =
+      (result!.longitude - targetLon) *
+      111111 *
+      Math.cos((droneLat * Math.PI) / 180);
+    const northFromTarget = (result!.latitude - droneLat) * 111111;
+    expectWithinMillimetre(eastFromTarget, 0);
+    expectWithinMillimetre(northFromTarget, 0);
+    expect(result!.qualityFlags).toContain('lrf_anchored');
+  });
+
   it('anchors LRF pixel offsets at the gated DJI target', async () => {
     const droneLat = -26;
     const droneLon = 153;
@@ -371,26 +403,157 @@ describe('projection-core production guardrails', () => {
     expect(north).toBeCloseTo(-10, 3);
   });
 
-  it('clips unsafe offsets and records the safety flag', async () => {
+  it('rejects an over-cap LRF pixel offset without relocating its far anchor', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const droneLat = -26;
+    const droneLon = 153;
+    const lrfHeightM = 100;
+    const pitchDeg = -11.3;
+    const lrfDistanceM = lrfHeightM / Math.sin((Math.abs(pitchDeg) * Math.PI) / 180);
+    const targetLat = droneLat + 500 / 111111;
     const result = await projectPixelToGeo({
-      pixel: { x: 2000, y: 750 },
+      pixel: { x: 1100, y: 750 },
+      imageWidth: 2000,
+      imageHeight: 1500,
+      intrinsics: { f: 1000, cx: 1000, cy: 750 },
+      gimbalPitchDeg: pitchDeg,
+      gimbalRollDeg: 0,
+      gimbalYawDeg: 0,
+      droneLat,
+      droneLon,
+      lrfDistanceM,
+      lrfTargetLat: targetLat,
+      lrfTargetLon: droneLon,
+      maxOffsetM: 20,
+    });
+
+    expect(result).toBeNull();
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('[GEO] OFFSET_CAP:'));
+
+    const nadir = await projectPixelToGeo({
+      pixel: { x: 1100, y: 750 },
       imageWidth: 2000,
       imageHeight: 1500,
       intrinsics: { f: 1000, cx: 1000, cy: 750 },
       gimbalPitchDeg: -90,
       gimbalRollDeg: 0,
       gimbalYawDeg: 0,
-      droneLat: -26,
-      droneLon: 153,
+      droneLat,
+      droneLon,
       heightAboveGroundM: 100,
       maxOffsetM: 20,
     });
 
+    expect(nadir).not.toBeNull();
+    expect(nadir!.offsetFromCentreM).toBeCloseTo(10, 6);
+    warning.mockRestore();
+  });
+
+  it('uses relative altitude directly and never queries terrain without a takeoff reference', async () => {
+    const terrain = vi.fn(async () => 999);
+    const result = await projectPixelToGeo({
+      pixel: { x: 1000, y: 750 },
+      imageWidth: 2000,
+      imageHeight: 1500,
+      intrinsics: { f: 1000, cx: 1000, cy: 750 },
+      gimbalPitchDeg: -45,
+      gimbalRollDeg: 0,
+      gimbalYawDeg: 0,
+      droneLat: -26,
+      droneLon: 153,
+      relativeAltitudeM: 100,
+      terrainElevation: terrain,
+    });
+
     expect(result).not.toBeNull();
-    expect(result!.qualityFlags).toContain('clipped_offset');
-    const east =
-      (result!.lon - 153) * 111111 * Math.cos((-26 * Math.PI) / 180);
-    expect(east).toBeCloseTo(20, 1);
+    expect((result!.lat + 26) * 111111).toBeCloseTo(100, 3);
+    expect(result!.qualityFlags).toContain('takeoff_reference_unknown');
+    expect(terrain).not.toHaveBeenCalled();
+  });
+
+  it('applies relative-altitude terrain correction when takeoff elevation is explicit', async () => {
+    const terrain = vi.fn(async () => 20);
+    const result = await projectPixelToGeo({
+      pixel: { x: 1000, y: 750 },
+      imageWidth: 2000,
+      imageHeight: 1500,
+      intrinsics: { f: 1000, cx: 1000, cy: 750 },
+      gimbalPitchDeg: -45,
+      gimbalRollDeg: 0,
+      gimbalYawDeg: 0,
+      droneLat: -26,
+      droneLon: 153,
+      relativeAltitudeM: 100,
+      takeoffTerrainElevationM: 50,
+      terrainElevation: terrain,
+    });
+
+    expect(result).not.toBeNull();
+    expect((result!.lat + 26) * 111111).toBeCloseTo(130, 3);
+    expect(result!.qualityFlags).not.toContain('takeoff_reference_unknown');
+    expect(terrain).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies GeoAltitudeScale to the absolute-altitude adapter path', async () => {
+    const result = await computeExportProjectionGeo(
+      {
+        gpsLatitude: -26,
+        gpsLongitude: 153,
+        altitude: null,
+        gimbalPitch: -45,
+        gimbalRoll: 0,
+        gimbalYaw: 0,
+        imageWidth: 2000,
+        imageHeight: 1500,
+        metadata: {
+          AbsoluteAltitude: 200,
+          GeoAltitudeScale: 1.1,
+          CalibratedFocalLength: 1000,
+          CalibratedOpticalCenterX: 1000,
+          CalibratedOpticalCenterY: 750,
+        },
+      },
+      { x: 1000, y: 750 }
+    );
+
+    expect(result).not.toBeNull();
+    // 200 * 1.1 absolute - 30 m geoid - 0 m mocked terrain = 190 m AGL.
+    expect((result!.lat + 26) * 111111).toBeCloseTo(190, 3);
+    expect(result!.method).toBe('absolute_altitude_geoid_dem');
+  });
+
+  it('uses scaled-FOV intrinsics instead of calibrated focal length when GeoFovScale is valid', async () => {
+    const calibratedFocalLength = 2000;
+    const baseFovDeg =
+      (2 * Math.atan(2000 / (2 * calibratedFocalLength)) * 180) / Math.PI;
+    const scaledFovDeg = baseFovDeg * 1.1;
+    const fovDerivedFocalLength =
+      2000 / (2 * Math.tan((scaledFovDeg * Math.PI) / 360));
+    const expectedOffsetM = (200 / fovDerivedFocalLength) * 100;
+    const result = await computeExportProjectionGeo(
+      {
+        gpsLatitude: -26,
+        gpsLongitude: 153,
+        altitude: 100,
+        gimbalPitch: -90,
+        gimbalRoll: 0,
+        gimbalYaw: 0,
+        imageWidth: 2000,
+        imageHeight: 1500,
+        metadata: {
+          GeoFovScale: 1.1,
+          CalibratedFocalLength: calibratedFocalLength,
+          CalibratedOpticalCenterX: 1000,
+          CalibratedOpticalCenterY: 750,
+        },
+      },
+      { x: 1200, y: 750 }
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.offsetFromCentreM).toBeCloseTo(expectedOffsetM, 6);
+    expect(result!.offsetFromCentreM).not.toBeCloseTo(10, 3);
+    expect(result!.qualityFlags).toContain('fov_intrinsics');
   });
 
   it('applies the final absolute-altitude distance before a convergence break', async () => {

@@ -547,8 +547,12 @@ async function projectAssetThroughCore(
   const opticalCenter = resolveProjectionOpticalCenter(width, height, metadata);
   const precisionStatus = getPrecisionMetadataStatus(metadata);
   const calibratedFocalLength = readMetadataNumber(metadata, CALIBRATED_FOCAL_META_KEYS);
+  const fovScale = readMetadataScale(metadata, FOV_SCALE_META_KEYS, 0.5, 1.5);
+  const altitudeScale = readMetadataScale(metadata, ALTITUDE_SCALE_META_KEYS, 0.5, 1.5);
   const relativeAltitude = readMetadataNumber(metadata, RELATIVE_ALTITUDE_META_KEYS);
   const absoluteAltitude = readMetadataNumber(metadata, ABSOLUTE_ALTITUDE_META_KEYS);
+  const scaledAbsoluteAltitude =
+    absoluteAltitude != null ? absoluteAltitude * (altitudeScale ?? 1) : null;
   const lrfTargetElevation = readMetadataNumber(metadata, [
     'LRFTargetAlt',
     'drone-dji:LRFTargetAlt',
@@ -564,6 +568,10 @@ async function projectAssetThroughCore(
   };
   const hasPlausibleLrf = hasPlausibleLrfTarget(lrfAsset);
   const hasTypedAltitude = isPositiveFinite(relativeAltitude) || isPositiveFinite(absoluteAltitude);
+  const projectionAltitudeForCap =
+    !isPositiveFinite(relativeAltitude) && isPositiveFinite(scaledAbsoluteAltitude)
+      ? scaledAbsoluteAltitude
+      : resolvedAltitude;
   const qualityFlags: string[] = [];
   if (
     !precisionStatus.hasCalibration &&
@@ -575,7 +583,7 @@ async function projectAssetThroughCore(
   }
 
   const maxOffsetMeters = computeProjectionMaxOffsetMeters(
-    resolvedAltitude ?? fallbackAltitude,
+    projectionAltitudeForCap ?? fallbackAltitude,
     cameraFov,
     width,
     height
@@ -587,11 +595,16 @@ async function projectAssetThroughCore(
     imageHeight: height,
     intrinsics:
       precisionStatus.hasCalibration && calibratedFocalLength != null
-        ? {
-            f: calibratedFocalLength,
-            cx: opticalCenter.opticalCenterX,
-            cy: opticalCenter.opticalCenterY,
-          }
+        ? fovScale != null
+          ? {
+              cx: opticalCenter.opticalCenterX,
+              cy: opticalCenter.opticalCenterY,
+            }
+          : {
+              f: calibratedFocalLength,
+              cx: opticalCenter.opticalCenterX,
+              cy: opticalCenter.opticalCenterY,
+            }
         : undefined,
     fieldOfViewDeg: cameraFov,
     gimbalPitchDeg: asset.gimbalPitch ?? 0,
@@ -607,7 +620,7 @@ async function projectAssetThroughCore(
       : undefined,
     absoluteAltitudeM:
       !isPositiveFinite(relativeAltitude) && isPositiveFinite(absoluteAltitude)
-        ? absoluteAltitude
+        ? scaledAbsoluteAltitude
         : undefined,
     heightAboveGroundM:
       !hasTypedAltitude && isPositiveFinite(resolvedAltitude)
@@ -619,13 +632,18 @@ async function projectAssetThroughCore(
     qualityFlags,
   });
 
+  // A null projection is an intentional safety rejection. Detection/export
+  // callers already skip or flag it; never substitute or relocate a coordinate.
   if (!result || !isValidGeoPoint(result.lat, result.lon)) {
     return null;
   }
   return result;
 }
 
-/** Export/review projection. Uses the exact same adapter as detection resolution. */
+/**
+ * Export/review projection. Uses the exact same adapter as detection resolution;
+ * null means the coordinate was rejected and must be skipped/flagged by the caller.
+ */
 export async function computeExportProjectionGeo(
   asset: GeoAssetParams,
   pixel: PixelPoint,
@@ -733,6 +751,7 @@ export async function resolveGeoCoordinates(
   asset: GeoAssetParams,
   pixel: PixelPoint
 ): Promise<GeoResolution | null> {
+  // Detection callers treat null as a skipped/flagged coordinate.
   const result = await projectAssetThroughCore(asset, pixel);
   if (!result) return null;
   return {
@@ -991,6 +1010,7 @@ export async function pixelToGeoWithDSM(
   asset: GeoAssetParams,
   pixel: PixelPoint
 ): Promise<GeoPoint | null> {
+  // Export callers treat null as a skipped/flagged coordinate.
   const result = await projectAssetThroughCore(asset, pixel);
   return result ? resultToGeoPoint(result) : null;
 }

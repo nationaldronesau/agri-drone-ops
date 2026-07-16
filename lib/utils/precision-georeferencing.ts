@@ -184,6 +184,8 @@ export async function precisionPixelToGeo(
     droneLat: params.droneLatitude,
     droneLon: params.droneLongitude,
     lrfDistanceM: params.lrfTargetDistance,
+    lrfTargetLat: params.lrfTargetLatitude,
+    lrfTargetLon: params.lrfTargetLongitude,
     relativeAltitudeM: params.relativeAltitude,
     absoluteAltitudeM: params.absoluteAltitude ?? params.droneAltitude,
     lrfTargetElevationM: params.lrfTargetAltitude,
