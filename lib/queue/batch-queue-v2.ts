@@ -22,6 +22,7 @@ export interface Sam3BatchV2JobData {
   sourceAssetId?: string;
   textPrompt?: string;
   assetIds: string[];
+  vegetationPrior?: boolean;
 }
 
 export interface Sam3BatchV2JobResult {

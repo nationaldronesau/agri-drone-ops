@@ -37,6 +37,7 @@ interface BatchV2Request {
   sourceAssetId?: string;
   assetIds?: string[];
   textPrompt?: string;
+  vegetationPrior?: boolean;
 }
 
 const PROJECT_ID_REGEX = /^c[a-z0-9]{24,}$/i;
@@ -104,6 +105,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (!MODE_SET.has(body.mode)) {
     return NextResponse.json(
       { success: false, error: 'mode must be visual_crop_match or concept_propagation' },
+      { status: 400 }
+    );
+  }
+
+  if (body.vegetationPrior != null && typeof body.vegetationPrior !== 'boolean') {
+    return NextResponse.json(
+      { success: false, error: 'vegetationPrior must be a boolean' },
       { status: 400 }
     );
   }
@@ -220,6 +228,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const reviewProfile = resolveBatchV2ReviewProfileForMode(effectiveMode);
   const effectiveExemplarCrops =
     effectiveMode === 'visual_crop_match' ? body.exemplarCrops : undefined;
+  const vegetationPrior = body.vegetationPrior ?? true;
   const exemplarsJson = body.exemplars as unknown as Prisma.InputJsonValue;
   const assetIdsJson = assetIds as unknown as Prisma.InputJsonValue;
   const emptyStageLogJson = [] as unknown as Prisma.InputJsonValue;
@@ -281,6 +290,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           sourceAssetId: body.sourceAssetId,
           textPrompt: body.textPrompt,
           assetIds: assetChunks[index],
+          vegetationPrior,
         });
       }
     } catch (error) {
@@ -353,6 +363,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       sourceAssetId: body.sourceAssetId,
       textPrompt: body.textPrompt,
       assetIds,
+      vegetationPrior,
     });
   } catch (error) {
     await prisma.batchJob.update({

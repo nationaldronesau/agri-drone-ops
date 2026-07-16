@@ -1,4 +1,5 @@
 import type { Prisma } from '@prisma/client';
+import sharp from 'sharp';
 import prisma from '@/lib/db';
 import type {
   Sam3BatchV2JobData,
@@ -21,6 +22,12 @@ import {
 } from '@/lib/utils/sam3-batch-jobs';
 import { scaleExemplarBoxes, type BoxCoordinate } from '@/lib/utils/exemplar-scaling';
 import { fetchImageSafely } from '@/lib/utils/security';
+import {
+  greenFraction,
+  greenFractionInPolygon,
+  greenestBlobCentre,
+  pointInPolygon,
+} from '@/lib/utils/vegetation';
 
 const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
@@ -32,6 +39,8 @@ export const SAM3_BATCH_V2_GPU_LOCK_RETRY_INTERVAL_MS = 5000;
 export const SAM3_BATCH_V2_GPU_LOCK_RETRY_TIMEOUT_MS = 60000;
 export const SAM3_BATCH_V2_GPU_MEMORY_THRESHOLD_MB = 12 * 1024;
 export const SAM3_BATCH_V2_MODEL_OVERHEAD_MB = 4096;
+export const SAM3_BATCH_V2_VEGETATION_FLOOR = 0.15;
+export const SAM3_BATCH_V2_VEGETATION_ALARM_MEDIAN = 0.3;
 
 const parseOptionalNumber = (value: string | undefined): number | undefined => {
   if (!value) return undefined;
@@ -44,6 +53,14 @@ const parseOptionalInt = (value: string | undefined): number | undefined => {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : undefined;
 };
+
+export function resolveBatchV2VegetationPrior(
+  configured?: boolean,
+  envValue: string | undefined = process.env.SAM3_VEGETATION_PRIOR
+): boolean {
+  if (envValue?.trim().toLowerCase() === 'false') return false;
+  return configured ?? true;
+}
 
 export const SAM3_BATCH_V2_DEFAULT_SIMILARITY_THRESHOLD =
   parseOptionalNumber(process.env.SAM3_CONCEPT_SIMILARITY_THRESHOLD) ?? 0.65;
@@ -247,6 +264,16 @@ export interface Sam3BatchV2StageLogEntry {
   conceptExemplarCount?: number;
   refinementBoxCount?: number;
   refinementDetectionCount?: number;
+  vegetationPrior?: boolean;
+  exemplarGreenMedian?: number;
+  vegetationThreshold?: number;
+  vegetationGatedCandidates?: number;
+  vegetationRecenteredCandidates?: number;
+  vegetationGatedMasks?: number;
+  vegetationDeduplicatedMasks?: number;
+  maskGreenFractionP10?: number;
+  maskGreenFractionMedian?: number;
+  maskGreenFractionP90?: number;
   durationMs?: number;
   gpuMemoryMb?: number;
   estimatedMemoryMb?: number;
@@ -422,6 +449,8 @@ interface PreparedBatchContext {
   missingAssetIds: string[];
   cropCount: number;
   operatorCropCount: number;
+  vegetationPrior: boolean;
+  exemplarGreenMedian: number;
 }
 
 interface AssetInferenceResult {
@@ -441,6 +470,14 @@ interface AssetInferenceResult {
   candidateCount?: number;
   refinementBoxCount?: number;
   refinementDetectionCount?: number;
+  vegetationThreshold?: number;
+  vegetationGatedCandidates?: number;
+  vegetationRecenteredCandidates?: number;
+  vegetationGatedMasks?: number;
+  vegetationDeduplicatedMasks?: number;
+  maskGreenFractionP10?: number;
+  maskGreenFractionMedian?: number;
+  maskGreenFractionP90?: number;
 }
 
 interface ConceptRefinementResult {
@@ -448,8 +485,39 @@ interface ConceptRefinementResult {
   candidateCount: number;
   refinementBoxCount: number;
   refinementDetectionCount: number;
+  vegetationThreshold?: number;
+  vegetationGatedCandidates?: number;
+  vegetationRecenteredCandidates?: number;
+  vegetationGatedMasks?: number;
+  vegetationDeduplicatedMasks?: number;
+  maskGreenFractionP10?: number;
+  maskGreenFractionMedian?: number;
+  maskGreenFractionP90?: number;
   usedCandidateFallback?: boolean;
   backendWarning?: string;
+}
+
+interface VegetationPriorContext {
+  enabled: boolean;
+  exemplarGreenMedian: number;
+}
+
+interface VegetationCandidateResult {
+  candidates: SAM3ConceptDetection[];
+  imageWidth: number;
+  imageHeight: number;
+  threshold: number;
+  gatedCount: number;
+  recenteredCount: number;
+}
+
+interface VegetationMaskResult {
+  detections: AssetInferenceResult['detections'];
+  gatedCount: number;
+  deduplicatedCount: number;
+  p10?: number;
+  median?: number;
+  p90?: number;
 }
 
 interface ConceptExemplarRef {
@@ -827,6 +895,123 @@ function scalePolygonToOriginal(
   ] as [number, number]);
 }
 
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+}
+
+function percentile(sortedValues: number[], quantile: number): number | undefined {
+  if (sortedValues.length === 0) return undefined;
+  if (sortedValues.length === 1) return sortedValues[0];
+  const position = Math.max(0, Math.min(1, quantile)) * (sortedValues.length - 1);
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  if (lower === upper) return sortedValues[lower];
+  const weight = position - lower;
+  return sortedValues[lower] * (1 - weight) + sortedValues[upper] * weight;
+}
+
+function recenterBbox(
+  bbox: [number, number, number, number],
+  centre: [number, number],
+  imageWidth: number,
+  imageHeight: number
+): [number, number, number, number] {
+  const width = Math.min(imageWidth, Math.max(1, Math.round(bbox[2] - bbox[0])));
+  const height = Math.min(imageHeight, Math.max(1, Math.round(bbox[3] - bbox[1])));
+  const x1 = Math.max(0, Math.min(imageWidth - width, Math.round(centre[0] - width / 2)));
+  const y1 = Math.max(0, Math.min(imageHeight - height, Math.round(centre[1] - height / 2)));
+  return [x1, y1, x1 + width, y1 + height];
+}
+
+function polygonArea(polygon: [number, number][]): number {
+  let twiceArea = 0;
+  for (let index = 0; index < polygon.length; index += 1) {
+    const current = polygon[index];
+    const next = polygon[(index + 1) % polygon.length];
+    twiceArea += current[0] * next[1] - next[0] * current[1];
+  }
+  return Math.abs(twiceArea) / 2;
+}
+
+function polygonOverlap(
+  first: [number, number][],
+  second: [number, number][]
+): { iou: number; containment: number } {
+  if (first.length < 3 || second.length < 3) return { iou: 0, containment: 0 };
+  const firstXs = first.map((point) => point[0]);
+  const firstYs = first.map((point) => point[1]);
+  const secondXs = second.map((point) => point[0]);
+  const secondYs = second.map((point) => point[1]);
+  const left = Math.max(Math.min(...firstXs), Math.min(...secondXs));
+  const right = Math.min(Math.max(...firstXs), Math.max(...secondXs));
+  const top = Math.max(Math.min(...firstYs), Math.min(...secondYs));
+  const bottom = Math.min(Math.max(...firstYs), Math.max(...secondYs));
+  const width = right - left;
+  const height = bottom - top;
+  if (width <= 0 || height <= 0) return { iou: 0, containment: 0 };
+
+  const scale = Math.min(1, 128 / Math.max(width, height));
+  const sampleWidth = Math.max(1, Math.ceil(width * scale));
+  const sampleHeight = Math.max(1, Math.ceil(height * scale));
+  let intersectionSamples = 0;
+  for (let y = 0; y < sampleHeight; y += 1) {
+    const sampleY = top + ((y + 0.5) * height) / sampleHeight;
+    for (let x = 0; x < sampleWidth; x += 1) {
+      const sampleX = left + ((x + 0.5) * width) / sampleWidth;
+      if (
+        pointInPolygon(sampleX, sampleY, first) &&
+        pointInPolygon(sampleX, sampleY, second)
+      ) {
+        intersectionSamples += 1;
+      }
+    }
+  }
+
+  const sampledIntersection =
+    intersectionSamples * (width / sampleWidth) * (height / sampleHeight);
+  const firstArea = polygonArea(first);
+  const secondArea = polygonArea(second);
+  const intersection = Math.min(sampledIntersection, firstArea, secondArea);
+  const union = firstArea + secondArea - intersection;
+  const smallerArea = Math.min(firstArea, secondArea);
+  return {
+    iou: union > 0 ? intersection / union : 0,
+    containment: smallerArea > 0 ? intersection / smallerArea : 0,
+  };
+}
+
+function dedupeDetectionsByPolygon(
+  detections: Array<{
+    detection: AssetInferenceResult['detections'][number];
+    greenFraction: number;
+    index: number;
+  }>
+): Array<{
+  detection: AssetInferenceResult['detections'][number];
+  greenFraction: number;
+  index: number;
+}> {
+  const selected: typeof detections = [];
+  const ranked = [...detections].sort((left, right) =>
+    right.detection.confidence - left.detection.confidence || left.index - right.index
+  );
+
+  for (const candidate of ranked) {
+    const duplicate = selected.some((existing) => {
+      const overlap = polygonOverlap(candidate.detection.polygon, existing.detection.polygon);
+      return overlap.iou >= 0.5 || overlap.containment >= 0.7;
+    });
+    if (!duplicate) selected.push(candidate);
+  }
+
+  return selected;
+}
+
 export class Sam3BatchV2Service {
   private readonly prisma: PrismaLike;
   private readonly awsSam3Service: AwsSam3Like;
@@ -844,6 +1029,132 @@ export class Sam3BatchV2Service {
     this.releaseGpuLock = dependencies.releaseGpuLock;
     this.sleep = dependencies.sleep;
     this.now = dependencies.now;
+  }
+
+  private async calibrateExemplarGreenMedian(
+    sourceImageBuffer: Buffer,
+    exemplars: BoxCoordinate[],
+    sourceWidth?: number,
+    sourceHeight?: number
+  ): Promise<number> {
+    const metadata = await sharp(sourceImageBuffer).metadata();
+    const imageWidth = metadata.width ?? 0;
+    const imageHeight = metadata.height ?? 0;
+    if (imageWidth <= 0 || imageHeight <= 0) return 0;
+
+    const scaled = scaleExemplarBoxes({
+      exemplars,
+      sourceWidth,
+      sourceHeight,
+      targetWidth: imageWidth,
+      targetHeight: imageHeight,
+      maxBoxes: SAM3_BATCH_V2_MAX_EXEMPLARS,
+    });
+    const fractions = await Promise.all(
+      scaled.boxes.map((box) => greenFraction(sourceImageBuffer, box))
+    );
+    return median(fractions);
+  }
+
+  private async applyVegetationPriorToCandidates(
+    imageBuffer: Buffer,
+    candidates: SAM3ConceptDetection[],
+    exemplarGreenMedian: number
+  ): Promise<VegetationCandidateResult> {
+    const metadata = await sharp(imageBuffer).metadata();
+    const imageWidth = metadata.width ?? 0;
+    const imageHeight = metadata.height ?? 0;
+    if (imageWidth <= 0 || imageHeight <= 0) {
+      throw createNamedError(
+        'InferenceFailureError',
+        'Vegetation prior could not read target image dimensions.',
+        'VEGETATION_IMAGE_INVALID'
+      );
+    }
+
+    const threshold = Math.max(
+      SAM3_BATCH_V2_VEGETATION_FLOOR,
+      0.5 * exemplarGreenMedian
+    );
+    const surviving: SAM3ConceptDetection[] = [];
+    let recenteredCount = 0;
+
+    for (const candidate of candidates) {
+      const fraction = await greenFraction(imageBuffer, candidate.bbox);
+      if (fraction < threshold) continue;
+
+      const centre = await greenestBlobCentre(imageBuffer, candidate.bbox);
+      if (!centre) {
+        surviving.push(candidate);
+        continue;
+      }
+
+      const bbox = recenterBbox(candidate.bbox, centre, imageWidth, imageHeight);
+      surviving.push({
+        ...candidate,
+        bbox,
+        polygon: normalizePolygon(undefined, bbox),
+      });
+      recenteredCount += 1;
+    }
+
+    return {
+      candidates: surviving,
+      imageWidth,
+      imageHeight,
+      threshold,
+      gatedCount: candidates.length - surviving.length,
+      recenteredCount,
+    };
+  }
+
+  private async applyVegetationMaskHygiene(
+    assetId: string,
+    imageBuffer: Buffer,
+    detections: AssetInferenceResult['detections'],
+    imageWidth: number,
+    imageHeight: number,
+    threshold: number
+  ): Promise<VegetationMaskResult> {
+    const measured = await Promise.all(
+      detections.map(async (detection, index) => ({
+        detection,
+        index,
+        greenFraction: await greenFractionInPolygon(
+          imageBuffer,
+          detection.polygon,
+          imageWidth,
+          imageHeight
+        ),
+      }))
+    );
+    const gated = measured.filter((entry) => entry.greenFraction >= threshold);
+    const deduplicated = dedupeDetectionsByPolygon(gated);
+    const fractions = deduplicated
+      .map((entry) => entry.greenFraction)
+      .sort((left, right) => left - right);
+    const p10 = percentile(fractions, 0.1);
+    const finalMedian = percentile(fractions, 0.5);
+    const p90 = percentile(fractions, 0.9);
+
+    if (
+      finalMedian != null &&
+      finalMedian < SAM3_BATCH_V2_VEGETATION_ALARM_MEDIAN
+    ) {
+      console.warn(
+        `[SAM3 V2] VEGETATION_ALARM asset=${assetId} ` +
+          `median=${finalMedian.toFixed(3)} threshold=${threshold.toFixed(3)}`
+      );
+    }
+
+    return {
+      detections: deduplicated.map((entry) => entry.detection),
+      gatedCount: measured.length - gated.length,
+      deduplicatedCount: gated.length - deduplicated.length,
+      p10,
+      median: finalMedian,
+      p90,
+    };
   }
 
   async processJob(job: Sam3BatchV2JobLike): Promise<Sam3BatchV2JobResult> {
@@ -1126,6 +1437,15 @@ export class Sam3BatchV2Service {
         error instanceof Error ? error.message : 'Failed to fetch source asset image.'
       );
     }
+    const vegetationPrior = resolveBatchV2VegetationPrior(data.vegetationPrior);
+    const exemplarGreenMedian = vegetationPrior
+      ? await this.calibrateExemplarGreenMedian(
+          sourceImageBuffer,
+          data.exemplars,
+          data.exemplarSourceWidth,
+          data.exemplarSourceHeight
+        )
+      : 0;
     const normalizedCrops = normalizeExemplarCrops(data.exemplarCrops);
     let exemplarCrops = normalizedCrops;
     let visualCropSource: Sam3BatchV2StageLogEntry['visualCropSource'] | undefined =
@@ -1181,6 +1501,7 @@ export class Sam3BatchV2Service {
       operatorCropCount: data.mode === 'visual_crop_match' ? normalizedCrops.length : 0,
       modeUsed: data.mode === 'visual_crop_match' ? 'visual_crops' : 'concept_propagation',
       visualCropSource,
+      ...(vegetationPrior ? { vegetationPrior, exemplarGreenMedian } : {}),
       durationMs: this.now().getTime() - startedAt,
     });
 
@@ -1202,6 +1523,8 @@ export class Sam3BatchV2Service {
       missingAssetIds,
       cropCount,
       operatorCropCount: data.mode === 'visual_crop_match' ? normalizedCrops.length : 0,
+      vegetationPrior,
+      exemplarGreenMedian,
     };
   }
 
@@ -1513,7 +1836,16 @@ export class Sam3BatchV2Service {
         if (prepared.mode === 'visual_crop_match') {
           result = await this.runVisualCropMatch(asset, imageBuffer, prepared);
         } else {
-          result = await this.runConceptPropagation(asset, imageBuffer, conceptExemplars, prepared.weedType);
+          result = await this.runConceptPropagation(
+            asset,
+            imageBuffer,
+            conceptExemplars,
+            prepared.weedType,
+            {
+              enabled: prepared.vegetationPrior,
+              exemplarGreenMedian: prepared.exemplarGreenMedian,
+            }
+          );
         }
 
         await this.appendStageLog(batchJobId, stageLog, {
@@ -1541,6 +1873,14 @@ export class Sam3BatchV2Service {
             prepared.mode === 'concept_propagation' ? conceptExemplars.length : undefined,
           refinementBoxCount: result.refinementBoxCount,
           refinementDetectionCount: result.refinementDetectionCount,
+          vegetationThreshold: result.vegetationThreshold,
+          vegetationGatedCandidates: result.vegetationGatedCandidates,
+          vegetationRecenteredCandidates: result.vegetationRecenteredCandidates,
+          vegetationGatedMasks: result.vegetationGatedMasks,
+          vegetationDeduplicatedMasks: result.vegetationDeduplicatedMasks,
+          maskGreenFractionP10: result.maskGreenFractionP10,
+          maskGreenFractionMedian: result.maskGreenFractionMedian,
+          maskGreenFractionP90: result.maskGreenFractionP90,
           durationMs: this.now().getTime() - runStartedAt,
         });
       } catch (error) {
@@ -1715,7 +2055,8 @@ export class Sam3BatchV2Service {
     asset: AssetRecord,
     imageBuffer: Buffer,
     exemplarId: string,
-    className: string
+    className: string,
+    vegetation?: VegetationPriorContext
   ): Promise<AssetInferenceResult> {
     const reviewProfile: Sam3BatchV2ReviewProfile = 'balanced';
     const conceptOptions = buildBatchV2ConceptApplyOptions(reviewProfile);
@@ -1749,7 +2090,8 @@ export class Sam3BatchV2Service {
       asset,
       imageBuffer,
       className,
-      candidateResult.detections
+      candidateResult.detections,
+      vegetation
     );
 
     return {
@@ -1762,6 +2104,14 @@ export class Sam3BatchV2Service {
       candidateCount: refinement.candidateCount,
       refinementBoxCount: refinement.refinementBoxCount,
       refinementDetectionCount: refinement.refinementDetectionCount,
+      vegetationThreshold: refinement.vegetationThreshold,
+      vegetationGatedCandidates: refinement.vegetationGatedCandidates,
+      vegetationRecenteredCandidates: refinement.vegetationRecenteredCandidates,
+      vegetationGatedMasks: refinement.vegetationGatedMasks,
+      vegetationDeduplicatedMasks: refinement.vegetationDeduplicatedMasks,
+      maskGreenFractionP10: refinement.maskGreenFractionP10,
+      maskGreenFractionMedian: refinement.maskGreenFractionMedian,
+      maskGreenFractionP90: refinement.maskGreenFractionP90,
     };
   }
 
@@ -1808,7 +2158,8 @@ export class Sam3BatchV2Service {
     asset: AssetRecord,
     imageBuffer: Buffer,
     conceptExemplars: string | ConceptExemplarRef[] | null,
-    weedType: string
+    weedType: string,
+    vegetation?: VegetationPriorContext
   ): Promise<AssetInferenceResult> {
     const exemplarRefs = normalizeConceptExemplarRefs(conceptExemplars);
     if (exemplarRefs.length === 0) {
@@ -1837,7 +2188,8 @@ export class Sam3BatchV2Service {
       asset,
       imageBuffer,
       weedType,
-      candidateResult.detections
+      candidateResult.detections,
+      vegetation
     );
 
     return {
@@ -1852,6 +2204,14 @@ export class Sam3BatchV2Service {
       candidateCount: refinement.candidateCount,
       refinementBoxCount: refinement.refinementBoxCount,
       refinementDetectionCount: refinement.refinementDetectionCount,
+      vegetationThreshold: refinement.vegetationThreshold,
+      vegetationGatedCandidates: refinement.vegetationGatedCandidates,
+      vegetationRecenteredCandidates: refinement.vegetationRecenteredCandidates,
+      vegetationGatedMasks: refinement.vegetationGatedMasks,
+      vegetationDeduplicatedMasks: refinement.vegetationDeduplicatedMasks,
+      maskGreenFractionP10: refinement.maskGreenFractionP10,
+      maskGreenFractionMedian: refinement.maskGreenFractionMedian,
+      maskGreenFractionP90: refinement.maskGreenFractionP90,
     };
   }
 
@@ -2037,7 +2397,8 @@ export class Sam3BatchV2Service {
     asset: AssetRecord,
     imageBuffer: Buffer,
     className: string,
-    candidates: SAM3ConceptDetection[]
+    candidates: SAM3ConceptDetection[],
+    vegetation?: VegetationPriorContext
   ): Promise<ConceptRefinementResult> {
     if (candidates.length === 0) {
       return {
@@ -2048,32 +2409,62 @@ export class Sam3BatchV2Service {
       };
     }
 
+    const originalCandidateCount = candidates.length;
+    const vegetationCandidates = vegetation?.enabled
+      ? await this.applyVegetationPriorToCandidates(
+          imageBuffer,
+          candidates,
+          vegetation.exemplarGreenMedian
+        )
+      : undefined;
+    const refinementCandidates = vegetationCandidates?.candidates ?? candidates;
+
+    if (refinementCandidates.length === 0) {
+      return {
+        detections: [],
+        candidateCount: originalCandidateCount,
+        refinementBoxCount: 0,
+        refinementDetectionCount: 0,
+        vegetationThreshold: vegetationCandidates?.threshold,
+        vegetationGatedCandidates: vegetationCandidates?.gatedCount,
+        vegetationRecenteredCandidates: vegetationCandidates?.recenteredCount,
+        vegetationGatedMasks: 0,
+        vegetationDeduplicatedMasks: 0,
+      };
+    }
+
     let resized: Awaited<ReturnType<AwsSam3Like['resizeImage']>>;
     let boxes: BoxCoordinate[];
 
     try {
       await this.ensureSam3ReadyForBoxRefinement(asset.id);
       resized = await this.awsSam3Service.resizeImage(imageBuffer);
-      boxes = candidates
+      boxes = refinementCandidates
         .map((candidate) => bboxToBoxCoordinate(candidate.bbox, resized.scaling.scaleFactor))
         .filter(isValidBox);
     } catch (error) {
       return this.buildConceptCandidateFallbackResult(
         asset.id,
-        candidates,
+        imageBuffer,
+        refinementCandidates,
+        originalCandidateCount,
         0,
         0,
-        error instanceof Error ? error.message : 'SAM3 box refinement could not prepare candidates.'
+        error instanceof Error ? error.message : 'SAM3 box refinement could not prepare candidates.',
+        vegetationCandidates
       );
     }
 
     if (boxes.length === 0) {
       return this.buildConceptCandidateFallbackResult(
         asset.id,
-        candidates,
+        imageBuffer,
+        refinementCandidates,
+        originalCandidateCount,
         0,
         0,
-        'SAM3 box refinement could not build valid boxes.'
+        'SAM3 box refinement could not build valid boxes.',
+        vegetationCandidates
       );
     }
 
@@ -2089,10 +2480,13 @@ export class Sam3BatchV2Service {
     } catch (error) {
       return this.buildConceptCandidateFallbackResult(
         asset.id,
-        candidates,
+        imageBuffer,
+        refinementCandidates,
+        originalCandidateCount,
         boxes.length,
         0,
-        error instanceof Error ? error.message : 'SAM3 box refinement request failed.'
+        error instanceof Error ? error.message : 'SAM3 box refinement request failed.',
+        vegetationCandidates
       );
     }
 
@@ -2100,17 +2494,20 @@ export class Sam3BatchV2Service {
       const message = result.error || 'SAM3 box refinement returned no detections.';
       return this.buildConceptCandidateFallbackResult(
         asset.id,
-        candidates,
+        imageBuffer,
+        refinementCandidates,
+        originalCandidateCount,
         boxes.length,
         result.response?.detections.length ?? 0,
-        message
+        message,
+        vegetationCandidates
       );
     }
 
     const matchedCandidateKeys = new Set<string>();
     const refinedDetections = result.response.detections.flatMap((detection) => {
       const bbox = scaleBboxToOriginal(detection.bbox, resized.scaling.scaleFactor);
-      const sourceCandidateMatch = bestConceptCandidateMatchForBbox(bbox, candidates);
+      const sourceCandidateMatch = bestConceptCandidateMatchForBbox(bbox, refinementCandidates);
       if (
         !sourceCandidateMatch ||
         sourceCandidateMatch.iou < SAM3_BATCH_V2_MIN_REFINEMENT_IOU
@@ -2134,7 +2531,7 @@ export class Sam3BatchV2Service {
       }];
     });
 
-    const unmatchedCandidates = candidates
+    const unmatchedCandidates = refinementCandidates
       .filter((candidate) => !matchedCandidateKeys.has(conceptCandidateKey(candidate)))
       .map(mapConceptDetectionToAssetDetection);
 
@@ -2154,22 +2551,55 @@ export class Sam3BatchV2Service {
       );
     }
 
+    const maskHygiene = vegetationCandidates
+      ? await this.applyVegetationMaskHygiene(
+          asset.id,
+          imageBuffer,
+          refinedDetections,
+          vegetationCandidates.imageWidth,
+          vegetationCandidates.imageHeight,
+          vegetationCandidates.threshold
+        )
+      : undefined;
+
     return {
-      detections: refinedDetections,
-      candidateCount: candidates.length,
+      detections: maskHygiene?.detections ?? refinedDetections,
+      candidateCount: originalCandidateCount,
       refinementBoxCount: boxes.length,
       refinementDetectionCount: result.response.detections.length,
+      vegetationThreshold: vegetationCandidates?.threshold,
+      vegetationGatedCandidates: vegetationCandidates?.gatedCount,
+      vegetationRecenteredCandidates: vegetationCandidates?.recenteredCount,
+      vegetationGatedMasks: maskHygiene?.gatedCount,
+      vegetationDeduplicatedMasks: maskHygiene?.deduplicatedCount,
+      maskGreenFractionP10: maskHygiene?.p10,
+      maskGreenFractionMedian: maskHygiene?.median,
+      maskGreenFractionP90: maskHygiene?.p90,
     };
   }
 
-  private buildConceptCandidateFallbackResult(
+  private async buildConceptCandidateFallbackResult(
     assetId: string,
+    imageBuffer: Buffer,
     candidates: SAM3ConceptDetection[],
+    originalCandidateCount: number,
     refinementBoxCount: number,
     refinementDetectionCount: number,
-    reason: string
-  ): ConceptRefinementResult {
-    const detections = candidates.map(mapConceptDetectionToAssetDetection);
+    reason: string,
+    vegetationCandidates?: VegetationCandidateResult
+  ): Promise<ConceptRefinementResult> {
+    const candidateDetections = candidates.map(mapConceptDetectionToAssetDetection);
+    const maskHygiene = vegetationCandidates
+      ? await this.applyVegetationMaskHygiene(
+          assetId,
+          imageBuffer,
+          candidateDetections,
+          vegetationCandidates.imageWidth,
+          vegetationCandidates.imageHeight,
+          vegetationCandidates.threshold
+        )
+      : undefined;
+    const detections = maskHygiene?.detections ?? candidateDetections;
     const backendWarning =
       `SAM3 box refinement failed for ${assetId}; saved ${detections.length} ` +
       `unrefined concept candidate(s) as pending review items: ${reason}`;
@@ -2178,9 +2608,17 @@ export class Sam3BatchV2Service {
 
     return {
       detections,
-      candidateCount: candidates.length,
+      candidateCount: originalCandidateCount,
       refinementBoxCount,
       refinementDetectionCount,
+      vegetationThreshold: vegetationCandidates?.threshold,
+      vegetationGatedCandidates: vegetationCandidates?.gatedCount,
+      vegetationRecenteredCandidates: vegetationCandidates?.recenteredCount,
+      vegetationGatedMasks: maskHygiene?.gatedCount,
+      vegetationDeduplicatedMasks: maskHygiene?.deduplicatedCount,
+      maskGreenFractionP10: maskHygiene?.p10,
+      maskGreenFractionMedian: maskHygiene?.median,
+      maskGreenFractionP90: maskHygiene?.p90,
       usedCandidateFallback: true,
       backendWarning,
     };
