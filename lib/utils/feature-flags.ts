@@ -16,3 +16,7 @@ export function isTemporalInsightsEnabled(features: unknown): boolean {
 export function isGuidedOperatorFlowEnabled(): boolean {
   return process.env.NEXT_PUBLIC_GUIDED_OPERATOR_FLOW === 'true';
 }
+
+export function isReviewMaskOverlayEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_REVIEW_MASK_OVERLAY === 'true';
+}

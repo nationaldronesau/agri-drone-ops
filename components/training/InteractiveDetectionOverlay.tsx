@@ -2,13 +2,20 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
+import {
+  GEOMETRY_MISMATCH_IOU_THRESHOLD,
+  getPolygonBoundingRect,
+  getValidPolygon,
+} from '@/lib/utils/detection-geometry';
 
 interface Detection {
   id: string;
   status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
   confidence: number;
   weedType: string;
-  bbox: number[]; // [x1, y1, x2, y2] in pixels
+  bbox?: number[]; // [x1, y1, x2, y2] in pixels
+  polygon?: number[][]; // [[x, y], ...] in pixels
+  bboxPolygonIou?: number | null;
 }
 
 interface InteractiveDetectionOverlayProps {
@@ -21,6 +28,7 @@ interface InteractiveDetectionOverlayProps {
   zoomLevel?: number;
   panOffset?: { x: number; y: number };
   onPanOffsetChange?: (offset: { x: number; y: number }) => void;
+  showMaskOverlay?: boolean;
 }
 
 export function InteractiveDetectionOverlay({
@@ -33,6 +41,7 @@ export function InteractiveDetectionOverlay({
   zoomLevel = 1,
   panOffset,
   onPanOffsetChange,
+  showMaskOverlay = false,
 }: InteractiveDetectionOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -87,19 +96,42 @@ export function InteractiveDetectionOverlay({
     };
   };
 
+  const scalePolygon = (polygon: [number, number][]) =>
+    polygon.map(([x, y]) => `${x * scale},${y * scale}`).join(' ');
+
   const getStatusColor = (status: string, isHovered: boolean, isSelected: boolean) => {
     if (isSelected) {
-      return { stroke: '#2563eb', fill: 'rgba(37, 99, 235, 0.18)' };
+      return {
+        stroke: '#2563eb',
+        fill: 'rgba(37, 99, 235, 0.18)',
+        maskFill: 'rgba(37, 99, 235, 0.25)',
+      };
     }
     switch (status) {
       case 'ACCEPTED':
-        return { stroke: '#22c55e', fill: 'rgba(34, 197, 94, 0.2)' };
+        return {
+          stroke: '#22c55e',
+          fill: 'rgba(34, 197, 94, 0.2)',
+          maskFill: 'rgba(34, 197, 94, 0.25)',
+        };
       case 'REJECTED':
-        return { stroke: '#ef4444', fill: 'rgba(239, 68, 68, 0.15)' };
+        return {
+          stroke: '#ef4444',
+          fill: 'rgba(239, 68, 68, 0.15)',
+          maskFill: 'rgba(239, 68, 68, 0.25)',
+        };
       default:
         return isHovered
-          ? { stroke: '#f59e0b', fill: 'rgba(245, 158, 11, 0.25)' }
-          : { stroke: '#f59e0b', fill: 'rgba(245, 158, 11, 0.1)' };
+          ? {
+              stroke: '#f59e0b',
+              fill: 'rgba(245, 158, 11, 0.25)',
+              maskFill: 'rgba(245, 158, 11, 0.3)',
+            }
+          : {
+              stroke: '#f59e0b',
+              fill: 'rgba(245, 158, 11, 0.1)',
+              maskFill: 'rgba(245, 158, 11, 0.25)',
+            };
     }
   };
 
@@ -182,10 +214,24 @@ export function InteractiveDetectionOverlay({
             viewBox={`0 0 ${renderWidth} ${renderHeight}`}
           >
             {detections.map((detection) => {
-              const box = scaleBox(detection.bbox);
+              const polygon = showMaskOverlay ? getValidPolygon(detection.polygon) : null;
+              const polygonRect = polygon ? getPolygonBoundingRect(polygon) : null;
+              const sourceBounds = detection.bbox ?? polygonRect;
+              if (!sourceBounds) return null;
+
+              const box = scaleBox(sourceBounds);
+              const storedBox = detection.bbox ? scaleBox(detection.bbox) : null;
               const isHovered = hoveredId === detection.id;
               const isSelected = selectedDetectionId === detection.id;
               const colors = getStatusColor(detection.status, isHovered, isSelected);
+              const isBoxOnly = showMaskOverlay && !polygon;
+              const hasGeometryMismatch =
+                showMaskOverlay &&
+                detection.bboxPolygonIou != null &&
+                detection.bboxPolygonIou < GEOMETRY_MISMATCH_IOU_THRESHOLD;
+              const hoverLabel = hasGeometryMismatch
+                ? `${detection.weedType} · mismatch IoU ${detection.bboxPolygonIou?.toFixed(2)}`
+                : detection.weedType;
 
               return (
                 <g
@@ -195,21 +241,35 @@ export function InteractiveDetectionOverlay({
                   onClick={() => onSelectDetection?.(detection.id)}
                   className="pointer-events-auto cursor-pointer"
                 >
-                  {/* Detection Box */}
-                  <rect
-                    x={box.x}
-                    y={box.y}
-                    width={box.width}
-                    height={box.height}
-                    fill={colors.fill}
-                    stroke={colors.stroke}
-                    strokeWidth={isSelected ? 4 : isHovered ? 3 : 2}
-                    className="transition-all"
-                    style={{
-                      opacity: detection.status === 'REJECTED' ? 0.5 : 1,
-                    }}
-                  />
-                  {isSelected && (
+                  <title>{hoverLabel}</title>
+                  {polygon ? (
+                    <polygon
+                      points={scalePolygon(polygon)}
+                      fill={colors.maskFill}
+                      stroke={colors.stroke}
+                      strokeWidth={isSelected ? 3 : 2}
+                      strokeLinejoin="round"
+                      className="transition-all"
+                      style={{
+                        opacity: detection.status === 'REJECTED' ? 0.55 : 1,
+                      }}
+                    />
+                  ) : (
+                    <rect
+                      x={box.x}
+                      y={box.y}
+                      width={box.width}
+                      height={box.height}
+                      fill={colors.fill}
+                      stroke={colors.stroke}
+                      strokeWidth={isSelected ? 4 : isHovered ? 3 : 2}
+                      className="transition-all"
+                      style={{
+                        opacity: detection.status === 'REJECTED' ? 0.5 : 1,
+                      }}
+                    />
+                  )}
+                  {!polygon && isSelected && (
                     <rect
                       x={Math.max(0, box.x - 3)}
                       y={Math.max(0, box.y - 3)}
@@ -219,6 +279,19 @@ export function InteractiveDetectionOverlay({
                       stroke="#2563eb"
                       strokeWidth="2"
                       strokeDasharray="6 4"
+                      className="pointer-events-none"
+                    />
+                  )}
+                  {polygon && storedBox && (isHovered || isSelected) && (
+                    <rect
+                      x={storedBox.x}
+                      y={storedBox.y}
+                      width={storedBox.width}
+                      height={storedBox.height}
+                      fill="none"
+                      stroke={colors.stroke}
+                      strokeWidth="1.5"
+                      strokeDasharray="5 4"
                       className="pointer-events-none"
                     />
                   )}
@@ -258,11 +331,27 @@ export function InteractiveDetectionOverlay({
                     </text>
                   </g>
 
+                  {isBoxOnly && (
+                    <g transform={`translate(${box.x + badgeWidth + 8}, ${box.y + 5})`}>
+                      <rect width="52" height="14" rx="4" fill="rgba(31, 41, 55, 0.9)" />
+                      <text
+                        x="26"
+                        y="10"
+                        textAnchor="middle"
+                        fill="white"
+                        fontSize="8"
+                        fontWeight="bold"
+                      >
+                        BOX ONLY
+                      </text>
+                    </g>
+                  )}
+
                   {/* Weed Type Label on Hover */}
                   {(isHovered || isSelected) && (
                     <g transform={`translate(${box.x}, ${box.y - 24})`}>
                       <rect
-                        width={Math.max(detection.weedType.length * 8 + 16, 80)}
+                        width={Math.max(hoverLabel.length * 7 + 16, 80)}
                         height="20"
                         rx="4"
                         fill="rgba(0,0,0,0.8)"
@@ -273,7 +362,7 @@ export function InteractiveDetectionOverlay({
                         fill="white"
                         fontSize="12"
                       >
-                        {detection.weedType}
+                        {hoverLabel}
                       </text>
                     </g>
                   )}
@@ -291,7 +380,7 @@ export function InteractiveDetectionOverlay({
         </div>
       ) : hoveredId ? (
         <div className="absolute bottom-2 left-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
-          Click a box to select it. Review actions are in the side panel.
+          Click a {showMaskOverlay ? 'mask' : 'box'} to select it. Review actions are in the side panel.
         </div>
       ) : null}
     </div>
