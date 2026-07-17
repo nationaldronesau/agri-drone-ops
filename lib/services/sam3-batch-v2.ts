@@ -67,9 +67,12 @@ export function resolveBatchV2RetrievalBackend(
   refineMode: Sam3BatchV2RefineMode = resolveBatchV2RefineMode(),
   value: string | undefined = process.env.SAM3_RETRIEVAL_BACKEND
 ): string | undefined {
+  if (refineMode !== 'instances') {
+    return undefined;
+  }
+
   const configured = value?.trim();
-  return configured ||
-    (refineMode === 'instances' ? SAM3_BATCH_V2_DEFAULT_RETRIEVAL_BACKEND : undefined);
+  return configured || SAM3_BATCH_V2_DEFAULT_RETRIEVAL_BACKEND;
 }
 
 const parseOptionalNumber = (value: string | undefined): number | undefined => {
@@ -331,6 +334,7 @@ export interface Sam3BatchV2StageLogEntry {
   refineSentInstances?: number;
   refineRefinedInstances?: number;
   refineRejectedInstances?: number;
+  refineIncompleteChunks?: number;
   vegetationPrior?: boolean;
   exemplarGreenMedian?: number;
   vegetationThreshold?: number;
@@ -572,6 +576,7 @@ interface AssetInferenceResult {
   refineSentInstances?: number;
   refineRefinedInstances?: number;
   refineRejectedInstances?: number;
+  refineIncompleteChunks?: number;
   vegetationThreshold?: number;
   vegetationGatedCandidates?: number;
   vegetationRecenteredCandidates?: number;
@@ -592,6 +597,7 @@ interface ConceptRefinementResult {
   refineSentInstances?: number;
   refineRefinedInstances?: number;
   refineRejectedInstances?: number;
+  refineIncompleteChunks?: number;
   vegetationThreshold?: number;
   vegetationGatedCandidates?: number;
   vegetationRecenteredCandidates?: number;
@@ -1023,6 +1029,53 @@ function buildInstanceRefinementPrompts(
   });
 
   return { prompts, candidateById };
+}
+
+function scalePointToResized(
+  point: [number, number],
+  scaleFactor: number
+): [number, number] {
+  return [
+    Math.round(point[0] * scaleFactor),
+    Math.round(point[1] * scaleFactor),
+  ];
+}
+
+function scaleInstanceRefinementPrompt(
+  prompt: SAM3RefineInstancePrompt,
+  scaleFactor: number
+): SAM3RefineInstancePrompt {
+  if (scaleFactor === 1) {
+    return prompt;
+  }
+
+  const box = bboxToBoxCoordinate(prompt.box, scaleFactor);
+  return {
+    ...prompt,
+    box: [box.x1, box.y1, box.x2, box.y2],
+    positive_points: prompt.positive_points?.map((point) =>
+      scalePointToResized(point, scaleFactor)
+    ),
+    negative_points: prompt.negative_points?.map((point) =>
+      scalePointToResized(point, scaleFactor)
+    ),
+  };
+}
+
+function hasCompleteInstanceRefinementResponse(
+  prompts: SAM3RefineInstancePrompt[],
+  instances: Array<{ id: string }>
+): boolean {
+  const requestedIds = new Set(prompts.map((prompt) => prompt.id));
+  const responseCounts = new Map<string, number>();
+
+  for (const instance of instances) {
+    if (requestedIds.has(instance.id)) {
+      responseCounts.set(instance.id, (responseCounts.get(instance.id) ?? 0) + 1);
+    }
+  }
+
+  return prompts.every((prompt) => responseCounts.get(prompt.id) === 1);
 }
 
 function chunkItems<T>(items: T[], size: number): T[][] {
@@ -2129,6 +2182,7 @@ export class Sam3BatchV2Service {
           refineSentInstances: result.refineSentInstances,
           refineRefinedInstances: result.refineRefinedInstances,
           refineRejectedInstances: result.refineRejectedInstances,
+          refineIncompleteChunks: result.refineIncompleteChunks,
           vegetationThreshold: result.vegetationThreshold,
           vegetationGatedCandidates: result.vegetationGatedCandidates,
           vegetationRecenteredCandidates: result.vegetationRecenteredCandidates,
@@ -2370,6 +2424,7 @@ export class Sam3BatchV2Service {
       refineSentInstances: refinement.refineSentInstances,
       refineRefinedInstances: refinement.refineRefinedInstances,
       refineRejectedInstances: refinement.refineRejectedInstances,
+      refineIncompleteChunks: refinement.refineIncompleteChunks,
       vegetationThreshold: refinement.vegetationThreshold,
       vegetationGatedCandidates: refinement.vegetationGatedCandidates,
       vegetationRecenteredCandidates: refinement.vegetationRecenteredCandidates,
@@ -2482,6 +2537,7 @@ export class Sam3BatchV2Service {
       refineSentInstances: refinement.refineSentInstances,
       refineRefinedInstances: refinement.refineRefinedInstances,
       refineRejectedInstances: refinement.refineRejectedInstances,
+      refineIncompleteChunks: refinement.refineIncompleteChunks,
       vegetationThreshold: refinement.vegetationThreshold,
       vegetationGatedCandidates: refinement.vegetationGatedCandidates,
       vegetationRecenteredCandidates: refinement.vegetationRecenteredCandidates,
@@ -2734,6 +2790,7 @@ export class Sam3BatchV2Service {
               result.refineSentInstances ?? result.refinementBoxCount,
             refineRefinedInstances: result.refineRefinedInstances ?? 0,
             refineRejectedInstances: result.refineRejectedInstances ?? 0,
+            refineIncompleteChunks: result.refineIncompleteChunks ?? 0,
           }
         : {}),
     };
@@ -2812,8 +2869,10 @@ export class Sam3BatchV2Service {
       );
     }
 
+    let resized: Awaited<ReturnType<AwsSam3Like['resizeImage']>>;
     try {
       await this.ensureSam3ReadyForBoxRefinement(asset.id);
+      resized = await this.awsSam3Service.resizeImage(imageBuffer);
     } catch (error) {
       return this.buildConceptCandidateFallbackResult(
         asset.id,
@@ -2835,7 +2894,12 @@ export class Sam3BatchV2Service {
       score: number;
     }>();
     let responseInstanceCount = 0;
-    const image = imageBuffer.toString('base64');
+    let incompleteChunks = 0;
+    const incompletePromptIds = new Set<string>();
+    const image = resized.buffer.toString('base64');
+    const scaledPrompts = prompts.map((prompt) =>
+      scaleInstanceRefinementPrompt(prompt, resized.scaling.scaleFactor)
+    );
     const refineInstances = this.awsSam3Service.refineInstances;
     if (!refineInstances) {
       return this.buildConceptCandidateFallbackResult(
@@ -2850,62 +2914,99 @@ export class Sam3BatchV2Service {
       );
     }
 
-    for (const chunk of chunkItems(prompts, SAM3_BATCH_V2_INSTANCE_REFINEMENT_CHUNK_SIZE)) {
-      let result: Awaited<ReturnType<NonNullable<AwsSam3Like['refineInstances']>>>;
-      try {
-        result = await refineInstances.call(this.awsSam3Service, {
-          image,
-          instances: chunk,
-          return_polygons: true,
-          decode_batch: 32,
-          polygon_resolution: 2048,
-          score_threshold: 0.5,
-        });
-      } catch (error) {
-        return this.buildConceptCandidateFallbackResult(
-          asset.id,
-          imageBuffer,
-          refinementCandidates,
-          originalCandidateCount,
-          prompts.length,
-          responseInstanceCount,
-          error instanceof Error ? error.message : 'SAM3 instance refinement request failed.',
-          vegetationCandidates
-        );
+    for (const chunk of chunkItems(scaledPrompts, SAM3_BATCH_V2_INSTANCE_REFINEMENT_CHUNK_SIZE)) {
+      let completeResult: Awaited<
+        ReturnType<NonNullable<AwsSam3Like['refineInstances']>>
+      > | undefined;
+
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        let result: Awaited<ReturnType<NonNullable<AwsSam3Like['refineInstances']>>>;
+        try {
+          result = await refineInstances.call(this.awsSam3Service, {
+            image,
+            instances: chunk,
+            return_polygons: true,
+            decode_batch: 32,
+            polygon_resolution: 2048,
+            score_threshold: 0.5,
+          });
+        } catch (error) {
+          return this.buildConceptCandidateFallbackResult(
+            asset.id,
+            imageBuffer,
+            refinementCandidates,
+            originalCandidateCount,
+            prompts.length,
+            responseInstanceCount,
+            error instanceof Error ? error.message : 'SAM3 instance refinement request failed.',
+            vegetationCandidates
+          );
+        }
+
+        if (!result.success || !result.response) {
+          return this.buildConceptCandidateFallbackResult(
+            asset.id,
+            imageBuffer,
+            refinementCandidates,
+            originalCandidateCount,
+            prompts.length,
+            responseInstanceCount,
+            result.error || 'SAM3 instance refinement returned no response.',
+            vegetationCandidates
+          );
+        }
+
+        if (hasCompleteInstanceRefinementResponse(chunk, result.response.instances)) {
+          completeResult = result;
+          break;
+        }
       }
 
-      if (!result.success || !result.response) {
-        return this.buildConceptCandidateFallbackResult(
-          asset.id,
-          imageBuffer,
-          refinementCandidates,
-          originalCandidateCount,
-          prompts.length,
-          responseInstanceCount,
-          result.error || 'SAM3 instance refinement returned no response.',
-          vegetationCandidates
-        );
+      if (!completeResult?.response) {
+        incompleteChunks += 1;
+        chunk.forEach((prompt) => incompletePromptIds.add(prompt.id));
+        continue;
       }
 
-      responseInstanceCount += result.response.instances.length;
-      for (const instance of result.response.instances) {
-        responseById.set(instance.id, instance);
+      responseInstanceCount += completeResult.response.instances.length;
+      for (const instance of completeResult.response.instances) {
+        if (candidateById.has(instance.id)) {
+          responseById.set(instance.id, instance);
+        }
       }
     }
 
     let rejectedInstances = 0;
-    const refinedDetections = prompts.flatMap((prompt) => {
-      const response = responseById.get(prompt.id);
+    let refinedInstances = 0;
+    const detections = prompts.flatMap((prompt) => {
       const sourceCandidate = candidateById.get(prompt.id);
-      if (!response?.polygon || !sourceCandidate) {
+      if (!sourceCandidate) {
+        return [];
+      }
+
+      if (incompletePromptIds.has(prompt.id)) {
+        return [mapConceptDetectionToAssetDetection(sourceCandidate)];
+      }
+
+      const response = responseById.get(prompt.id);
+      if (!response?.polygon) {
         rejectedInstances += 1;
         return [];
       }
 
+      const bbox = scaleBboxToOriginal(
+        response.bbox_from_mask ?? polygonBounds(response.polygon),
+        resized.scaling.scaleFactor
+      );
       const score = conceptDetectionScore(sourceCandidate);
+      refinedInstances += 1;
       return [{
-        bbox: response.bbox_from_mask ?? polygonBounds(response.polygon),
-        polygon: response.polygon,
+        bbox,
+        polygon: scalePolygonToOriginal(
+          response.polygon,
+          bbox,
+          resized.scaling.scaleFactor
+        ),
         confidence: score,
         similarity:
           typeof sourceCandidate.similarity === 'number'
@@ -2918,21 +3019,32 @@ export class Sam3BatchV2Service {
       ? await this.applyVegetationMaskHygiene(
           asset.id,
           imageBuffer,
-          refinedDetections,
+          detections,
           vegetationCandidates.imageWidth,
           vegetationCandidates.imageHeight,
           vegetationCandidates.threshold
         )
       : undefined;
+    const incompleteCandidateCount = incompletePromptIds.size;
+    const backendWarning = incompleteChunks > 0
+      ? `SAM3 instance refinement returned incomplete responses for ${asset.id}; ` +
+        `saved ${incompleteCandidateCount} candidate(s) from ${incompleteChunks} chunk(s) ` +
+        'as unrefined pending review items after retry.'
+      : undefined;
+
+    if (backendWarning) {
+      console.warn(`[SAM3 V2] ${backendWarning}`);
+    }
 
     return {
-      detections: maskHygiene?.detections ?? refinedDetections,
+      detections: maskHygiene?.detections ?? detections,
       candidateCount: originalCandidateCount,
       refinementBoxCount: prompts.length,
       refinementDetectionCount: responseInstanceCount,
       refineSentInstances: prompts.length,
-      refineRefinedInstances: refinedDetections.length,
+      refineRefinedInstances: refinedInstances,
       refineRejectedInstances: rejectedInstances,
+      refineIncompleteChunks: incompleteChunks,
       vegetationThreshold: vegetationCandidates?.threshold,
       vegetationGatedCandidates: vegetationCandidates?.gatedCount,
       vegetationRecenteredCandidates: vegetationCandidates?.recenteredCount,
@@ -2941,6 +3053,8 @@ export class Sam3BatchV2Service {
       maskGreenFractionP10: maskHygiene?.p10,
       maskGreenFractionMedian: maskHygiene?.median,
       maskGreenFractionP90: maskHygiene?.p90,
+      usedCandidateFallback: incompleteChunks > 0,
+      backendWarning,
     };
   }
 

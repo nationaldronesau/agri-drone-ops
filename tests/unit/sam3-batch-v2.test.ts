@@ -229,6 +229,10 @@ describe('sam3-batch-v2', () => {
     const candidates = Array.from({ length: 401 }, (_, index) =>
       makeConceptDetection(index, 0.7 + index / 10_000)
     );
+    const resizeImage = vi.fn().mockResolvedValue({
+      buffer: Buffer.from('resized-2048-image'),
+      scaling: { scaleFactor: 0.5 },
+    });
     const refineInstances = vi.fn().mockImplementation(async ({ instances }) => ({
       success: true,
       response: {
@@ -255,6 +259,7 @@ describe('sam3-batch-v2', () => {
           ipAddress: '127.0.0.1',
         }),
         isReady: vi.fn().mockReturnValue(true),
+        resizeImage,
         refineInstances,
       } as any,
       acquireGpuLock: vi.fn(),
@@ -280,16 +285,18 @@ describe('sam3-batch-v2', () => {
       1,
     ]);
     expect(refineInstances.mock.calls[0][0]).toMatchObject({
-      image: Buffer.from('original-resolution-image').toString('base64'),
+      image: Buffer.from('resized-2048-image').toString('base64'),
       return_polygons: true,
       decode_batch: 32,
       polygon_resolution: 2048,
       score_threshold: 0.5,
     });
     expect(refineInstances.mock.calls[0][0].instances[0]).toMatchObject({
-      box: [0, 10, 6, 18],
-      positive_points: [[3, 14]],
+      box: [0, 5, 3, 9],
+      positive_points: [[2, 7]],
     });
+    expect(resizeImage).toHaveBeenCalledOnce();
+    expect(resizeImage).toHaveBeenCalledWith(Buffer.from('original-resolution-image'));
     expect(result).toMatchObject({
       refinementMode: 'instances',
       candidateBudget: 400,
@@ -306,7 +313,269 @@ describe('sam3-batch-v2', () => {
       confidence: candidates[1].similarity,
       similarity: candidates[1].similarity,
     });
-    expect(mappedSecondCandidate.bbox[0]).toBeGreaterThan(9_000);
+    expect(mappedSecondCandidate.bbox[0]).toBeGreaterThan(18_000);
+  });
+
+  it('retries a chunk with a missing id, then preserves the whole chunk as unrefined', async () => {
+    process.env.SAM3_REFINE_MODE = 'instances';
+    const candidates = [makeConceptDetection(0), makeConceptDetection(1)];
+    const refineInstances = vi.fn().mockImplementation(async ({ instances }) => ({
+      success: true,
+      response: {
+        instances: [{
+          id: instances[0].id,
+          polygon: [[0, 5], [3, 5], [3, 9]],
+          bbox_from_mask: [0, 5, 3, 9],
+          predicted_iou: 0.9,
+          score: 0.9,
+        }],
+        image_size: [2048, 1024],
+      },
+    }));
+    const resizeImage = vi.fn().mockResolvedValue({
+      buffer: Buffer.from('resized-image'),
+      scaling: { scaleFactor: 0.5 },
+    });
+    const service = new Sam3BatchV2Service({
+      prisma: {} as never,
+      awsSam3Service: {
+        refreshStatus: vi.fn().mockResolvedValue({
+          modelLoaded: true,
+          instanceState: 'ready',
+          ipAddress: '127.0.0.1',
+        }),
+        isReady: vi.fn().mockReturnValue(true),
+        resizeImage,
+        refineInstances,
+      } as any,
+      acquireGpuLock: vi.fn(),
+      refreshGpuLock: vi.fn(),
+      releaseGpuLock: vi.fn(),
+      sleep: vi.fn(),
+      now: () => new Date('2026-07-17T00:00:00.000Z'),
+    });
+
+    const result = await (service as any).refineConceptDetectionsWithBoxPrompts(
+      { id: 'asset-missing' },
+      Buffer.from('original-image'),
+      'Pine Sapling',
+      candidates,
+      { enabled: false, exemplarGreenMedian: 0.8 }
+    );
+
+    expect(refineInstances).toHaveBeenCalledTimes(2);
+    expect(resizeImage).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      detections: candidates.map((candidate) => ({
+        bbox: candidate.bbox,
+        polygon: candidate.polygon,
+        confidence: candidate.similarity,
+        similarity: candidate.similarity,
+      })),
+      refineRefinedInstances: 0,
+      refineRejectedInstances: 0,
+      refineIncompleteChunks: 1,
+      usedCandidateFallback: true,
+      backendWarning: expect.stringContaining('saved 2 candidate(s) from 1 chunk(s)'),
+    });
+  });
+
+  it('retries a chunk with a duplicate id, then preserves the whole chunk as unrefined', async () => {
+    process.env.SAM3_REFINE_MODE = 'instances';
+    const candidates = [makeConceptDetection(0), makeConceptDetection(1)];
+    const refineInstances = vi.fn().mockImplementation(async ({ instances }) => {
+      const responseFor = (instance: any) => ({
+        id: instance.id,
+        polygon: [[0, 5], [3, 5], [3, 9]],
+        bbox_from_mask: [0, 5, 3, 9],
+        predicted_iou: 0.9,
+        score: 0.9,
+      });
+      return {
+        success: true,
+        response: {
+          instances: [
+            responseFor(instances[0]),
+            responseFor(instances[0]),
+            responseFor(instances[1]),
+          ],
+          image_size: [2048, 1024],
+        },
+      };
+    });
+    const service = new Sam3BatchV2Service({
+      prisma: {} as never,
+      awsSam3Service: {
+        refreshStatus: vi.fn().mockResolvedValue({
+          modelLoaded: true,
+          instanceState: 'ready',
+          ipAddress: '127.0.0.1',
+        }),
+        isReady: vi.fn().mockReturnValue(true),
+        resizeImage: vi.fn().mockResolvedValue({
+          buffer: Buffer.from('resized-image'),
+          scaling: { scaleFactor: 0.5 },
+        }),
+        refineInstances,
+      } as any,
+      acquireGpuLock: vi.fn(),
+      refreshGpuLock: vi.fn(),
+      releaseGpuLock: vi.fn(),
+      sleep: vi.fn(),
+      now: () => new Date('2026-07-17T00:00:00.000Z'),
+    });
+
+    const result = await (service as any).refineConceptDetectionsWithBoxPrompts(
+      { id: 'asset-duplicate' },
+      Buffer.from('original-image'),
+      'Pine Sapling',
+      candidates,
+      { enabled: false, exemplarGreenMedian: 0.8 }
+    );
+
+    expect(refineInstances).toHaveBeenCalledTimes(2);
+    expect(result.detections.map((detection: any) => detection.bbox)).toEqual(
+      candidates.map((candidate) => candidate.bbox)
+    );
+    expect(result).toMatchObject({
+      refineRefinedInstances: 0,
+      refineRejectedInstances: 0,
+      refineIncompleteChunks: 1,
+      usedCandidateFallback: true,
+    });
+  });
+
+  it('counts an explicit null polygon as a rejection without chunk fallback', async () => {
+    process.env.SAM3_REFINE_MODE = 'instances';
+    const candidates = [makeConceptDetection(0), makeConceptDetection(1)];
+    const refineInstances = vi.fn().mockImplementation(async ({ instances }) => ({
+      success: true,
+      response: {
+        instances: [
+          {
+            id: instances[0].id,
+            polygon: null,
+            bbox_from_mask: null,
+            predicted_iou: 0.4,
+            score: 0.4,
+          },
+          {
+            id: instances[1].id,
+            polygon: [[5, 5], [8, 5], [8, 9], [5, 9]],
+            bbox_from_mask: [5, 5, 8, 9],
+            predicted_iou: 0.9,
+            score: 0.9,
+          },
+        ],
+        image_size: [2048, 1024],
+      },
+    }));
+    const service = new Sam3BatchV2Service({
+      prisma: {} as never,
+      awsSam3Service: {
+        refreshStatus: vi.fn().mockResolvedValue({
+          modelLoaded: true,
+          instanceState: 'ready',
+          ipAddress: '127.0.0.1',
+        }),
+        isReady: vi.fn().mockReturnValue(true),
+        resizeImage: vi.fn().mockResolvedValue({
+          buffer: Buffer.from('resized-image'),
+          scaling: { scaleFactor: 0.5 },
+        }),
+        refineInstances,
+      } as any,
+      acquireGpuLock: vi.fn(),
+      refreshGpuLock: vi.fn(),
+      releaseGpuLock: vi.fn(),
+      sleep: vi.fn(),
+      now: () => new Date('2026-07-17T00:00:00.000Z'),
+    });
+
+    const result = await (service as any).refineConceptDetectionsWithBoxPrompts(
+      { id: 'asset-null' },
+      Buffer.from('original-image'),
+      'Pine Sapling',
+      candidates,
+      { enabled: false, exemplarGreenMedian: 0.8 }
+    );
+
+    expect(refineInstances).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      detections: [{
+        bbox: [10, 10, 16, 18],
+        polygon: [[10, 10], [16, 10], [16, 18], [10, 18]],
+        confidence: candidates[1].similarity,
+        similarity: candidates[1].similarity,
+      }],
+      refineRefinedInstances: 1,
+      refineRejectedInstances: 1,
+      refineIncompleteChunks: 0,
+      usedCandidateFallback: false,
+    });
+  });
+
+  it('records incomplete refinement chunks on the per-asset stage log entry', async () => {
+    const stageLog: any[] = [];
+    const service = new Sam3BatchV2Service({
+      prisma: {} as never,
+      awsSam3Service: {} as never,
+      acquireGpuLock: vi.fn(),
+      refreshGpuLock: vi.fn(),
+      releaseGpuLock: vi.fn(),
+      sleep: vi.fn(),
+      now: () => new Date('2026-07-17T00:00:00.000Z'),
+    });
+    vi.spyOn(service as any, 'appendStageLog').mockImplementation(
+      async (_batchJobId: string, entries: any[], entry: any) => {
+        entries.push({ ...entry, timestamp: '2026-07-17T00:00:00.000Z' });
+      }
+    );
+    vi.spyOn(service as any, 'runVisualCropMatch').mockResolvedValue({
+      assetId: 'asset-stage-log',
+      detections: [],
+      outcome: 'zero_detections',
+      refinementMode: 'instances',
+      refineSentInstances: 2,
+      refineRefinedInstances: 0,
+      refineRejectedInstances: 0,
+      refineIncompleteChunks: 1,
+    });
+    vi.spyOn(service as any, 'persistAssetResult').mockResolvedValue(undefined);
+
+    await (service as any).runAndPersistBatch(
+      { updateProgress: vi.fn().mockResolvedValue(undefined) },
+      {
+        batchJobId: 'batch-stage-log',
+        parentBatchJobId: null,
+        mode: 'visual_crop_match',
+        weedType: 'Pine Sapling',
+        sourceAssetId: 'asset-stage-log',
+        exemplarCrops: [],
+        operatorCropCount: 0,
+        assets: [{
+          id: 'asset-stage-log',
+          storageUrl: 'http://localhost/asset-stage-log.jpg',
+          s3Key: null,
+          s3Bucket: null,
+          storageType: 'local',
+          imageWidth: 100,
+          imageHeight: 100,
+        }],
+        missingAssetIds: [],
+      },
+      0,
+      stageLog
+    );
+
+    expect(stageLog).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stage: 'run_sam3',
+        status: 'completed',
+        assetId: 'asset-stage-log',
+        refineIncompleteChunks: 1,
+      }),
+    ]));
   });
 
   it('keeps the flag-off concept refinement request on the legacy segment path', async () => {
@@ -366,6 +635,63 @@ describe('sam3-batch-v2', () => {
       returnPolygons: true,
     });
     expect(refineInstances).not.toHaveBeenCalled();
+  });
+
+  it('keeps the flag-off concept apply request byte-identical to the legacy payload', async () => {
+    process.env.SAM3_REFINE_MODE = 'concept';
+    process.env.SAM3_RETRIEVAL_BACKEND = 'dinov3_vitl16_sat';
+    const image = await makeVegetationImage(10, 10, []);
+    const singleton = awsSam3Service as any;
+    const previous = {
+      configured: singleton.configured,
+      instanceIp: singleton.instanceIp,
+      instanceState: singleton.instanceState,
+    };
+    singleton.configured = true;
+    singleton.instanceIp = '127.0.0.1';
+    singleton.instanceState = 'ready';
+    global.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      results: [{ detections: [] }],
+      processing_time_ms: 4,
+    }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+
+    try {
+      const options = buildBatchV2ConceptApplyOptions('high_recall');
+      await awsSam3Service.applyConceptExemplar({
+        exemplarId: 'legacy-exemplar',
+        imageBuffer: image,
+        imageId: 'legacy-image',
+        options,
+      });
+
+      expect(resolveBatchV2RetrievalBackend()).toBeUndefined();
+      expect(options).toEqual({
+        returnPolygons: true,
+        similarityThreshold: 0.75,
+        topK: 180,
+        minBoxSize: 16,
+        maxBoxSize: 600,
+        nmsThreshold: 0.5,
+      });
+      expect(global.fetch).toHaveBeenCalledOnce();
+      const requestBody = (global.fetch as any).mock.calls[0][1].body;
+      const payload = JSON.parse(requestBody);
+      expect(requestBody).toBe(JSON.stringify({
+        exemplar_id: 'legacy-exemplar',
+        images: [payload.images[0]],
+        return_polygons: true,
+        image_ids: ['legacy-image'],
+        similarity_threshold: 0.75,
+        top_k: 180,
+        min_box_size: 16,
+        max_box_size: 600,
+        nms_threshold: 0.5,
+      }));
+    } finally {
+      singleton.configured = previous.configured;
+      singleton.instanceIp = previous.instanceIp;
+      singleton.instanceState = previous.instanceState;
+    }
   });
 
   it('truncates equal-score instance candidates deterministically at the configured budget', async () => {
