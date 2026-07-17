@@ -215,6 +215,42 @@ export interface SAM3SegmentResult {
   errorCode?: 'NOT_CONFIGURED' | 'NOT_READY' | 'API_ERROR' | 'TIMEOUT' | 'NETWORK_ERROR' | 'UNSUPPORTED';
 }
 
+export interface SAM3RefineInstancePrompt {
+  id: string;
+  box: [number, number, number, number];
+  positive_points?: [number, number][];
+  negative_points?: [number, number][];
+}
+
+export interface SAM3RefineInstancesRequest {
+  image: string;
+  instances: SAM3RefineInstancePrompt[];
+  return_polygons: true;
+  decode_batch?: number;
+  polygon_resolution?: number;
+  score_threshold?: number;
+}
+
+export interface SAM3RefinedInstance {
+  id: string;
+  polygon: [number, number][] | null;
+  bbox_from_mask: [number, number, number, number] | null;
+  predicted_iou: number;
+  score: number;
+}
+
+export interface SAM3RefineInstancesResponse {
+  instances: SAM3RefinedInstance[];
+  image_size: [number, number];
+}
+
+export interface SAM3RefineInstancesResult {
+  success: boolean;
+  response: SAM3RefineInstancesResponse | null;
+  error?: string;
+  errorCode?: 'NOT_CONFIGURED' | 'NOT_READY' | 'API_ERROR' | 'TIMEOUT' | 'NETWORK_ERROR';
+}
+
 export type SAM3ApiFlavor = 'legacy' | 'modern' | 'unknown';
 
 // Point-based prediction interfaces (for click-to-segment)
@@ -267,6 +303,9 @@ export interface SAM3ConceptExemplarResponse {
   className: string;
   numCrops: number;
   createdAt?: string;
+  embeddingBackend?: string;
+  backendFallback?: boolean;
+  backendWarning?: string;
 }
 
 export interface SAM3ConceptApplyOptions {
@@ -276,11 +315,17 @@ export interface SAM3ConceptApplyOptions {
   maxBoxSize?: number;
   nmsThreshold?: number;
   returnPolygons?: boolean;
+  sizeFilterMinRatio?: number;
+  sizeFilterMaxRatio?: number;
+  embeddingBackend?: string;
 }
 
 export interface SAM3ConceptApplyResponse {
   detections: SAM3ConceptDetection[];
   processingTimeMs: number;
+  embeddingBackend?: string;
+  backendFallback?: boolean;
+  backendWarning?: string;
 }
 
 export interface SAM3ConceptResult<T> {
@@ -1087,6 +1132,78 @@ class AWSSAM3Service {
   }
 
   /**
+   * Refine candidate boxes independently while preserving the caller's IDs.
+   * Coordinates and returned polygons remain in original-image space.
+   */
+  async refineInstances(
+    request: SAM3RefineInstancesRequest
+  ): Promise<SAM3RefineInstancesResult> {
+    if (!this.configured) {
+      return {
+        success: false,
+        response: null,
+        error: this.configError || 'AWS SAM3 not configured',
+        errorCode: 'NOT_CONFIGURED',
+      };
+    }
+
+    if (!this.instanceIp || this.instanceState !== 'ready') {
+      return {
+        success: false,
+        response: null,
+        error: `Instance not ready (state: ${this.instanceState})`,
+        errorCode: 'NOT_READY',
+      };
+    }
+
+    this.updateActivity();
+
+    try {
+      console.log(
+        `[AWS-SAM3] Calling /refine_instances with ${request.instances.length} instances`
+      );
+      const response = await fetch(
+        `http://${this.instanceIp}:${SAM3_PORT}/refine_instances`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(request),
+          signal: AbortSignal.timeout(120000),
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error');
+        console.error(
+          `[AWS-SAM3] Instance refinement failed: ${response.status} - ${errorText}`
+        );
+        return {
+          success: false,
+          response: null,
+          error: `SAM3 API error: ${response.status} - ${errorText.substring(0, 200)}`,
+          errorCode: 'API_ERROR',
+        };
+      }
+
+      const result = await response.json() as SAM3RefineInstancesResponse;
+      console.log(
+        `[AWS-SAM3] Instance refinement returned ${result.instances.length} instances`
+      );
+      return { success: true, response: result };
+    } catch (error) {
+      const isTimeout = error instanceof Error && error.name === 'TimeoutError';
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[AWS-SAM3] Instance refinement error:', errorMessage);
+      return {
+        success: false,
+        response: null,
+        error: errorMessage,
+        errorCode: isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR',
+      };
+    }
+  }
+
+  /**
    * Call the SAM3 /segment endpoint for point-based segmentation
    * SAM3 v0.6.0 uses /segment for all segmentation (points converted to boxes internally)
    *
@@ -1521,6 +1638,7 @@ class AWSSAM3Service {
     boxes: SAM3ConceptBox[];
     className: string;
     imageId?: string;
+    embeddingBackend?: string;
   }): Promise<SAM3ConceptResult<SAM3ConceptExemplarResponse>> {
     if (!this.configured) {
       return {
@@ -1545,17 +1663,37 @@ class AWSSAM3Service {
       const { buffer, scaling } = await this.resizeImage(request.imageBuffer);
       const scaledBoxes = this.scaleConceptBoxesToResized(request.boxes, scaling);
 
-      const response = await fetch(`${baseUrl}/api/v1/exemplars/create`, {
-        method: 'POST',
-        headers: this.buildConceptHeaders(),
-        body: JSON.stringify({
+      const buildPayload = (embeddingBackend = request.embeddingBackend) => ({
           image: buffer.toString('base64'),
           boxes: scaledBoxes,
           class_name: request.className,
           image_id: request.imageId,
-        }),
-        signal: AbortSignal.timeout(CONCEPT_REQUEST_TIMEOUT_MS),
+          ...(embeddingBackend ? { embedding_backend: embeddingBackend } : {}),
       });
+      const sendRequest = (embeddingBackend = request.embeddingBackend) =>
+        fetch(`${baseUrl}/api/v1/exemplars/create`, {
+          method: 'POST',
+          headers: this.buildConceptHeaders(),
+          body: JSON.stringify(buildPayload(embeddingBackend)),
+          signal: AbortSignal.timeout(CONCEPT_REQUEST_TIMEOUT_MS),
+        });
+
+      let response = await sendRequest();
+      let embeddingBackend = request.embeddingBackend;
+      let backendFallback = false;
+      let backendWarning: string | undefined;
+      if (
+        response.status === 400 &&
+        request.embeddingBackend &&
+        request.embeddingBackend !== 'dinov2_vits14'
+      ) {
+        backendFallback = true;
+        embeddingBackend = 'dinov2_vits14';
+        backendWarning =
+          `Concept exemplar backend ${request.embeddingBackend} was rejected; ` +
+          'retried with dinov2_vits14.';
+        response = await sendRequest(embeddingBackend);
+      }
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unknown error');
@@ -1576,6 +1714,9 @@ class AWSSAM3Service {
           className: String(result.class_name || request.className),
           numCrops: Number(result.num_crops || request.boxes.length),
           createdAt: typeof result.created_at === 'string' ? result.created_at : undefined,
+          embeddingBackend,
+          backendFallback,
+          backendWarning,
         },
       };
     } catch (error) {
@@ -1640,13 +1781,44 @@ class AWSSAM3Service {
       if (request.options?.nmsThreshold != null) {
         payload.nms_threshold = request.options.nmsThreshold;
       }
+      if (request.options?.sizeFilterMinRatio != null) {
+        payload.size_filter_min_ratio = request.options.sizeFilterMinRatio;
+      }
+      if (request.options?.sizeFilterMaxRatio != null) {
+        payload.size_filter_max_ratio = request.options.sizeFilterMaxRatio;
+      }
+      if (request.options?.embeddingBackend) {
+        payload.embedding_backend = request.options.embeddingBackend;
+      }
 
-      const response = await fetch(`${baseUrl}/api/v1/exemplars/apply`, {
-        method: 'POST',
-        headers: this.buildConceptHeaders(),
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(CONCEPT_REQUEST_TIMEOUT_MS),
-      });
+      const sendRequest = (embeddingBackend = request.options?.embeddingBackend) =>
+        fetch(`${baseUrl}/api/v1/exemplars/apply`, {
+          method: 'POST',
+          headers: this.buildConceptHeaders(),
+          body: JSON.stringify({
+            ...payload,
+            ...(embeddingBackend ? { embedding_backend: embeddingBackend } : {}),
+          }),
+          signal: AbortSignal.timeout(CONCEPT_REQUEST_TIMEOUT_MS),
+        });
+
+      let response = await sendRequest();
+      let embeddingBackend = request.options?.embeddingBackend;
+      let backendFallback = false;
+      let backendWarning: string | undefined;
+      if (
+        response.status === 400 &&
+        embeddingBackend &&
+        embeddingBackend !== 'dinov2_vits14'
+      ) {
+        backendFallback = true;
+        const rejectedBackend = embeddingBackend;
+        embeddingBackend = 'dinov2_vits14';
+        backendWarning =
+          `Retrieval backend ${rejectedBackend} was rejected for exemplar ` +
+          `${request.exemplarId}; retried with dinov2_vits14.`;
+        response = await sendRequest(embeddingBackend);
+      }
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unknown error');
@@ -1673,6 +1845,9 @@ class AWSSAM3Service {
         data: {
           detections,
           processingTimeMs: Number(result.processing_time_ms || 0),
+          embeddingBackend,
+          backendFallback,
+          backendWarning,
         },
       };
     } catch (error) {
