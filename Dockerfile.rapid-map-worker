@@ -22,7 +22,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 ARG FLAT_MAP_RUNNER_REPO=https://github.com/nationaldronesau/flat-map-runner.git
-ARG FLAT_MAP_RUNNER_REF=707ab72ffe90632f257fcdcaac9f357dba193b0b
+# TODO: update to merge commit once PR #1 merges
+ARG FLAT_MAP_RUNNER_REF=9cf7e77ee23a5df2e75b00c00475960412d9a9bb
 
 RUN git clone --depth 1 "${FLAT_MAP_RUNNER_REPO}" "${FLAT_MAP_RUNNER_DIR}" \
     && cd "${FLAT_MAP_RUNNER_DIR}" \

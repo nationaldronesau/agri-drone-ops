@@ -9,22 +9,47 @@ import { z } from "zod";
 import prisma from "@/lib/db";
 import { checkProjectAccess, getAuthenticatedUser } from "@/lib/auth/api-auth";
 import { enqueueRapidMapRun } from "@/lib/queue/rapid-map-queue";
+import {
+  RapidMapAssetSetValidationError,
+  resolveRapidMapAssetSet,
+} from "@/lib/services/rapid-map-asset-source";
 import { S3Service } from "@/lib/services/s3";
 
-const createRapidMapRunSchema = z.object({
-  name: z.string().trim().min(1).max(160).optional(),
-  description: z.string().trim().max(2000).optional(),
-  sourceType: z
-    .nativeEnum(RapidMapSourceType)
-    .optional()
-    .default(RapidMapSourceType.S3_PREFIX),
-  sourcePath: z.string().trim().min(1).max(4000),
-  sourceAssetIds: z.array(z.string().min(1)).max(5000).optional(),
-  preset: z
-    .nativeEnum(RapidMapPreset)
-    .optional()
-    .default(RapidMapPreset.INITIAL_TRIAL),
-});
+const createRapidMapRunSchema = z
+  .object({
+    name: z.string().trim().min(1).max(160).optional(),
+    description: z.string().trim().max(2000).optional(),
+    sourceType: z
+      .nativeEnum(RapidMapSourceType)
+      .optional()
+      .default(RapidMapSourceType.S3_PREFIX),
+    sourcePath: z.string().trim().min(1).max(4000).optional(),
+    sourceAssetIds: z.array(z.string().min(1)).max(5000).optional(),
+    preset: z
+      .nativeEnum(RapidMapPreset)
+      .optional()
+      .default(RapidMapPreset.INITIAL_TRIAL),
+  })
+  .superRefine((value, context) => {
+    if (value.sourceType === RapidMapSourceType.ASSET_SET) {
+      if (!value.sourceAssetIds?.length) {
+        context.addIssue({
+          code: "custom",
+          path: ["sourceAssetIds"],
+          message: "ASSET_SET requires source asset ids.",
+        });
+      }
+      return;
+    }
+
+    if (!value.sourcePath) {
+      context.addIssue({
+        code: "custom",
+        path: ["sourcePath"],
+        message: `${value.sourceType} requires a source path.`,
+      });
+    }
+  });
 
 function presetConfig(preset: RapidMapPreset): Prisma.InputJsonObject {
   switch (preset) {
@@ -34,7 +59,9 @@ function presetConfig(preset: RapidMapPreset): Prisma.InputJsonObject {
         featherPx: 24,
         maxSourcePx: 1536,
         nadirPitchToleranceDeg: 15,
-        targetEpsg: "EPSG:32756",
+        targetEpsg: "auto",
+        blend: "center",
+        cog: true,
       };
     case RapidMapPreset.COVERAGE_CHECK:
       return {
@@ -42,7 +69,9 @@ function presetConfig(preset: RapidMapPreset): Prisma.InputJsonObject {
         featherPx: 16,
         maxSourcePx: 768,
         nadirPitchToleranceDeg: 20,
-        targetEpsg: "EPSG:32756",
+        targetEpsg: "auto",
+        blend: "center",
+        cog: true,
       };
     case RapidMapPreset.INITIAL_TRIAL:
     default:
@@ -51,7 +80,9 @@ function presetConfig(preset: RapidMapPreset): Prisma.InputJsonObject {
         featherPx: 32,
         maxSourcePx: 1024,
         nadirPitchToleranceDeg: 15,
-        targetEpsg: "EPSG:32756",
+        targetEpsg: "auto",
+        blend: "center",
+        cog: true,
       };
   }
 }
@@ -67,6 +98,19 @@ function processingLog(
     timestamp: new Date().toISOString(),
     ...(details ? { details } : {}),
   };
+}
+
+function appendProcessingLog(
+  current: Prisma.JsonValue | null,
+  entry: Prisma.InputJsonObject
+): Prisma.InputJsonArray {
+  const existing = Array.isArray(current)
+    ? (current.filter(Boolean) as Prisma.InputJsonArray)
+    : current && typeof current === "object"
+      ? [current as Prisma.InputJsonObject]
+      : [];
+
+  return [...existing, entry];
 }
 
 function buildOutputPrefix(projectId: string, runId: string): string {
@@ -171,6 +215,13 @@ export async function POST(
       );
     }
 
+    if (payload.data.sourceType === RapidMapSourceType.ASSET_SET) {
+      await resolveRapidMapAssetSet(
+        access.teamId,
+        payload.data.sourceAssetIds || []
+      );
+    }
+
     const runName =
       payload.data.name ||
       `Rapid Map - ${new Date().toLocaleDateString("en-AU", {
@@ -187,7 +238,7 @@ export async function POST(
         name: runName,
         description: payload.data.description,
         sourceType: payload.data.sourceType,
-        sourcePath: payload.data.sourcePath,
+        sourcePath: payload.data.sourcePath ?? null,
         sourceAssetIds: payload.data.sourceAssetIds
           ? (payload.data.sourceAssetIds as Prisma.InputJsonArray)
           : Prisma.DbNull,
@@ -227,7 +278,7 @@ export async function POST(
           status: run.status,
           projectId,
           sourceType: payload.data.sourceType,
-          sourcePath: payload.data.sourcePath,
+          sourcePath: payload.data.sourcePath ?? null,
           preset: payload.data.preset,
           outputS3Prefix,
         } as Prisma.InputJsonValue,
@@ -249,9 +300,9 @@ export async function POST(
         where: { id: run.id },
         data: {
           queueJobId,
-          processingLog: processingLog(
-            "QUEUED",
-            "Rapid Map processing has been queued."
+          processingLog: appendProcessingLog(
+            run.processingLog,
+            processingLog("QUEUED", "Rapid Map processing has been queued.")
           ),
         },
       });
@@ -265,10 +316,13 @@ export async function POST(
         where: { id: run.id },
         data: {
           errorMessage: queueError,
-          processingLog: processingLog(
-            "QUEUE_UNAVAILABLE",
-            "Rapid Map run was recorded, but the processing queue is not available yet.",
-            { error: queueError }
+          processingLog: appendProcessingLog(
+            run.processingLog,
+            processingLog(
+              "QUEUE_UNAVAILABLE",
+              "Rapid Map run was recorded, but the processing queue is not available yet.",
+              { error: queueError }
+            )
           ),
         },
       });
@@ -284,6 +338,10 @@ export async function POST(
       { status: 202 }
     );
   } catch (error) {
+    if (error instanceof RapidMapAssetSetValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+
     console.error("Failed to create rapid map run:", error);
     return NextResponse.json({ error: "Failed to create rapid map run" }, { status: 500 });
   }

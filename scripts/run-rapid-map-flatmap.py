@@ -43,10 +43,13 @@ def ensure_directory(path: Path, label: str) -> Path:
     return path
 
 
-def sync_s3_prefix(bucket: str, prefix: str, destination: Path) -> Path:
+def require_aws_cli() -> None:
     if not shutil.which("aws"):
         raise SystemExit("AWS CLI is required for S3 Rapid Map sources.")
 
+
+def sync_s3_prefix(bucket: str, prefix: str, destination: Path) -> Path:
+    require_aws_cli()
     destination.mkdir(parents=True, exist_ok=True)
     run(
         [
@@ -81,6 +84,34 @@ def sync_s3_prefix(bucket: str, prefix: str, destination: Path) -> Path:
             "metadata.csv",
         ]
     )
+    return destination
+
+
+def download_asset_set(bucket: str, asset_objects: Any, destination: Path) -> Path:
+    require_aws_cli()
+    if not isinstance(asset_objects, list) or not asset_objects:
+        raise SystemExit("ASSET_SET Rapid Map source requires a non-empty assetObjects array.")
+
+    destination.mkdir(parents=True, exist_ok=True)
+    filenames: set[str] = set()
+    for index, asset_object in enumerate(asset_objects):
+        if not isinstance(asset_object, dict):
+            raise SystemExit(f"ASSET_SET assetObjects[{index}] must be an object.")
+
+        s3_key = asset_object.get("s3Key")
+        filename = asset_object.get("filename")
+        if not isinstance(s3_key, str) or not s3_key.strip():
+            raise SystemExit(f"ASSET_SET assetObjects[{index}] requires s3Key.")
+        if not isinstance(filename, str) or not filename.strip():
+            raise SystemExit(f"ASSET_SET assetObjects[{index}] requires filename.")
+        if Path(filename).name != filename:
+            raise SystemExit(f"ASSET_SET assetObjects[{index}] filename must be a basename.")
+        if filename in filenames:
+            raise SystemExit(f"ASSET_SET contains duplicate filename: {filename}")
+
+        filenames.add(filename)
+        run(["aws", "s3", "cp", f"s3://{bucket}/{s3_key.lstrip('/')}", str(destination / filename)])
+
     return destination
 
 
@@ -125,6 +156,21 @@ def resolve_source(job: dict[str, Any], workspace: Path) -> tuple[Path, Path]:
             raise SystemExit("S3 Rapid Map source requires sourceBucket and sourcePath.")
         return discover_input_paths(sync_s3_prefix(bucket, source_path, workspace / "input"))
 
+    if source_type == "ASSET_SET":
+        bucket = source.get("sourceBucket") or job.get("output", {}).get("bucket")
+        metadata_path = source.get("metadataCsvPath")
+        if not bucket:
+            raise SystemExit("ASSET_SET Rapid Map source requires sourceBucket.")
+        if not isinstance(metadata_path, str) or not metadata_path:
+            raise SystemExit("ASSET_SET Rapid Map source requires metadataCsvPath.")
+
+        metadata_csv = Path(metadata_path).expanduser().resolve()
+        if not metadata_csv.exists() or not metadata_csv.is_file():
+            raise SystemExit(f"ASSET_SET metadata.csv does not exist: {metadata_csv}")
+
+        image_dir = download_asset_set(bucket, source.get("assetObjects"), workspace / "input")
+        return image_dir, metadata_csv
+
     if source_type == "PROCESSING_NODE_PATH":
         if not source_path:
             raise SystemExit("Processing-node Rapid Map source requires sourcePath.")
@@ -145,6 +191,16 @@ def integer(value: Any, default: int) -> int:
     if isinstance(value, float) and math.isfinite(value):
         return int(value)
     return default
+
+
+def optional_number(value: Any) -> float | None:
+    if isinstance(value, (int, float)) and math.isfinite(value):
+        return float(value)
+    return None
+
+
+def count(value: Any) -> int:
+    return integer(value, 0)
 
 
 def config_value(config: dict[str, Any], key: str, default: Any) -> Any:
@@ -201,6 +257,8 @@ def raster_metadata(path: Path) -> dict[str, Any]:
 def build_manifest(output_dir: Path, job: dict[str, Any]) -> dict[str, Any]:
     summary_path = output_dir / "run-summary.json"
     summary = load_json(summary_path) if summary_path.exists() else {}
+    mosaic_manifest_path = output_dir / "flat-footprint-mosaic.manifest.json"
+    mosaic_manifest = load_json(mosaic_manifest_path) if mosaic_manifest_path.exists() else {}
     mosaic_path = output_dir / "flat-footprint-mosaic.tif"
     raster = raster_metadata(mosaic_path) if mosaic_path.exists() else {}
     config = job.get("config") if isinstance(job.get("config"), dict) else {}
@@ -218,15 +276,28 @@ def build_manifest(output_dir: Path, job: dict[str, Any]) -> dict[str, Any]:
             )
 
     image_count = summary.get("image_count")
-    missing_count = summary.get("missing_metadata_images")
-    resolution_cm = number(config_value(config, "pixelSizeM", 0.3), 0.3) * 100
+    missing_count = count(summary.get("missing_metadata_images"))
+    pitch_filtered_count = count(summary.get("pitch_filtered_images"))
+    rendered_count = count(mosaic_manifest.get("rendered_count"))
+    skipped_count = count(mosaic_manifest.get("skipped_count"))
+    pixel_size = optional_number(mosaic_manifest.get("pixel_size"))
+    resolution_cm = pixel_size * 100 if pixel_size is not None else None
+    skipped = mosaic_manifest.get("skipped")
+    if not isinstance(skipped, list):
+        skipped = []
 
     return {
         "version": 1,
         "summary": {
             "sourceImageCount": image_count,
-            "renderedImageCount": image_count,
-            "excludedImageCount": missing_count,
+            "renderedImageCount": rendered_count,
+            "excludedImageCount": missing_count + pitch_filtered_count + skipped_count,
+            "gpsOutlierCount": count(mosaic_manifest.get("gps_outlier_count")),
+            "pitchFilteredCount": pitch_filtered_count,
+            "elapsedSeconds": optional_number(mosaic_manifest.get("elapsed_seconds")),
+            "targetEpsg": summary.get("target_epsg"),
+            "blend": summary.get("blend"),
+            "skipped": skipped[:50],
             "estimatedErrorMeters": config_value(config, "estimatedErrorMeters", None),
             "rasterWidth": raster.get("rasterWidth"),
             "rasterHeight": raster.get("rasterHeight"),
@@ -240,7 +311,7 @@ def build_manifest(output_dir: Path, job: dict[str, Any]) -> dict[str, Any]:
             "centerLat": raster.get("centerLat"),
             "centerLon": raster.get("centerLon"),
             "resolutionCmPerPixel": resolution_cm,
-            "imageCount": image_count,
+            "imageCount": rendered_count,
             "rasterWidth": raster.get("rasterWidth"),
             "rasterHeight": raster.get("rasterHeight"),
             "crs": raster.get("crs"),
@@ -274,8 +345,15 @@ def main() -> int:
     feather_px = integer(config_value(config, "featherPx", 32), 32)
     max_source_px = integer(config_value(config, "maxSourcePx", 1024), 1024)
     preview_max_size = integer(config_value(config, "previewMaxSize", 4000), 4000)
-    target_epsg = str(config_value(config, "targetEpsg", "EPSG:32756"))
+    target_epsg = str(config_value(config, "targetEpsg", "auto"))
     nadir_pitch_tolerance = number(config_value(config, "nadirPitchToleranceDeg", 15), 15)
+    blend = str(config_value(config, "blend", "center"))
+    workers = integer(config_value(config, "workers", 0), 0)
+    max_offset_km = number(config_value(config, "maxOffsetKm", 10), 10)
+    max_raster_px = integer(config_value(config, "maxRasterPx", 250_000_000), 250_000_000)
+    cog = bool(config_value(config, "cog", True))
+    image_orientation_policy = str(config_value(config, "imageOrientationPolicy", "flipv"))
+    yaw_offset_deg = number(config_value(config, "yawOffsetDeg", 0), 0)
 
     command = [
         flat_map_python,
@@ -298,9 +376,24 @@ def main() -> int:
         str(preview_max_size),
         "--nadir-pitch-tolerance",
         str(nadir_pitch_tolerance),
+        "--blend",
+        blend,
+        "--workers",
+        str(workers),
+        "--max-offset-km",
+        str(max_offset_km),
+        "--max-raster-px",
+        str(max_raster_px),
+        "--image-orientation-policy",
+        image_orientation_policy,
+        "--yaw-offset-deg",
+        str(yaw_offset_deg),
         "--python",
         flat_map_python,
     ]
+
+    if cog:
+        command.append("--cog")
 
     run(command)
     (output_dir / "manifest.json").write_text(json.dumps(build_manifest(output_dir, job), indent=2) + "\n")

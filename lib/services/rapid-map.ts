@@ -13,6 +13,11 @@ import { Prisma, RapidMapRunStatus } from "@prisma/client";
 import type { RapidMapSourceType } from "@prisma/client";
 import prisma from "@/lib/db";
 import type { RapidMapJobResult } from "@/lib/queue/rapid-map-queue";
+import { resolveRapidMapAssetSet } from "@/lib/services/rapid-map-asset-source";
+import type {
+  ExcludedRapidMapMetadataAsset,
+  RapidMapAssetObject,
+} from "@/lib/services/rapid-map-asset-metadata";
 import { S3Service, assertValidS3Key, s3Client } from "@/lib/services/s3";
 import {
   RapidMapRunnerArtifact,
@@ -45,6 +50,9 @@ interface RapidMapSourceSpec {
   sourcePath: string | null;
   sourceBucket?: string;
   sourceAssetIds: string[];
+  assetObjects?: RapidMapAssetObject[];
+  excludedAssets?: ExcludedRapidMapMetadataAsset[];
+  metadataCsv?: string;
   estimatedSourceImageCount?: number;
 }
 
@@ -135,6 +143,7 @@ function isImageKey(key: string): boolean {
 }
 
 async function buildSourceSpec(run: {
+  teamId: string;
   sourceType: RapidMapSourceType;
   sourcePath: string | null;
   sourceAssetIds: Prisma.JsonValue | null;
@@ -159,15 +168,17 @@ async function buildSourceSpec(run: {
 
   if (run.sourceType === "ASSET_SET") {
     const sourceAssetIds = parseSourceAssetIds(run.sourceAssetIds);
-    if (sourceAssetIds.length === 0) {
-      throw new Error("Rapid Map run is missing source asset ids.");
-    }
+    const resolved = await resolveRapidMapAssetSet(run.teamId, sourceAssetIds);
 
     return {
       type: run.sourceType,
       sourcePath: run.sourcePath,
-      sourceAssetIds,
-      estimatedSourceImageCount: sourceAssetIds.length,
+      sourceBucket: S3Service.bucketName,
+      sourceAssetIds: resolved.sourceAssetIds,
+      assetObjects: resolved.assetObjects,
+      excludedAssets: resolved.excludedAssets,
+      metadataCsv: resolved.metadataCsv,
+      estimatedSourceImageCount: resolved.assetObjects.length,
     };
   }
 
@@ -374,6 +385,21 @@ async function writeRunnerJobFile(options: {
   outputDirectory: string;
 }) {
   const jobFilePath = path.join(options.outputDirectory, "rapid-map-job.json");
+  const { metadataCsv, ...source } = options.source;
+  let jobSource: Omit<RapidMapSourceSpec, "metadataCsv"> & {
+    metadataCsvPath?: string;
+  } = source;
+
+  if (source.type === "ASSET_SET") {
+    if (!metadataCsv || !source.assetObjects?.length) {
+      throw new Error("ASSET_SET job is missing asset objects or metadata CSV content.");
+    }
+
+    const metadataCsvPath = path.join(path.dirname(options.outputDirectory), "metadata.csv");
+    await writeFile(metadataCsvPath, metadataCsv, "utf8");
+    jobSource = { ...source, metadataCsvPath };
+  }
+
   const jobSpec = {
     version: 1,
     runId: options.run.id,
@@ -383,7 +409,7 @@ async function writeRunnerJobFile(options: {
     description: options.run.description,
     preset: options.run.preset,
     config: options.run.config || {},
-    source: options.source,
+    source: jobSource,
     output: {
       bucket: options.run.outputBucket || S3Service.bucketName,
       prefix: options.outputS3Prefix,
@@ -393,7 +419,7 @@ async function writeRunnerJobFile(options: {
   };
 
   await writeFile(jobFilePath, JSON.stringify(jobSpec, null, 2));
-  return jobFilePath;
+  return { jobFilePath, jobSource };
 }
 
 function numberOrUndefined(value: unknown): number | undefined {
@@ -483,7 +509,7 @@ export async function processRapidMapRun(
     const outputDirectory = path.join(workDirectory, "output");
     await mkdir(outputDirectory, { recursive: true });
 
-    const jobFilePath = await writeRunnerJobFile({
+    const { jobFilePath, jobSource } = await writeRunnerJobFile({
       run,
       source,
       outputS3Prefix,
@@ -499,7 +525,7 @@ export async function processRapidMapRun(
           worker: {
             jobFilePath,
             outputDirectory,
-            source,
+            source: jobSource,
           },
         }),
       },
@@ -511,6 +537,8 @@ export async function processRapidMapRun(
       runId,
       jobFilePath,
       outputDirectory,
+      reportProgress: (progress) =>
+        setProgress(runId, progress, options.reportProgress),
     });
     await setProgress(runId, 70, options.reportProgress);
 

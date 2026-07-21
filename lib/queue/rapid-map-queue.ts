@@ -29,7 +29,11 @@ export function getRapidMapQueue(): Queue<RapidMapJobData, RapidMapJobResult> {
         connection: createRedisConnection(),
         prefix: QUEUE_PREFIX,
         defaultJobOptions: {
-          attempts: 1,
+          attempts: 2,
+          backoff: {
+            type: "exponential",
+            delay: 60_000,
+          },
           removeOnComplete: {
             age: 24 * 60 * 60,
             count: 200,
