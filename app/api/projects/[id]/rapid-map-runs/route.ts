@@ -13,6 +13,7 @@ import {
   RapidMapAssetSetValidationError,
   resolveRapidMapAssetSet,
 } from "@/lib/services/rapid-map-asset-source";
+import { assertRapidMapProjectS3Prefix } from "@/lib/services/rapid-map-source-path";
 import { S3Service } from "@/lib/services/s3";
 
 const createRapidMapRunSchema = z
@@ -213,6 +214,22 @@ export async function POST(
         { error: "Invalid request body", details: payload.error.flatten() },
         { status: 400 }
       );
+    }
+
+    if (payload.data.sourceType === RapidMapSourceType.S3_PREFIX) {
+      try {
+        assertRapidMapProjectS3Prefix(payload.data.sourcePath!, projectId);
+      } catch (error) {
+        return NextResponse.json(
+          {
+            error:
+              error instanceof Error
+                ? error.message
+                : "Rapid Map S3 source prefix is invalid.",
+          },
+          { status: 400 }
+        );
+      }
     }
 
     if (payload.data.sourceType === RapidMapSourceType.ASSET_SET) {

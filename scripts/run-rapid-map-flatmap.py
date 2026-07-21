@@ -278,6 +278,7 @@ def build_manifest(output_dir: Path, job: dict[str, Any]) -> dict[str, Any]:
     image_count = summary.get("image_count")
     missing_count = count(summary.get("missing_metadata_images"))
     pitch_filtered_count = count(summary.get("pitch_filtered_images"))
+    source_image_count = count(image_count) + missing_count + pitch_filtered_count
     rendered_count = count(mosaic_manifest.get("rendered_count"))
     skipped_count = count(mosaic_manifest.get("skipped_count"))
     pixel_size = optional_number(mosaic_manifest.get("pixel_size"))
@@ -289,7 +290,7 @@ def build_manifest(output_dir: Path, job: dict[str, Any]) -> dict[str, Any]:
     return {
         "version": 1,
         "summary": {
-            "sourceImageCount": image_count,
+            "sourceImageCount": source_image_count,
             "renderedImageCount": rendered_count,
             "excludedImageCount": missing_count + pitch_filtered_count + skipped_count,
             "gpsOutlierCount": count(mosaic_manifest.get("gps_outlier_count")),

@@ -14,6 +14,7 @@ import type { RapidMapSourceType } from "@prisma/client";
 import prisma from "@/lib/db";
 import type { RapidMapJobResult } from "@/lib/queue/rapid-map-queue";
 import { resolveRapidMapAssetSet } from "@/lib/services/rapid-map-asset-source";
+import { assertRapidMapProjectS3Prefix } from "@/lib/services/rapid-map-source-path";
 import type {
   ExcludedRapidMapMetadataAsset,
   RapidMapAssetObject,
@@ -144,6 +145,7 @@ function isImageKey(key: string): boolean {
 
 async function buildSourceSpec(run: {
   teamId: string;
+  projectId: string;
   sourceType: RapidMapSourceType;
   sourcePath: string | null;
   sourceAssetIds: Prisma.JsonValue | null;
@@ -153,7 +155,7 @@ async function buildSourceSpec(run: {
       throw new Error("Rapid Map run is missing an S3 source prefix.");
     }
 
-    assertValidS3Key(run.sourcePath, "Rapid Map source prefix");
+    assertRapidMapProjectS3Prefix(run.sourcePath, run.projectId);
     const objects = await S3Service.listObjects(run.sourcePath, 1000);
     const imageCount = objects.filter(isImageKey).length;
 

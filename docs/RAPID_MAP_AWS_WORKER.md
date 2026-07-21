@@ -5,7 +5,7 @@ Rapid Map processing runs outside the Next.js web server. The web app creates a
 
 The worker image uses
 [`nationaldronesau/flat-map-runner`](https://github.com/nationaldronesau/flat-map-runner)
-at commit `707ab72ffe90632f257fcdcaac9f357dba193b0b`. That engine is a
+at commit `f81a6c8a1f815a6d824a31e7053d6a556fad9a95`. That engine is a
 metadata-driven rapid map generator using rasterio/GDAL, pyproj, OpenCV, Pillow,
 and numpy. It is not ODM, SfM, or full photogrammetry.
 
@@ -58,6 +58,10 @@ s3://agridrone-ops-production/production/{projectId}/raw-images/{flightSession}/
   DJI_0001.JPG
   DJI_0002.JPG
 ```
+
+The API only accepts S3 prefixes under the selected project's current
+environment path (`{environment}/{projectId}/`) so one project cannot dispatch
+the worker against another project's imagery.
 
 The adapter also accepts:
 
