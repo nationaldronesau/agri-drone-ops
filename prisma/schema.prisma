@@ -26,6 +26,7 @@ model User {
   sprayPlans             SprayPlan[]
   complianceLayers       ComplianceLayer[]
   temporalRuns           TemporalComparisonRun[]
+  rapidMapRuns           RapidMapRun[]
 }
 
 model Account {
@@ -73,6 +74,7 @@ model Team {
   sprayPlans        SprayPlan[]
   complianceLayers  ComplianceLayer[]
   surveys           Survey[]
+  rapidMapRuns      RapidMapRun[]
   temporalRuns      TemporalComparisonRun[]
 }
 
@@ -126,6 +128,7 @@ model Project {
   assets            Asset[]
   jobs              ProcessingJob[]
   orthomosaics      Orthomosaic[]
+  rapidMapRuns      RapidMapRun[]
   batchJobs         BatchJob[]
   trainingDatasets  TrainingDataset[]
   reviewSessions    ReviewSession[]
@@ -444,9 +447,10 @@ model Orthomosaic {
   processingLog Json?
 
   // Relations
-  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  rapidMapRuns RapidMapRun[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 
   @@index([projectId])
   @@index([status])
@@ -457,6 +461,77 @@ enum ProcessingStatus {
   PROCESSING
   COMPLETED
   FAILED
+}
+
+model RapidMapRun {
+  id String @id @default(cuid())
+
+  teamId      String
+  projectId   String
+  createdById String
+
+  orthomosaicId String?
+
+  name        String
+  description String?
+  sourceType  RapidMapSourceType @default(S3_PREFIX)
+  sourcePath  String?
+  sourceAssetIds Json?
+  preset      RapidMapPreset     @default(INITIAL_TRIAL)
+
+  status       RapidMapRunStatus @default(QUEUED)
+  progress     Int               @default(0)
+  queueJobId   String?
+  errorMessage String?
+
+  config           Json?
+  processingLog    Json?
+  artifactManifest Json?
+  runSummary       Json?
+
+  outputS3Prefix       String?
+  outputBucket         String?
+  sourceImageCount     Int?
+  renderedImageCount   Int?
+  excludedImageCount   Int?
+  estimatedErrorMeters Float?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  team        Team         @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy   User         @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  orthomosaic Orthomosaic? @relation(fields: [orthomosaicId], references: [id], onDelete: SetNull)
+
+  @@index([teamId])
+  @@index([projectId])
+  @@index([createdById])
+  @@index([orthomosaicId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum RapidMapRunStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum RapidMapSourceType {
+  S3_PREFIX
+  ASSET_SET
+  PROCESSING_NODE_PATH
+}
+
+enum RapidMapPreset {
+  INITIAL_TRIAL
+  SHARPER_REVIEW
+  COVERAGE_CHECK
 }
 
 // ============================================

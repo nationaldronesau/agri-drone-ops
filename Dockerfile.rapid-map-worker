@@ -1,0 +1,60 @@
+FROM node:20-bookworm-slim
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV FLAT_MAP_RUNNER_DIR=/opt/flat-map-runner
+ENV FLAT_MAP_PYTHON=/opt/flatmap-venv/bin/python
+ENV RAPID_MAP_RUNNER_COMMAND=/opt/flatmap-venv/bin/python
+ENV RAPID_MAP_RUNNER_ARGS='["/app/scripts/run-rapid-map-flatmap.py"]'
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      gdal-bin \
+      git \
+      libgdal-dev \
+      python3 \
+      python3-venv \
+      python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG FLAT_MAP_RUNNER_REPO=https://github.com/nationaldronesau/flat-map-runner.git
+ARG FLAT_MAP_RUNNER_REF=f81a6c8a1f815a6d824a31e7053d6a556fad9a95
+
+RUN git clone --depth 1 "${FLAT_MAP_RUNNER_REPO}" "${FLAT_MAP_RUNNER_DIR}" \
+    && cd "${FLAT_MAP_RUNNER_DIR}" \
+    && git fetch --depth 1 origin "${FLAT_MAP_RUNNER_REF}" \
+    && git checkout "${FLAT_MAP_RUNNER_REF}" \
+    && python3 -m venv /opt/flatmap-venv \
+    && /opt/flatmap-venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /opt/flatmap-venv/bin/pip install --no-cache-dir \
+      awscli \
+      numpy \
+      opencv-python-headless \
+      pillow \
+      pyproj \
+      rasterio
+
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+COPY prisma ./prisma/
+RUN npx prisma generate
+
+COPY tsconfig.json ./tsconfig.json
+COPY lib ./lib
+COPY workers ./workers
+COPY scripts ./scripts
+
+RUN groupadd --system --gid 1001 nodejs \
+    && useradd --system --uid 1001 --gid nodejs rapidmap \
+    && mkdir -p /app/tmp \
+    && chmod +x /app/scripts/run-rapid-map-flatmap.py \
+    && chown -R rapidmap:nodejs /app /app/tmp
+
+USER rapidmap
+
+CMD ["npm", "run", "worker:rapid-map"]
