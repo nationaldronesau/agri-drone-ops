@@ -5,7 +5,7 @@
  */
 import { NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth/api-auth';
-import { yoloService } from '@/lib/services/yolo';
+import { yoloRuntimeService } from '@/lib/services/yolo-runtime';
 
 export async function GET() {
   try {
@@ -14,20 +14,12 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    try {
-      const health = await yoloService.checkHealth();
-      const available = health.status === 'healthy';
-      return NextResponse.json({
-        available,
-        health,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Service unavailable';
-      return NextResponse.json({
-        available: false,
-        error: message,
-      });
-    }
+    const runtime = await yoloRuntimeService.getStatus({ refresh: true, checkHealth: true });
+    return NextResponse.json({
+      available: runtime.healthy,
+      runtime,
+      error: runtime.healthy ? null : runtime.lastError || 'Service unavailable',
+    });
   } catch (error) {
     console.error('Error checking YOLO health:', error);
     return NextResponse.json(
