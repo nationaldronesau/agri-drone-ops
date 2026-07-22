@@ -298,6 +298,8 @@ def build_manifest(output_dir: Path, job: dict[str, Any]) -> dict[str, Any]:
             "elapsedSeconds": optional_number(mosaic_manifest.get("elapsed_seconds")),
             "targetEpsg": summary.get("target_epsg"),
             "blend": summary.get("blend"),
+            "demSource": summary.get("dem_source"),
+            "aglStats": summary.get("agl_stats"),
             "skipped": skipped[:50],
             "estimatedErrorMeters": config_value(config, "estimatedErrorMeters", None),
             "rasterWidth": raster.get("rasterWidth"),
@@ -347,6 +349,7 @@ def main() -> int:
     max_source_px = integer(config_value(config, "maxSourcePx", 1024), 1024)
     preview_max_size = integer(config_value(config, "previewMaxSize", 4000), 4000)
     target_epsg = str(config_value(config, "targetEpsg", "auto"))
+    dem = str(config_value(config, "dem", "auto"))
     nadir_pitch_tolerance = number(config_value(config, "nadirPitchToleranceDeg", 15), 15)
     blend = str(config_value(config, "blend", "center"))
     workers = integer(config_value(config, "workers", 0), 0)
@@ -367,6 +370,8 @@ def main() -> int:
         str(output_dir),
         "--target-epsg",
         target_epsg,
+        "--dem",
+        dem,
         "--pixel-size",
         str(pixel_size),
         "--feather-px",

@@ -61,6 +61,7 @@ function presetConfig(preset: RapidMapPreset): Prisma.InputJsonObject {
         maxSourcePx: 1536,
         nadirPitchToleranceDeg: 15,
         targetEpsg: "auto",
+        dem: "auto",
         blend: "center",
         cog: true,
       };
@@ -71,6 +72,7 @@ function presetConfig(preset: RapidMapPreset): Prisma.InputJsonObject {
         maxSourcePx: 768,
         nadirPitchToleranceDeg: 20,
         targetEpsg: "auto",
+        dem: "auto",
         blend: "center",
         cog: true,
       };
@@ -82,6 +84,7 @@ function presetConfig(preset: RapidMapPreset): Prisma.InputJsonObject {
         maxSourcePx: 1024,
         nadirPitchToleranceDeg: 15,
         targetEpsg: "auto",
+        dem: "auto",
         blend: "center",
         cog: true,
       };
