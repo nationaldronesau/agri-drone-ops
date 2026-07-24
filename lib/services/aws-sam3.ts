@@ -318,6 +318,7 @@ export interface SAM3ConceptApplyOptions {
   sizeFilterMinRatio?: number;
   sizeFilterMaxRatio?: number;
   embeddingBackend?: string;
+  candidatesOnly?: boolean;
 }
 
 export interface SAM3ConceptApplyResponse {
@@ -1789,6 +1790,9 @@ class AWSSAM3Service {
       }
       if (request.options?.embeddingBackend) {
         payload.embedding_backend = request.options.embeddingBackend;
+      }
+      if (request.options?.candidatesOnly === true) {
+        payload.candidates_only = true;
       }
 
       const sendRequest = (embeddingBackend = request.options?.embeddingBackend) =>

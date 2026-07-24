@@ -40,13 +40,35 @@ export const SAM3_BATCH_V2_GPU_LOCK_RETRY_INTERVAL_MS = 5000;
 export const SAM3_BATCH_V2_GPU_LOCK_RETRY_TIMEOUT_MS = 60000;
 export const SAM3_BATCH_V2_GPU_MEMORY_THRESHOLD_MB = 12 * 1024;
 export const SAM3_BATCH_V2_MODEL_OVERHEAD_MB = 4096;
-export const SAM3_BATCH_V2_VEGETATION_FLOOR = 0.15;
+export const SAM3_VEGETATION_DISABLE_BELOW = 0.05;
+export const SAM3_VEGETATION_CLAMP = [0.05, 0.4] as const;
 export const SAM3_BATCH_V2_VEGETATION_ALARM_MEDIAN = 0.3;
 export const SAM3_BATCH_V2_INSTANCE_REFINEMENT_CHUNK_SIZE = 200;
 export const SAM3_BATCH_V2_DEFAULT_CANDIDATE_BUDGET = 400;
 export const SAM3_BATCH_V2_DEFAULT_RETRIEVAL_BACKEND = 'dinov3_vitl16_sat';
 
 export type Sam3BatchV2RefineMode = 'instances' | 'concept';
+export type Sam3BatchV2VegetationMode = 'active' | 'disabled_low_exemplar_green';
+
+export function resolveBatchV2VegetationGate(exemplarGreenMedian: number): {
+  mode: Sam3BatchV2VegetationMode;
+  threshold: number | null;
+} {
+  if (exemplarGreenMedian < SAM3_VEGETATION_DISABLE_BELOW) {
+    return {
+      mode: 'disabled_low_exemplar_green',
+      threshold: null,
+    };
+  }
+
+  return {
+    mode: 'active',
+    threshold: Math.min(
+      SAM3_VEGETATION_CLAMP[1],
+      Math.max(SAM3_VEGETATION_CLAMP[0], 0.5 * exemplarGreenMedian)
+    ),
+  };
+}
 
 export function resolveBatchV2RefineMode(
   value: string | undefined = process.env.SAM3_REFINE_MODE
@@ -205,6 +227,7 @@ export function buildBatchV2ConceptApplyOptions(
           sizeFilterMinRatio: 0.2,
           sizeFilterMaxRatio: 2.5,
           embeddingBackend: resolveBatchV2RetrievalBackend(refineMode),
+          candidatesOnly: true,
         }
       : {}),
   };
@@ -234,6 +257,7 @@ export function buildBatchV2ConceptFallbackApplyOptions(
           sizeFilterMinRatio: 0.2,
           sizeFilterMaxRatio: 2.5,
           embeddingBackend: resolveBatchV2RetrievalBackend(refineMode),
+          candidatesOnly: true,
         }
       : {}),
   };
@@ -337,7 +361,8 @@ export interface Sam3BatchV2StageLogEntry {
   refineIncompleteChunks?: number;
   vegetationPrior?: boolean;
   exemplarGreenMedian?: number;
-  vegetationThreshold?: number;
+  vegetationMode?: Sam3BatchV2VegetationMode;
+  vegetationThreshold?: number | null;
   vegetationGatedCandidates?: number;
   vegetationRecenteredCandidates?: number;
   vegetationGatedMasks?: number;
@@ -551,6 +576,8 @@ interface PreparedBatchContext {
   operatorCropCount: number;
   vegetationPrior: boolean;
   exemplarGreenMedian: number;
+  vegetationMode?: Sam3BatchV2VegetationMode;
+  vegetationThreshold: number | null;
   exemplarDiameter: number;
 }
 
@@ -577,7 +604,8 @@ interface AssetInferenceResult {
   refineRefinedInstances?: number;
   refineRejectedInstances?: number;
   refineIncompleteChunks?: number;
-  vegetationThreshold?: number;
+  vegetationMode?: Sam3BatchV2VegetationMode;
+  vegetationThreshold?: number | null;
   vegetationGatedCandidates?: number;
   vegetationRecenteredCandidates?: number;
   vegetationGatedMasks?: number;
@@ -598,7 +626,8 @@ interface ConceptRefinementResult {
   refineRefinedInstances?: number;
   refineRejectedInstances?: number;
   refineIncompleteChunks?: number;
-  vegetationThreshold?: number;
+  vegetationMode?: Sam3BatchV2VegetationMode;
+  vegetationThreshold?: number | null;
   vegetationGatedCandidates?: number;
   vegetationRecenteredCandidates?: number;
   vegetationGatedMasks?: number;
@@ -614,6 +643,35 @@ interface VegetationPriorContext {
   enabled: boolean;
   exemplarGreenMedian: number;
   exemplarDiameter?: number;
+  mode?: Sam3BatchV2VegetationMode;
+  threshold?: number | null;
+}
+
+function normalizeVegetationPriorContext(
+  vegetation?: VegetationPriorContext
+): VegetationPriorContext | undefined {
+  if (!vegetation) return undefined;
+  if (!vegetation.enabled && !vegetation.mode) {
+    return { ...vegetation, threshold: null };
+  }
+
+  const gate = vegetation.mode
+    ? {
+        mode: vegetation.mode,
+        threshold:
+          vegetation.mode === 'disabled_low_exemplar_green'
+            ? null
+            : vegetation.threshold ??
+              resolveBatchV2VegetationGate(vegetation.exemplarGreenMedian).threshold,
+      }
+    : resolveBatchV2VegetationGate(vegetation.exemplarGreenMedian);
+
+  return {
+    ...vegetation,
+    enabled: vegetation.enabled && gate.mode === 'active',
+    mode: gate.mode,
+    threshold: gate.threshold,
+  };
 }
 
 interface VegetationCandidateResult {
@@ -1356,7 +1414,7 @@ export class Sam3BatchV2Service {
   private async applyVegetationPriorToCandidates(
     imageBuffer: Buffer,
     candidates: SAM3ConceptDetection[],
-    exemplarGreenMedian: number
+    threshold: number
   ): Promise<VegetationCandidateResult> {
     const metadata = await sharp(imageBuffer).metadata();
     const imageWidth = metadata.width ?? 0;
@@ -1369,10 +1427,6 @@ export class Sam3BatchV2Service {
       );
     }
 
-    const threshold = Math.max(
-      SAM3_BATCH_V2_VEGETATION_FLOOR,
-      0.5 * exemplarGreenMedian
-    );
     const surviving: SAM3ConceptDetection[] = [];
     const promptPoints = new Map<SAM3ConceptDetection, [number, number]>();
     let recenteredCount = 0;
@@ -1748,6 +1802,15 @@ export class Sam3BatchV2Service {
           data.exemplarSourceHeight
         )
       : 0;
+    const vegetationGate = vegetationPrior
+      ? resolveBatchV2VegetationGate(exemplarGreenMedian)
+      : undefined;
+    if (vegetationGate?.mode === 'disabled_low_exemplar_green') {
+      console.info(
+        `vegetation gate disabled: exemplar median green=${exemplarGreenMedian} ` +
+          `< ${SAM3_VEGETATION_DISABLE_BELOW}`
+      );
+    }
     const normalizedCrops = normalizeExemplarCrops(data.exemplarCrops);
     let exemplarCrops = normalizedCrops;
     let visualCropSource: Sam3BatchV2StageLogEntry['visualCropSource'] | undefined =
@@ -1803,7 +1866,14 @@ export class Sam3BatchV2Service {
       operatorCropCount: data.mode === 'visual_crop_match' ? normalizedCrops.length : 0,
       modeUsed: data.mode === 'visual_crop_match' ? 'visual_crops' : 'concept_propagation',
       visualCropSource,
-      ...(vegetationPrior ? { vegetationPrior, exemplarGreenMedian } : {}),
+      ...(vegetationPrior
+        ? {
+            vegetationPrior,
+            exemplarGreenMedian,
+            vegetationMode: vegetationGate?.mode,
+            vegetationThreshold: vegetationGate?.threshold,
+          }
+        : {}),
       durationMs: this.now().getTime() - startedAt,
     });
 
@@ -1827,6 +1897,8 @@ export class Sam3BatchV2Service {
       operatorCropCount: data.mode === 'visual_crop_match' ? normalizedCrops.length : 0,
       vegetationPrior,
       exemplarGreenMedian,
+      vegetationMode: vegetationGate?.mode,
+      vegetationThreshold: vegetationGate?.threshold ?? null,
       exemplarDiameter: medianBoxDiameter(data.exemplars),
     };
   }
@@ -2145,9 +2217,12 @@ export class Sam3BatchV2Service {
             conceptExemplars,
             prepared.weedType,
             {
-              enabled: prepared.vegetationPrior,
+              enabled:
+                prepared.vegetationPrior && prepared.vegetationMode === 'active',
               exemplarGreenMedian: prepared.exemplarGreenMedian,
               exemplarDiameter: prepared.exemplarDiameter,
+              mode: prepared.vegetationMode,
+              threshold: prepared.vegetationThreshold,
             }
           );
         }
@@ -2183,6 +2258,7 @@ export class Sam3BatchV2Service {
           refineRefinedInstances: result.refineRefinedInstances,
           refineRejectedInstances: result.refineRejectedInstances,
           refineIncompleteChunks: result.refineIncompleteChunks,
+          vegetationMode: result.vegetationMode,
           vegetationThreshold: result.vegetationThreshold,
           vegetationGatedCandidates: result.vegetationGatedCandidates,
           vegetationRecenteredCandidates: result.vegetationRecenteredCandidates,
@@ -2425,6 +2501,7 @@ export class Sam3BatchV2Service {
       refineRefinedInstances: refinement.refineRefinedInstances,
       refineRejectedInstances: refinement.refineRejectedInstances,
       refineIncompleteChunks: refinement.refineIncompleteChunks,
+      vegetationMode: refinement.vegetationMode,
       vegetationThreshold: refinement.vegetationThreshold,
       vegetationGatedCandidates: refinement.vegetationGatedCandidates,
       vegetationRecenteredCandidates: refinement.vegetationRecenteredCandidates,
@@ -2538,6 +2615,7 @@ export class Sam3BatchV2Service {
       refineRefinedInstances: refinement.refineRefinedInstances,
       refineRejectedInstances: refinement.refineRejectedInstances,
       refineIncompleteChunks: refinement.refineIncompleteChunks,
+      vegetationMode: refinement.vegetationMode,
       vegetationThreshold: refinement.vegetationThreshold,
       vegetationGatedCandidates: refinement.vegetationGatedCandidates,
       vegetationRecenteredCandidates: refinement.vegetationRecenteredCandidates,
@@ -2761,24 +2839,42 @@ export class Sam3BatchV2Service {
     candidateBudget?: number
   ): Promise<ConceptRefinementResult> {
     const refinementMode = resolveBatchV2RefineMode();
+    const normalizedVegetation = normalizeVegetationPriorContext(vegetation);
     const result = refinementMode === 'instances'
       ? await this.refineConceptDetectionsWithInstances(
           asset,
           imageBuffer,
           candidates,
-          vegetation
+          normalizedVegetation
         )
       : await this.refineConceptDetectionsWithLegacyBoxPrompts(
           asset,
           imageBuffer,
           className,
           candidates,
-          vegetation
+          normalizedVegetation
         );
+
+    const disabledLowGreen =
+      normalizedVegetation?.mode === 'disabled_low_exemplar_green';
 
     return {
       ...result,
       refinementMode,
+      ...(normalizedVegetation?.mode
+        ? {
+            vegetationMode: normalizedVegetation.mode,
+            vegetationThreshold: normalizedVegetation.threshold ?? null,
+          }
+        : {}),
+      ...(disabledLowGreen
+        ? {
+            vegetationGatedCandidates: 0,
+            vegetationRecenteredCandidates: 0,
+            vegetationGatedMasks: 0,
+            vegetationDeduplicatedMasks: 0,
+          }
+        : {}),
       candidateBudget: candidateBudget ?? (
         refinementMode === 'instances'
           ? resolveBatchV2CandidateBudget()
@@ -2819,7 +2915,7 @@ export class Sam3BatchV2Service {
       ? await this.applyVegetationPriorToCandidates(
           imageBuffer,
           candidates,
-          vegetation.exemplarGreenMedian
+          vegetation.threshold as number
         )
       : undefined;
     const refinementCandidates = vegetationCandidates?.candidates ?? candidates;
@@ -3079,7 +3175,7 @@ export class Sam3BatchV2Service {
       ? await this.applyVegetationPriorToCandidates(
           imageBuffer,
           candidates,
-          vegetation.exemplarGreenMedian
+          vegetation.threshold as number
         )
       : undefined;
     const refinementCandidates = vegetationCandidates?.candidates ?? candidates;

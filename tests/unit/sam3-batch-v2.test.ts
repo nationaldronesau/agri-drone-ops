@@ -12,6 +12,7 @@ import {
   resolveBatchV2CandidateBudget,
   resolveBatchV2RefineMode,
   resolveBatchV2RetrievalBackend,
+  resolveBatchV2VegetationGate,
   resolveBatchV2VegetationPrior,
   resolveBatchV2ReviewProfileForMode,
   Sam3BatchV2Service,
@@ -208,6 +209,25 @@ describe('sam3-batch-v2', () => {
     expect(resolveBatchV2VegetationPrior(true, 'false')).toBe(false);
   });
 
+  it('disables or clamps the adaptive vegetation gate from exemplar green', () => {
+    expect(resolveBatchV2VegetationGate(0)).toEqual({
+      mode: 'disabled_low_exemplar_green',
+      threshold: null,
+    });
+    expect(resolveBatchV2VegetationGate(0.6)).toEqual({
+      mode: 'active',
+      threshold: 0.3,
+    });
+    expect(resolveBatchV2VegetationGate(0.9)).toEqual({
+      mode: 'active',
+      threshold: 0.4,
+    });
+    expect(resolveBatchV2VegetationGate(0.12)).toEqual({
+      mode: 'active',
+      threshold: 0.06,
+    });
+  });
+
   it('defaults instance mode to a 400-candidate satellite-retrieval budget', () => {
     delete process.env.SAM3_REFINE_MODE;
 
@@ -219,6 +239,7 @@ describe('sam3-batch-v2', () => {
       sizeFilterMinRatio: 0.2,
       sizeFilterMaxRatio: 2.5,
       embeddingBackend: 'dinov3_vitl16_sat',
+      candidatesOnly: true,
     });
     expect(getBatchV2MinTargetCandidates('high_recall')).toBe(400);
     expect(getBatchV2MaxTargetCandidates('high_recall')).toBe(400);
@@ -676,6 +697,7 @@ describe('sam3-batch-v2', () => {
       expect(global.fetch).toHaveBeenCalledOnce();
       const requestBody = (global.fetch as any).mock.calls[0][1].body;
       const payload = JSON.parse(requestBody);
+      expect(payload).not.toHaveProperty('candidates_only');
       expect(requestBody).toBe(JSON.stringify({
         exemplar_id: 'legacy-exemplar',
         images: [payload.images[0]],
@@ -687,6 +709,40 @@ describe('sam3-batch-v2', () => {
         max_box_size: 600,
         nms_threshold: 0.5,
       }));
+    } finally {
+      singleton.configured = previous.configured;
+      singleton.instanceIp = previous.instanceIp;
+      singleton.instanceState = previous.instanceState;
+    }
+  });
+
+  it('sends candidates_only only for instance-mode concept apply requests', async () => {
+    process.env.SAM3_REFINE_MODE = 'instances';
+    const image = await makeVegetationImage(10, 10, []);
+    const singleton = awsSam3Service as any;
+    const previous = {
+      configured: singleton.configured,
+      instanceIp: singleton.instanceIp,
+      instanceState: singleton.instanceState,
+    };
+    singleton.configured = true;
+    singleton.instanceIp = '127.0.0.1';
+    singleton.instanceState = 'ready';
+    global.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      results: [{ detections: [] }],
+      processing_time_ms: 4,
+    }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+
+    try {
+      await awsSam3Service.applyConceptExemplar({
+        exemplarId: 'candidate-exemplar',
+        imageBuffer: image,
+        imageId: 'candidate-image',
+        options: buildBatchV2ConceptApplyOptions('high_recall'),
+      });
+
+      const payload = JSON.parse((global.fetch as any).mock.calls[0][1].body);
+      expect(payload.candidates_only).toBe(true);
     } finally {
       singleton.configured = previous.configured;
       singleton.instanceIp = previous.instanceIp;
@@ -733,6 +789,56 @@ describe('sam3-batch-v2', () => {
       forward.detections.map((detection: any) => detection.bbox)
     );
   });
+
+  it.each([
+    { refineMode: 'instances', expectedWarmups: 1 },
+    { refineMode: 'concept', expectedWarmups: 1 },
+  ] as const)(
+    'calls legacy concept warmup $expectedWarmups time(s) in $refineMode mode',
+    async ({ refineMode, expectedWarmups }) => {
+      process.env.SAM3_REFINE_MODE = refineMode;
+      const warmupConceptService = vi.fn().mockResolvedValue({
+        success: true,
+        data: { sam3Loaded: true, dinoLoaded: true },
+      });
+      const service = new Sam3BatchV2Service({
+        prisma: {
+          batchJob: {
+            update: vi.fn().mockResolvedValue(undefined),
+          },
+        } as never,
+        awsSam3Service: { warmupConceptService } as never,
+        acquireGpuLock: vi.fn(),
+        refreshGpuLock: vi.fn(),
+        releaseGpuLock: vi.fn(),
+        sleep: vi.fn(),
+        now: () => new Date('2026-07-21T00:00:00.000Z'),
+      });
+      vi.spyOn(service as any, 'appendStageLog').mockResolvedValue(undefined);
+      const createConceptExemplarEnsemble = vi
+        .spyOn(service as any, 'createConceptExemplarEnsemble')
+        .mockResolvedValue([{ exemplarId: 'exemplar-1', sourceBoxIndex: 0 }]);
+
+      const result = await (service as any).runAndPersistBatch(
+        { updateProgress: vi.fn().mockResolvedValue(undefined) },
+        {
+          batchJobId: `batch-warmup-${refineMode}`,
+          parentBatchJobId: null,
+          mode: 'concept_propagation',
+          weedType: 'Lantana',
+          sourceAssetId: 'asset-source',
+          assets: [],
+          missingAssetIds: [],
+        },
+        0,
+        []
+      );
+
+      expect(result).toEqual([]);
+      expect(warmupConceptService).toHaveBeenCalledTimes(expectedWarmups);
+      expect(createConceptExemplarEnsemble).toHaveBeenCalledOnce();
+    }
+  );
 
   it('retries a 400 retrieval-backend mismatch with dinov2 and returns a stage-log warning', async () => {
     const image = await makeVegetationImage(10, 10, []);
@@ -915,6 +1021,7 @@ describe('sam3-batch-v2', () => {
       candidateCount: 2,
       refinementBoxCount: 1,
       refinementDetectionCount: 2,
+      vegetationMode: 'active',
       vegetationThreshold: 0.4,
       vegetationGatedCandidates: 1,
       vegetationRecenteredCandidates: 1,
@@ -924,6 +1031,72 @@ describe('sam3-batch-v2', () => {
     });
     expect(result.detections).toHaveLength(1);
     expect(result.detections[0].polygon).toEqual([[16, 0], [40, 0], [40, 40], [16, 40]]);
+  });
+
+  it('disables all vegetation processing for low-green exemplars without dropping candidates', async () => {
+    const candidates = [
+      { bbox: [0, 0, 20, 20], confidence: 0.8, similarity: 0.8, class_name: 'lantana' },
+      { bbox: [30, 0, 50, 20], confidence: 0.7, similarity: 0.7, class_name: 'lantana' },
+    ];
+    const segment = vi.fn().mockResolvedValue({
+      success: true,
+      response: {
+        detections: candidates.map((candidate) => ({
+          bbox: candidate.bbox,
+          confidence: candidate.confidence,
+          polygon: [
+            [candidate.bbox[0], candidate.bbox[1]],
+            [candidate.bbox[2], candidate.bbox[1]],
+            [candidate.bbox[2], candidate.bbox[3]],
+            [candidate.bbox[0], candidate.bbox[3]],
+          ],
+        })),
+        count: candidates.length,
+      },
+    });
+    const service = new Sam3BatchV2Service({
+      prisma: {} as never,
+      awsSam3Service: {
+        refreshStatus: vi.fn().mockResolvedValue({
+          modelLoaded: true,
+          instanceState: 'ready',
+          ipAddress: '127.0.0.1',
+        }),
+        isReady: vi.fn().mockReturnValue(true),
+        resizeImage: vi.fn().mockImplementation(async (buffer: Buffer) => ({
+          buffer,
+          scaling: { scaleFactor: 1 },
+        })),
+        segment,
+      } as any,
+      acquireGpuLock: vi.fn(),
+      refreshGpuLock: vi.fn(),
+      releaseGpuLock: vi.fn(),
+      sleep: vi.fn(),
+      now: () => new Date('2026-07-21T00:00:00.000Z'),
+    });
+
+    const result = await (service as any).refineConceptDetectionsWithBoxPrompts(
+      { id: 'asset-low-exemplar-green', imageWidth: 60, imageHeight: 20 },
+      Buffer.from('not-an-image-because-vegetation-processing-must-not-run'),
+      'Lantana',
+      candidates,
+      { enabled: true, exemplarGreenMedian: 0 }
+    );
+
+    expect(segment.mock.calls[0][0].boxes).toEqual([
+      { x1: 0, y1: 0, x2: 20, y2: 20 },
+      { x1: 30, y1: 0, x2: 50, y2: 20 },
+    ]);
+    expect(result.detections).toHaveLength(2);
+    expect(result).toMatchObject({
+      vegetationMode: 'disabled_low_exemplar_green',
+      vegetationThreshold: null,
+      vegetationGatedCandidates: 0,
+      vegetationRecenteredCandidates: 0,
+      vegetationGatedMasks: 0,
+      vegetationDeduplicatedMasks: 0,
+    });
   });
 
   it('deduplicates overlapping green masks and keeps the higher-confidence detection', async () => {
@@ -1108,12 +1281,100 @@ describe('sam3-batch-v2', () => {
     );
 
     expect(prepared.exemplarGreenMedian).toBe(1);
+    expect(prepared.vegetationMode).toBe('active');
+    expect(prepared.vegetationThreshold).toBe(0.4);
     expect(persistedStageLog).toEqual(expect.arrayContaining([
       expect.objectContaining({
         stage: 'prepare',
         status: 'completed',
         vegetationPrior: true,
         exemplarGreenMedian: 1,
+        vegetationMode: 'active',
+        vegetationThreshold: 0.4,
+      }),
+    ]));
+  });
+
+  it('logs once and records disabled telemetry when exemplar greens are below 0.05', async () => {
+    const image = await makeVegetationImage(30, 10, [
+      { left: 20, top: 0, width: 1, height: 1 },
+    ]);
+    global.fetch = vi.fn().mockResolvedValue(new Response(image, {
+      status: 200,
+      headers: {
+        'content-type': 'image/png',
+        'content-length': String(image.length),
+      },
+    })) as typeof fetch;
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    let persistedStageLog: unknown[] = [];
+    const service = new Sam3BatchV2Service({
+      prisma: {
+        batchJob: {
+          findUnique: vi.fn().mockResolvedValue({
+            parentBatchJobId: null,
+            sourceAssetId: 'asset-source-low-green',
+          }),
+          update: vi.fn().mockImplementation(async ({ data }) => {
+            if (data.stageLog) persistedStageLog = data.stageLog;
+          }),
+        },
+        asset: {
+          findMany: vi.fn().mockResolvedValue([{
+            id: 'asset-source-low-green',
+            storageUrl: 'http://localhost/source-low-green.png',
+            s3Key: null,
+            s3Bucket: null,
+            storageType: 'local',
+            imageWidth: 30,
+            imageHeight: 10,
+          }]),
+          findUnique: vi.fn(),
+        },
+      } as any,
+      awsSam3Service: {} as never,
+      acquireGpuLock: vi.fn(),
+      refreshGpuLock: vi.fn(),
+      releaseGpuLock: vi.fn(),
+      sleep: vi.fn(),
+      now: () => new Date('2026-07-21T00:00:00.000Z'),
+    });
+
+    const prepared = await (service as any).prepareBatch(
+      {
+        batchJobId: 'batch-low-green-calibration',
+        projectId: 'project-1',
+        weedType: 'Lantana',
+        mode: 'concept_propagation',
+        exemplars: [
+          { x1: 0, y1: 0, x2: 10, y2: 10 },
+          { x1: 10, y1: 0, x2: 20, y2: 10 },
+          { x1: 20, y1: 0, x2: 30, y2: 10 },
+        ],
+        exemplarSourceWidth: 30,
+        exemplarSourceHeight: 10,
+        sourceAssetId: 'asset-source-low-green',
+        assetIds: ['asset-source-low-green'],
+        vegetationPrior: true,
+      },
+      0,
+      []
+    );
+
+    expect(prepared.exemplarGreenMedian).toBe(0);
+    expect(prepared.vegetationMode).toBe('disabled_low_exemplar_green');
+    expect(prepared.vegetationThreshold).toBeNull();
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info).toHaveBeenCalledWith(
+      'vegetation gate disabled: exemplar median green=0 < 0.05'
+    );
+    expect(persistedStageLog).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stage: 'prepare',
+        status: 'completed',
+        exemplarGreenMedian: 0,
+        vegetationMode: 'disabled_low_exemplar_green',
+        vegetationThreshold: null,
       }),
     ]));
   });
