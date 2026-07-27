@@ -8,7 +8,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { MapPin, Calendar, Mountain, AlertCircle, CheckCircle, Clock, Loader2 } from 'lucide-react';
+import {
+  AlertCircle,
+  Calendar,
+  CheckCircle,
+  Clock,
+  Loader2,
+  MapPin,
+  Mountain,
+  Server,
+  ShieldCheck,
+  SlidersHorizontal,
+} from 'lucide-react';
 import { formatBytes, formatDate } from '@/lib/utils';
 import { OrthomosaicUploader } from '@/components/OrthomosaicUploader';
 
@@ -38,6 +49,26 @@ interface Project {
   location: string | null;
 }
 
+interface RapidMapRun {
+  id: string;
+  name: string;
+  sourceType: 'S3_PREFIX' | 'ASSET_SET' | 'PROCESSING_NODE_PATH';
+  sourcePath: string | null;
+  preset: 'INITIAL_TRIAL' | 'SHARPER_REVIEW' | 'COVERAGE_CHECK';
+  status: 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+  progress: number;
+  errorMessage: string | null;
+  sourceImageCount: number | null;
+  renderedImageCount: number | null;
+  excludedImageCount: number | null;
+  createdAt: string;
+  orthomosaic: {
+    id: string;
+    name: string;
+    status: string;
+  } | null;
+}
+
 export default function OrthomosaicsPage() {
   const [orthomosaics, setOrthomosaics] = useState<Orthomosaic[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -50,11 +81,51 @@ export default function OrthomosaicsPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [orthomosaicsError, setOrthomosaicsError] = useState<string | null>(null);
   const [projectsError, setProjectsError] = useState<string | null>(null);
+  const [rapidMapProjectId, setRapidMapProjectId] = useState<string>('');
+  const [rapidMapSourceType, setRapidMapSourceType] = useState<string>('S3_PREFIX');
+  const [rapidMapSource, setRapidMapSource] = useState<string>('');
+  const [rapidMapPreset, setRapidMapPreset] = useState<string>('INITIAL_TRIAL');
+  const [rapidMapRuns, setRapidMapRuns] = useState<RapidMapRun[]>([]);
+  const [rapidMapRunsLoading, setRapidMapRunsLoading] = useState<boolean>(false);
+  const [rapidMapSubmitting, setRapidMapSubmitting] = useState<boolean>(false);
+  const [rapidMapError, setRapidMapError] = useState<string | null>(null);
+  const [rapidMapSuccess, setRapidMapSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     fetchOrthomosaics();
     fetchProjects();
   }, []);
+
+  useEffect(() => {
+    if (projects.length > 0 && !rapidMapProjectId) {
+      setRapidMapProjectId(projects[0].id);
+    }
+  }, [projects, rapidMapProjectId]);
+
+  useEffect(() => {
+    if (!rapidMapProjectId) {
+      setRapidMapRuns([]);
+      return;
+    }
+
+    fetchRapidMapRuns(rapidMapProjectId);
+  }, [rapidMapProjectId]);
+
+  useEffect(() => {
+    if (!rapidMapProjectId) {
+      return;
+    }
+
+    if (!rapidMapRuns.some((run) => ['QUEUED', 'PROCESSING'].includes(run.status))) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      fetchRapidMapRuns(rapidMapProjectId);
+    }, 10000);
+
+    return () => window.clearInterval(interval);
+  }, [rapidMapProjectId, rapidMapRuns]);
 
   const fetchOrthomosaics = async () => {
     try {
@@ -107,6 +178,60 @@ export default function OrthomosaicsPage() {
     setProcessingError(error.message);
   };
 
+  const fetchRapidMapRuns = async (projectId: string) => {
+    try {
+      setRapidMapRunsLoading(true);
+      const response = await fetch(`/api/projects/${projectId}/rapid-map-runs?limit=5`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to load Rapid Map runs');
+      }
+
+      setRapidMapRuns(data.runs || []);
+    } catch (error) {
+      console.error('Error fetching Rapid Map runs:', error);
+      setRapidMapError(error instanceof Error ? error.message : 'Failed to load Rapid Map runs');
+    } finally {
+      setRapidMapRunsLoading(false);
+    }
+  };
+
+  const handleRapidMapSubmit = async () => {
+    if (!rapidMapProjectId || !rapidMapSource.trim()) {
+      return;
+    }
+
+    try {
+      setRapidMapSubmitting(true);
+      setRapidMapError(null);
+      setRapidMapSuccess(null);
+
+      const response = await fetch(`/api/projects/${rapidMapProjectId}/rapid-map-runs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceType: rapidMapSourceType,
+          sourcePath: rapidMapSource.trim(),
+          preset: rapidMapPreset,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to queue Rapid Map');
+      }
+
+      setRapidMapSuccess(data.queued ? 'Rapid Map queued.' : 'Rapid Map recorded. Worker queue is not available yet.');
+      setRapidMapSource('');
+      await fetchRapidMapRuns(rapidMapProjectId);
+    } catch (error) {
+      setRapidMapError(error instanceof Error ? error.message : 'Failed to queue Rapid Map');
+    } finally {
+      setRapidMapSubmitting(false);
+    }
+  };
+
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'COMPLETED':
@@ -130,6 +255,32 @@ export default function OrthomosaicsPage() {
         return 'Processing failed';
       default:
         return 'Waiting to process';
+    }
+  };
+
+  const getRapidMapStatusClass = (status: RapidMapRun['status']) => {
+    switch (status) {
+      case 'COMPLETED':
+        return 'border-green-200 bg-green-50 text-green-700';
+      case 'PROCESSING':
+        return 'border-blue-200 bg-blue-50 text-blue-700';
+      case 'FAILED':
+        return 'border-red-200 bg-red-50 text-red-700';
+      case 'CANCELLED':
+        return 'border-gray-200 bg-gray-50 text-gray-700';
+      default:
+        return 'border-amber-200 bg-amber-50 text-amber-700';
+    }
+  };
+
+  const formatRapidMapPreset = (preset: RapidMapRun['preset'] | string) => {
+    switch (preset) {
+      case 'SHARPER_REVIEW':
+        return 'Sharper review';
+      case 'COVERAGE_CHECK':
+        return 'Coverage check';
+      default:
+        return 'Initial trial';
     }
   };
 
@@ -250,6 +401,183 @@ export default function OrthomosaicsPage() {
                 {successMessage}
               </div>
             )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="mb-8 bg-white shadow-lg border-0 rounded-lg">
+        <CardHeader>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <CardTitle className="text-xl font-semibold text-gray-900">Generate Rapid Map</CardTitle>
+              <CardDescription className="text-gray-600">
+                Queue a metadata-driven map from uploaded flight imagery for quick review before detection fusion and spray export.
+              </CardDescription>
+            </div>
+            <Server className="h-6 w-6 text-blue-600" />
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="rapidMapProject">Project</Label>
+                <Select value={rapidMapProjectId} onValueChange={setRapidMapProjectId}>
+                  <SelectTrigger id="rapidMapProject">
+                    <SelectValue placeholder="Choose a project" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {projects.map((project) => (
+                      <SelectItem key={project.id} value={project.id}>
+                        {project.name} {project.location && `- ${project.location}`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="rapidMapSourceType">Source type</Label>
+                  <Select value={rapidMapSourceType} onValueChange={setRapidMapSourceType}>
+                    <SelectTrigger id="rapidMapSourceType">
+                      <SelectValue placeholder="Uploaded images / S3 folder" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="S3_PREFIX">Uploaded images / S3 folder</SelectItem>
+                      <SelectItem value="PROCESSING_NODE_PATH">Processing-node folder</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="rapidMapPreset">Processing preset</Label>
+                  <Select value={rapidMapPreset} onValueChange={setRapidMapPreset}>
+                    <SelectTrigger id="rapidMapPreset">
+                      <SelectValue placeholder="Initial trial - 0.3 m/px" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="INITIAL_TRIAL">Initial trial - 0.3 m/px</SelectItem>
+                      <SelectItem value="SHARPER_REVIEW">Sharper review - 0.2 m/px</SelectItem>
+                      <SelectItem value="COVERAGE_CHECK">Coverage check - faster preview</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="rapidMapSource">Source images</Label>
+                <Input
+                  id="rapidMapSource"
+                  placeholder={
+                    rapidMapSourceType === 'S3_PREFIX'
+                      ? 'S3 prefix or flight session'
+                      : 'Processing-node image folder'
+                  }
+                  value={rapidMapSource}
+                  onChange={(event) => setRapidMapSource(event.target.value)}
+                />
+              </div>
+
+              <div className="grid gap-2 text-sm text-gray-600 md:grid-cols-3">
+                <div className="flex items-center gap-2 rounded-md border border-gray-100 bg-gray-50 px-3 py-2">
+                  <Server className="h-4 w-4 text-blue-600" />
+                  <span>Worker run</span>
+                </div>
+                <div className="flex items-center gap-2 rounded-md border border-gray-100 bg-gray-50 px-3 py-2">
+                  <SlidersHorizontal className="h-4 w-4 text-green-600" />
+                  <span>Map preview</span>
+                </div>
+                <div className="flex items-center gap-2 rounded-md border border-gray-100 bg-gray-50 px-3 py-2">
+                  <ShieldCheck className="h-4 w-4 text-amber-600" />
+                  <span>Review first</span>
+                </div>
+              </div>
+
+              {rapidMapError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                  {rapidMapError}
+                </div>
+              )}
+
+              {rapidMapSuccess && (
+                <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+                  {rapidMapSuccess}
+                </div>
+              )}
+
+              <Button
+                className="w-full bg-gradient-to-r from-green-500 to-blue-500 text-white hover:from-green-600 hover:to-blue-600"
+                disabled={!rapidMapProjectId || !rapidMapSource.trim() || rapidMapSubmitting}
+                onClick={handleRapidMapSubmit}
+              >
+                {rapidMapSubmitting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Queueing Rapid Map...
+                  </>
+                ) : rapidMapProjectId && rapidMapSource.trim() ? (
+                  'Queue Rapid Map'
+                ) : (
+                  'Select project and source'
+                )}
+              </Button>
+            </div>
+
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-sm font-medium text-gray-900">Recent Rapid Map runs</p>
+                {rapidMapRunsLoading && (
+                  <Loader2 className="h-4 w-4 animate-spin text-gray-500" />
+                )}
+              </div>
+
+              {!rapidMapProjectId ? (
+                <p className="text-sm text-gray-500">Select a project to see recent runs.</p>
+              ) : rapidMapRuns.length === 0 && !rapidMapRunsLoading ? (
+                <p className="text-sm text-gray-500">No Rapid Map runs yet.</p>
+              ) : (
+                <div className="space-y-3">
+                  {rapidMapRuns.map((run) => (
+                    <div key={run.id} className="rounded-md border border-white bg-white p-3 shadow-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">{run.name}</p>
+                          <p className="text-xs text-gray-500">
+                            {formatRapidMapPreset(run.preset)} · {run.sourcePath || 'Source pending'}
+                          </p>
+                        </div>
+                        <span className={`rounded-full border px-2 py-1 text-xs font-medium ${getRapidMapStatusClass(run.status)}`}>
+                          {run.status.toLowerCase()}
+                        </span>
+                      </div>
+
+                      <div className="mt-2 h-2 overflow-hidden rounded-full bg-gray-100">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-green-500 to-blue-500"
+                          style={{ width: `${Math.max(0, Math.min(100, run.progress || 0))}%` }}
+                        />
+                      </div>
+
+                      <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
+                        <span>{run.sourceImageCount ?? 0} source images</span>
+                        {run.orthomosaic ? (
+                          <Link href={`/orthomosaics/${run.orthomosaic.id}`} className="font-medium text-blue-600 hover:text-blue-700">
+                            View generated map
+                          </Link>
+                        ) : (
+                          <span>{run.progress || 0}%</span>
+                        )}
+                      </div>
+
+                      {run.errorMessage && (
+                        <p className="mt-2 text-xs text-red-600">{run.errorMessage}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </CardContent>
       </Card>
