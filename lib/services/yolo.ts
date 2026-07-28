@@ -4,6 +4,7 @@
  * TypeScript client for the EC2-hosted YOLO training and inference service.
  */
 import { awsSam3Service } from '@/lib/services/aws-sam3';
+import { yoloRuntimeService } from '@/lib/services/yolo-runtime';
 
 const YOLO_PORT = process.env.YOLO_PORT || '8001';
 const YOLO_DISCOVERY_TTL_MS = Number.parseInt(
@@ -132,7 +133,10 @@ export class YOLOService {
   private detectEndpoint: '/api/v1/yolo/detect' | '/api/v1/detect' | null = null;
 
   constructor(options?: { baseUrl?: string; timeout?: number; apiKey?: string }) {
-    const configuredUrl = options?.baseUrl || process.env.YOLO_SERVICE_URL || null;
+    const configuredUrl =
+      options?.baseUrl ||
+      (yoloRuntimeService.hasManagedInstance() ? null : process.env.YOLO_SERVICE_URL) ||
+      null;
     this.explicitBaseUrl = configuredUrl ? configuredUrl.replace(/\/$/, '') : null;
     this.timeout = options?.timeout || 30000;
     this.apiKey = options?.apiKey || process.env.YOLO_SERVICE_API_KEY;
@@ -163,6 +167,14 @@ export class YOLOService {
   }
 
   private async resolveBaseUrlInternal(): Promise<string | null> {
+    const yoloRuntimeBaseUrl = await yoloRuntimeService.resolveBaseUrl(true);
+    if (yoloRuntimeBaseUrl) {
+      this.cachedBaseUrl = yoloRuntimeBaseUrl;
+      this.lastResolvedAt = Date.now();
+      this.lastResolveError = null;
+      return yoloRuntimeBaseUrl;
+    }
+
     if (!awsSam3Service.isConfigured()) {
       const configError = awsSam3Service.getConfigError();
       this.lastResolveError = configError
@@ -321,6 +333,8 @@ export class YOLOService {
   }
 
   async startTraining(config: TrainingConfig): Promise<TrainingJobResponse> {
+    await this.ensureManagedRuntimeReady('YOLO training');
+
     const basePayload: Record<string, unknown> = {
       dataset_s3_path: config.dataset_s3_path,
       model_name: config.model_name,
@@ -388,6 +402,8 @@ export class YOLOService {
   }
 
   async detect(request: DetectionRequest): Promise<DetectionResponse> {
+    await this.ensureManagedRuntimeReady('YOLO inference');
+
     if (!request.image && !request.s3_path) {
       throw new YOLOServiceError('Either image (base64) or s3_path must be provided');
     }
@@ -471,6 +487,19 @@ export class YOLOService {
 
   async listModels(): Promise<ModelListResponse> {
     return this.request<ModelListResponse>('/api/v1/models');
+  }
+
+  private async ensureManagedRuntimeReady(operation: string): Promise<void> {
+    if (this.explicitBaseUrl || !yoloRuntimeService.hasManagedInstance()) return;
+
+    const runtime = await yoloRuntimeService.ensureReady();
+    if (!runtime.ready) {
+      throw new YOLOServiceError(
+        `${operation} runtime unavailable: ${runtime.lastError || runtime.state}`,
+        503,
+        runtime
+      );
+    }
   }
 
   async listCachedModels(): Promise<{ models?: string[]; cached_models?: string[] }> {
