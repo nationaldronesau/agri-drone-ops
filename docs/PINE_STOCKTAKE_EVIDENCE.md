@@ -32,4 +32,5 @@ Final local results on 2026-08-17:
 
 - The SAM3 end-to-end browser test mocks GPU execution. The pinned service lane compiles, but no full native mission or paid compute was started.
 - The Flat Map and calibrated LiDAR workers are identity-checked job contracts. No remote runner job or production LiDAR mapping run was started.
+- The production PM2 process list starts the Pine Stocktake BullMQ worker. Flat Map and calibrated LiDAR stages still require reachable, identity-pinned service deployments before the production workflow can be declared operational.
 - The application build succeeds because the existing Next.js configuration skips type validation. The standalone repository type check has pre-existing errors outside Pine Stocktake. A filtered check reports no Pine Stocktake errors. Fixing unrelated type debt would require a broader AgriDrone change and is outside this branch.
