@@ -26,6 +26,9 @@ model User {
   sprayPlans             SprayPlan[]
   complianceLayers       ComplianceLayer[]
   temporalRuns           TemporalComparisonRun[]
+  pineStocktakeJobs      PineStocktakeJob[]      @relation("PineStocktakeCreator")
+  pineReviewRevisions    PineReviewRevision[]    @relation("PineRevisionReviewer")
+  pineAcceptedCrowns     PineAcceptedCrown[]     @relation("PineAcceptedReviewer")
 }
 
 model Account {
@@ -74,6 +77,7 @@ model Team {
   complianceLayers  ComplianceLayer[]
   surveys           Survey[]
   temporalRuns      TemporalComparisonRun[]
+  pineStocktakeJobs PineStocktakeJob[]
 }
 
 model TeamMember {
@@ -135,6 +139,7 @@ model Project {
   complianceLayers  ComplianceLayer[]
   surveys           Survey[]
   temporalRuns      TemporalComparisonRun[]
+  pineStocktakeJobs PineStocktakeJob[]
 
   @@index([teamId])
   @@index([location])
@@ -222,6 +227,11 @@ model Asset {
   annotationSessions AnnotationSession[]
   pendingAnnotations PendingAnnotation[]
   trainingDatasets   TrainingDatasetAsset[]
+  pineMissionFiles   PineMissionFile[]      @relation("PineMissionAsset")
+  pineExemplars      PineExemplar[]         @relation("PineExemplarSourceAsset")
+  pineInferenceRuns  PineInferenceRun[]     @relation("PineInferenceTargetAsset")
+  pineCandidates     PineCandidate[]        @relation("PineCandidateTargetAsset")
+  pineAcceptedCrowns PineAcceptedCrown[]    @relation("PineAcceptedSourceAsset")
 
   @@unique([s3Key])
   @@index([projectId])
@@ -444,9 +454,10 @@ model Orthomosaic {
   processingLog Json?
 
   // Relations
-  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  project           Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  pineStocktakeJobs PineStocktakeJob[]
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
 
   @@index([projectId])
   @@index([status])
@@ -457,6 +468,342 @@ enum ProcessingStatus {
   PROCESSING
   COMPLETED
   FAILED
+}
+
+// ============================================
+// Auditable Pine Stocktake v1
+// ============================================
+
+model PineStocktakeJob {
+  id                      String                 @id @default(cuid())
+  projectId               String
+  teamId                  String
+  orthomosaicId           String?
+  createdById             String
+  methodVersion           String                 @default("pine-stocktake-v1")
+  modelRepository         String
+  modelRevision           String
+  modelWeightSha256       String
+  modelConfig             Json
+  immutableManifest       Json
+  immutableManifestSha256 String
+  runnerPath              String?
+  runnerCommit            String?
+  runnerTreeSha256        String?
+  targetCrs               String?
+  poseTimebase            String?
+  status                  PineStocktakeJobStatus @default(DRAFT)
+  stage                   PineStocktakeStage     @default(UPLOAD_VALIDATE)
+  progress                Int                    @default(0)
+  counters                Json?
+  restartState            Json?
+  failureReason           String?
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
+  startedAt               DateTime?
+  completedAt             DateTime?
+
+  project         Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  team            Team                 @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  orthomosaic     Orthomosaic?         @relation(fields: [orthomosaicId], references: [id], onDelete: SetNull)
+  createdBy       User                 @relation("PineStocktakeCreator", fields: [createdById], references: [id])
+  missionFiles    PineMissionFile[]
+  exemplars       PineExemplar[]
+  inferenceRuns   PineInferenceRun[]
+  candidates      PineCandidate[]
+  agreementGroups PineAgreementGroup[]
+  reviewRevisions PineReviewRevision[]
+  acceptedCrowns  PineAcceptedCrown[]
+  duplicateGroups PineDuplicateGroup[]
+  flatMapResult   PineFlatMapResult?
+
+  @@index([projectId, status])
+  @@index([teamId])
+  @@index([orthomosaicId])
+  @@index([createdById])
+  @@index([stage, status])
+}
+
+enum PineStocktakeJobStatus {
+  DRAFT
+  QUEUED
+  PROCESSING
+  REVIEW_REQUIRED
+  COMPLETED
+  FAILED
+  BLOCKED
+  CANCELLED
+}
+
+enum PineStocktakeStage {
+  UPLOAD_VALIDATE
+  EXEMPLARS_DETECT
+  REVIEW_CROWNS
+  MAP_HEIGHT_EXPORT
+}
+
+model PineMissionFile {
+  id           String              @id @default(cuid())
+  jobId        String
+  kind         PineMissionFileKind
+  assetId      String?
+  fileName     String
+  sha256       String
+  cameraSerial String?
+  poseIdentity String?
+  timebase     String?
+  crs          String?
+  metadata     Json?
+  createdAt    DateTime            @default(now())
+
+  job   PineStocktakeJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  asset Asset?           @relation("PineMissionAsset", fields: [assetId], references: [id], onDelete: SetNull)
+
+  @@unique([jobId, kind, fileName])
+  @@index([jobId, kind])
+  @@index([assetId])
+  @@index([sha256])
+}
+
+enum PineMissionFileKind {
+  IMAGE_LV
+  IMAGE_RV
+  CLC
+  CLI
+  MRK
+  RPOS
+  POSE_EQUIVALENT
+  LIDAR_LAS
+  LIDAR_LAZ
+  CAMERA_METADATA
+}
+
+model PineExemplar {
+  id                String    @id @default(cuid())
+  jobId             String
+  sourceAssetId     String
+  sourceImageSha256 String
+  nativePolygon     Json
+  exemplarSha256    String
+  approved          Boolean   @default(false)
+  approvedById      String?
+  approvedAt        DateTime?
+  createdAt         DateTime  @default(now())
+
+  job         PineStocktakeJob   @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  sourceAsset Asset              @relation("PineExemplarSourceAsset", fields: [sourceAssetId], references: [id], onDelete: Restrict)
+  runs        PineInferenceRun[]
+
+  @@unique([jobId, exemplarSha256])
+  @@index([jobId, approved])
+  @@index([sourceAssetId])
+}
+
+model PineInferenceRun {
+  id                 String    @id @default(cuid())
+  jobId              String
+  exemplarId         String
+  targetAssetId      String
+  idempotencyKey     String    @unique
+  status             String
+  nativeTileManifest Json
+  modelResult        Json?
+  modelResultSha256  String?
+  failureReason      String?
+  attemptCount       Int       @default(0)
+  startedAt          DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime  @default(now())
+
+  job         PineStocktakeJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  exemplar    PineExemplar     @relation(fields: [exemplarId], references: [id], onDelete: Restrict)
+  targetAsset Asset            @relation("PineInferenceTargetAsset", fields: [targetAssetId], references: [id], onDelete: Restrict)
+  candidates  PineCandidate[]
+
+  @@unique([jobId, exemplarId, targetAssetId])
+  @@index([jobId, status])
+  @@index([targetAssetId])
+}
+
+model PineCandidate {
+  id                String   @id @default(cuid())
+  candidateId       String
+  jobId             String
+  inferenceRunId    String
+  targetAssetId     String
+  targetImageSha256 String
+  exemplarId        String
+  nativeTile        Json
+  nativePolygon     Json
+  nativeBbox        Json
+  maskEncoding      Json
+  score             Float
+  modelResultSha256 String
+  duplicateLineage  Json
+  createdAt         DateTime @default(now())
+
+  job              PineStocktakeJob      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  inferenceRun     PineInferenceRun      @relation(fields: [inferenceRunId], references: [id], onDelete: Restrict)
+  targetAsset      Asset                 @relation("PineCandidateTargetAsset", fields: [targetAssetId], references: [id], onDelete: Restrict)
+  agreementMembers PineAgreementMember[]
+  revisions        PineReviewRevision[]
+  acceptedCrown    PineAcceptedCrown?
+
+  @@unique([jobId, candidateId])
+  @@index([jobId, targetAssetId])
+  @@index([inferenceRunId])
+  @@index([exemplarId])
+}
+
+model PineAgreementGroup {
+  id                        String   @id @default(cuid())
+  jobId                     String
+  agreementId               String
+  targetAssetId             String
+  representativeCandidateId String
+  agreementLevel            Int
+  scoresByExemplar          Json
+  nativePolygon             Json
+  createdAt                 DateTime @default(now())
+
+  job     PineStocktakeJob      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  members PineAgreementMember[]
+
+  @@unique([jobId, agreementId])
+  @@index([jobId, agreementLevel])
+  @@index([targetAssetId])
+}
+
+model PineAgreementMember {
+  agreementGroupId String
+  candidateId      String
+
+  agreementGroup PineAgreementGroup @relation(fields: [agreementGroupId], references: [id], onDelete: Cascade)
+  candidate      PineCandidate      @relation(fields: [candidateId], references: [id], onDelete: Restrict)
+
+  @@id([agreementGroupId, candidateId])
+  @@index([candidateId])
+}
+
+model PineReviewRevision {
+  id               String   @id @default(cuid())
+  jobId            String
+  candidateId      String?
+  parentRevisionId String?
+  reviewerId       String
+  nativePolygon    Json
+  action           String
+  reviewState      String
+  edgeClipped      Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  job           PineStocktakeJob     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  candidate     PineCandidate?       @relation(fields: [candidateId], references: [id], onDelete: SetNull)
+  parent        PineReviewRevision?  @relation("PineRevisionLineage", fields: [parentRevisionId], references: [id], onDelete: SetNull)
+  children      PineReviewRevision[] @relation("PineRevisionLineage")
+  reviewer      User                 @relation("PineRevisionReviewer", fields: [reviewerId], references: [id], onDelete: Restrict)
+  acceptedCrown PineAcceptedCrown?
+
+  @@index([jobId, reviewState, createdAt])
+  @@index([candidateId, createdAt])
+  @@index([parentRevisionId])
+  @@index([reviewerId])
+}
+
+model PineAcceptedCrown {
+  id                      String   @id @default(cuid())
+  crownId                 String
+  jobId                   String
+  candidateId             String?  @unique
+  sourceAssetId           String
+  sourceImageSha256       String
+  nativePolygon           Json
+  contributingExemplarIds Json
+  scoresByExemplar        Json
+  agreementLevel          Int
+  reviewerId              String
+  reviewedAt              DateTime
+  acceptedRevisionId      String   @unique
+  revisionLineage         Json
+  edgeClipped             Boolean  @default(false)
+  reviewState             String   @default("accepted")
+  createdAt               DateTime @default(now())
+
+  job              PineStocktakeJob      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  candidate        PineCandidate?        @relation(fields: [candidateId], references: [id], onDelete: SetNull)
+  sourceAsset      Asset                 @relation("PineAcceptedSourceAsset", fields: [sourceAssetId], references: [id], onDelete: Restrict)
+  reviewer         User                  @relation("PineAcceptedReviewer", fields: [reviewerId], references: [id], onDelete: Restrict)
+  acceptedRevision PineReviewRevision    @relation(fields: [acceptedRevisionId], references: [id], onDelete: Restrict)
+  lidarAssociation PineLidarAssociation?
+
+  @@unique([jobId, crownId])
+  @@index([jobId, reviewState])
+  @@index([sourceAssetId])
+  @@index([reviewerId])
+}
+
+model PineDuplicateGroup {
+  id                 String   @id @default(cuid())
+  jobId              String
+  duplicateGroupId   String
+  acceptedCrownIds   Json
+  observationLineage Json
+  canonicalCrownId   String
+  status             String
+  createdAt          DateTime @default(now())
+
+  job PineStocktakeJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, duplicateGroupId])
+  @@index([jobId, canonicalCrownId])
+}
+
+model PineFlatMapResult {
+  id                  String    @id @default(cuid())
+  jobId               String    @unique
+  runnerCommit        String
+  runnerTreeSha256    String
+  inputManifestSha256 String
+  projectedCrs        String
+  approximate         Boolean   @default(true)
+  geotiffSha256       String?
+  previewPngSha256    String?
+  footprintsSha256    String?
+  metadataCsvSha256   String?
+  runSummarySha256    String?
+  outputs             Json
+  status              String
+  failureReason       String?
+  createdAt           DateTime  @default(now())
+  completedAt         DateTime?
+
+  job PineStocktakeJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+}
+
+model PineLidarAssociation {
+  id                 String   @id @default(cuid())
+  acceptedCrownId    String   @unique
+  status             String
+  method             String
+  x                  Float?
+  y                  Float?
+  apexX              Float?
+  apexY              Float?
+  apexZ              Float?
+  heightP99M         Float?
+  heightMaxValidM    Float?
+  localGroundZ       Float?
+  matchConfidence    Float?
+  vegetationPointIds Json?
+  observationLineage Json
+  missingReason      String?
+  failureDetail      String?
+  createdAt          DateTime @default(now())
+
+  acceptedCrown PineAcceptedCrown @relation(fields: [acceptedCrownId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([missingReason])
 }
 
 // ============================================

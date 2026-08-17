@@ -7,7 +7,7 @@ import dynamic from 'next/dynamic';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, MapPin, Calendar, Ruler, Mountain, Layers, ZoomIn, RotateCcw } from 'lucide-react';
+import { ArrowLeft, MapPin, Calendar, Ruler, Mountain, Layers, ZoomIn, RotateCcw, Trees } from 'lucide-react';
 import { formatBytes, formatDate } from '@/lib/utils';
 
 // Dynamically import the map component to avoid SSR issues
@@ -217,6 +217,7 @@ export default function OrthomosaicViewerPage() {
                     orthomosaic={orthomosaic}
                     controls={mapControls}
                     onControlsChange={setMapControls}
+                    pineStocktakeHref={`/orthomosaics/pine-stocktake/new?orthomosaicId=${orthomosaic.id}`}
                   />
                   
                   {/* Map Overlay Controls */}
@@ -302,6 +303,12 @@ export default function OrthomosaicViewerPage() {
                   <Button className="w-full bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600 text-white shadow-lg">
                     <Layers className="w-4 h-4 mr-2" />
                     Add to Main Map
+                  </Button>
+                </Link>
+                <Link href={`/orthomosaics/pine-stocktake/new?orthomosaicId=${orthomosaic.id}`} className="block">
+                  <Button variant="outline" className="w-full border-emerald-600 text-emerald-700 hover:bg-emerald-50">
+                    <Trees className="mr-2 h-4 w-4" />
+                    Pine Stocktake
                   </Button>
                 </Link>
                 

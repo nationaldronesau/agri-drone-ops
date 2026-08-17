@@ -244,5 +244,5 @@ export function OrthomosaicUploader({
     };
   }, []);
 
-  return <div ref={containerRef} />;
+  return <div className="space-y-2"><div ref={containerRef} /><p className="text-xs text-gray-600"><strong>Pine Stocktake:</strong> upload the rapid GeoTIFF here, then associate the native LV/RV images, flight calibration, pose and LiDAR files from the Pine Stocktake action. Rapid imagery positions remain approximate.</p></div>;
 }
