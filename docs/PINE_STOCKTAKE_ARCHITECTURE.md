@@ -35,6 +35,8 @@ The worker checks each configured backend `/identity` response before it submits
 
 The added SAM3 service lane is `/api/v1/pine-stocktake`. Set `PINE_STOCKTAKE_SAM3_URL` to that full base path and set `PINE_SAM3_MODEL_DIR` on the service to the local pinned revision directory. The service hashes `model.safetensors` before it reports ready. It reads native target and exemplar bytes by signed URL, verifies each image hash, runs all tiles for one exemplar before the next exemplar, and returns immutable runs, candidates, RLE masks, duplicate lineage, and agreement groups.
 
+`services/sam3-service/Dockerfile.pine-stocktake` is the production GPU layer. It pins the existing CUDA/SAM3 base image by digest, pins Transformers, copies only the AgriDrone service code, and records the source and model identities as image labels. Model weights and runtime credentials are not copied into the image. The configured host mounts its verified model cache read-only and supplies its existing Hugging Face token at runtime. Pine inference unloads generic SAM3, concept SAM3, and YOLO models before taking the GPU; the YOLO load and service-wide unload paths release the Pine model before another workload takes GPU ownership.
+
 `PINE_FLAT_MAP_RUNNER_URL` is the job wrapper for the validated Windows runner. It must return all seven output artifacts with SHA-256 values and the exact commit and runner-tree hash. `PINE_STOCKTAKE_LIDAR_URL` is the calibrated mapping worker. Its identity must be `image-clc-cli-pose-lidar-v1`. It must verify raw input hashes and return exactly one matched association or explicit missing reason for every accepted crown. There is no in-process substitute when either backend is absent.
 
 ## Cross-image detection contract
