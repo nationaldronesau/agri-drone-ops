@@ -60,7 +60,7 @@ Gate 1 ran on 2026-08-18 from source commit `eb933a0e70217ee6adb54cc2f5eb9213afb
 - Service result SHA-256: `bc0287faddf31a29697302d244e42725e683b6ef19db64f76ecf924f5e71a710`.
 - Sealed evidence-file SHA-256: `65a2b34bd81b7ad35ae754d3794cd5b4351f1acc725528210ac4b827e7a7a177`.
 - Host cleanup: the root volume was full, so 1.0 GB of archived system journals was vacuumed and the package cache was cleaned. No imagery, model weights, review data, or source data was deleted.
-- Shutdown: the canary and legacy model services were stopped before the host shutdown request. The configured pool members remained stopped.
+- Shutdown: the canary and legacy model services were stopped before the host shutdown request. All three GPU hosts were confirmed in the EC2 `stopped` state.
 
 Gate 1 service-package canary: PASS. Gate 1 production deployment: NOT PASS. AWS capacity prevented deployment to the configured pool, and the legacy host could not produce an immutable container image because its root volume was 99% full after bounded cleanup. The Pine Stocktake endpoint must not be called production-ready until an identity-pinned image is deployed to the configured pool and verified there.
 
