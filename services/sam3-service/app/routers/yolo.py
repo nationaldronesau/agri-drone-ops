@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from PIL import Image
 from ultralytics import YOLO
 
+from ..pine_stocktake import pine_sam3
 from ..sam3_predictor import get_predictor
 from .segment import unload_model as unload_segment_model
 
@@ -88,6 +89,7 @@ def ensure_sam3_unloaded() -> None:
     predictor = get_predictor()
     predictor.unload_model()
     unload_segment_model()
+    pine_sam3.unload()
 
 
 class DetectRequest(BaseModel):

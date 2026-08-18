@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import io
 import os
@@ -236,6 +237,24 @@ class PinnedPineSam3:
             self.dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
             self.model = Sam3Model.from_pretrained(str(model_dir), dtype=self.dtype).to(self.device).eval()
             self.processor = Sam3Processor.from_pretrained(str(model_dir))
+
+    def unload(self) -> dict[str, Any]:
+        """Release the pinned model so YOLO can take exclusive GPU ownership."""
+        with self._lock:
+            was_loaded = self.model is not None
+            self.model = None
+            self.processor = None
+            self.device = None
+            self.dtype = None
+            gc.collect()
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except ImportError:
+                pass
+        return {"success": True, "message": "Pine SAM3 model unloaded", "wasLoaded": was_loaded}
 
     def run(self, targets: list[dict[str, Any]], exemplars: list[dict[str, Any]]) -> dict[str, Any]:
         import torch

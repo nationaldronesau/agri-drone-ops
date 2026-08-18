@@ -10,7 +10,10 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from ..pine_stocktake import pine_sam3
+from ..sam3_predictor import get_predictor
 from ..utils import fetch_image
+from .segment import unload_model as unload_segment_model
+from .yolo import unload_current_model
 
 
 router = APIRouter(prefix="/api/v1/pine-stocktake", tags=["pine-stocktake-v1"])
@@ -69,6 +72,9 @@ async def run_job(request: PineJobRequest) -> dict[str, Any]:
         exemplars.append(value)
     try:
         async with job_lock:
+            get_predictor().unload_model()
+            unload_segment_model()
+            unload_current_model()
             result = await run_in_threadpool(pine_sam3.run, targets, exemplars)
         return {**result, "stocktakeJobId": request.stocktakeJobId, "idempotencyKey": request.idempotencyKey}
     except Exception as exc:
