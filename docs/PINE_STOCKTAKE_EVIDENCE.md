@@ -1,6 +1,6 @@
 # Pine Stocktake v1 local evidence
 
-This report records implementation, bounded infrastructure-readiness, and Gate 1-2 deployment evidence. No production mission, full inference batch, merge, or production application release was performed. Gate 2 changed only the configured fallback GPU backend container, with the prior container retained as an exited rollback target. On 2026-08-18, stopped GPU hosts were started only for the checks below and stopped after the checks.
+This report records implementation, bounded infrastructure-readiness, and Gate 1-3 evidence. No production mission, full inference batch, merge, or production application release was performed. Gate 2 changed only the configured fallback GPU backend container, with the prior container retained as an exited rollback target. On 2026-08-18, stopped GPU hosts were started only for the checks below and stopped after the checks.
 
 ## Source identities
 
@@ -89,9 +89,27 @@ Gate 2 ran on 2026-08-18 on configured fallback `i-0644d9ad40d75e0b8` (`g4dn.4xl
 
 Gate 2 configured-fallback deployment: PASS. The image is stored only on the fallback host; it was not pushed to a shared registry because no dedicated Pine repository exists and this gate did not authorize new storage infrastructure. The preferred pool host therefore cannot yet pull the digest.
 
+## Gate 3 registry and production-routing gate
+
+Gate 3 ran on 2026-08-18 with a three-attempt infrastructure limit for each approved GPU host. It did not start a mission or alter the production application or database.
+
+- On-demand Pine routing code: PASS. `PINE_STOCKTAKE_USE_SAM3_INSTANCE_POOL=true` now starts and discovers only the configured `SAM3_INSTANCE_ID` or `SAM3_INSTANCE_IDS` pool. The worker then checks the pinned Pine identity before it submits work.
+- No silent endpoint fallback: PASS. In pool mode a fixed `PINE_STOCKTAKE_SAM3_URL` is ignored. Capacity, readiness, discovery, and identity failures stop the Pine stage.
+- Local verification: PASS. The full repository suite passed with 25 test files and 186 tests, including four new endpoint-routing tests. Focused ESLint, the Pine operator end-to-end journey, and the 102-page Next.js production build passed. The standalone type check reported no diagnostics for the changed Pine files. Existing unrelated repository type errors remain.
+- Dedicated registry creation: BLOCKED. Both available identities in AWS account `066807178268` were denied `ecr:CreateRepository` for `agri-pine-stocktake-sam3`. No repository was created.
+- Shared-registry publication: BLOCKED. The existing `forestsmart` repository had no conflicting `pine-stocktake-c706100` tag, but the exact Gate 2 image remained only on the stopped fallback host. It was not rebuilt or replaced with a different digest.
+- Preferred host `i-0e3d24beceebd0b2f`: BLOCKED. All three bounded starts returned `InsufficientInstanceCapacity` for `g5.2xlarge` in `ap-southeast-2a`.
+- Fallback host `i-0644d9ad40d75e0b8`: BLOCKED. All three bounded starts returned `InsufficientInstanceCapacity` for `g4dn.4xlarge` in `ap-southeast-2b`.
+- Production application audit: BLOCKED for release. SSM commands `bbd336c2-f284-445c-b24a-39b5def0de60`, `b445620a-4b55-4686-801f-2453808dcc4a`, and `c88aecad-8957-4ee2-a473-ef769a305fe6` completed successfully against `i-00453ba6ba625650d`.
+- Live application identity: Docker image ID `sha256:3992e25e533a09fc7858864ca25ac61a857e0f3e31f2b02a86b85959b327f132`, started `2026-07-23T05:22:38Z`. The bundle has no Pine worker, Pine routes, Pine process entry, Pine environment variables, or Pine schema migration.
+- Live database state: the deployed bundle reports 21 migrations and an up-to-date MySQL schema for that older release. Gate 3 did not run the Pine migration.
+- Shutdown state: neither approved GPU entered `pending` or `running`; no GPU stop repair was required.
+
+Gate 3 code readiness: PASS. Gate 3 registry publication: BLOCKED by ECR permission and GPU capacity. Gate 3 production routing: BLOCKED because the live application does not contain this branch or its migration. Enabling it would require a reviewed production application release and schema change.
+
 ## Local validation limits
 
-- Gate 2 proved an immutable image, live fallback-host deployment, VPC reachability, and the one-target three-exemplar canary. It did not prove shared-registry distribution, automatic Pine job routing to a stopped host, or a full native mission batch.
+- Gate 2 proved an immutable image, live fallback-host deployment, VPC reachability, and the one-target three-exemplar canary. Gate 3 added and locally verified automatic pool routing, but AWS capacity prevented a stopped-host runtime proof. Shared-registry distribution and a full native mission batch remain unproved.
 - The Flat Map and calibrated LiDAR workers are identity-checked job contracts. No remote runner job or production LiDAR mapping run was started.
-- The production PM2 process list starts the Pine Stocktake BullMQ worker. Flat Map and calibrated LiDAR stages still require reachable, identity-pinned service deployments before the production workflow can be declared operational.
+- This branch adds the Pine Stocktake BullMQ worker to the PM2 process list. The older live application does not yet contain that entry. Flat Map and calibrated LiDAR stages still require reachable, identity-pinned service deployments before the production workflow can be declared operational.
 - The application build succeeds because the existing Next.js configuration skips type validation. The standalone repository type check has pre-existing errors outside Pine Stocktake. A filtered check reports no Pine Stocktake errors. Fixing unrelated type debt would require a broader AgriDrone change and is outside this branch.

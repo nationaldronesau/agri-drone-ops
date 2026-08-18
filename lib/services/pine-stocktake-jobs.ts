@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import prisma from '@/lib/db';
 import { S3Service } from '@/lib/services/s3';
+import { resolvePineStocktakeSam3Endpoint } from '@/lib/services/pine-stocktake-sam3-endpoint';
 import {
   FLAT_MAP_RUNNER_IDENTITY,
   PINE_STOCKTAKE_CONFIG,
@@ -154,7 +155,7 @@ export async function createPineStocktake(input: CreatePineStocktakeInput) {
   });
 }
 
-function requiredEndpoint(name: 'PINE_STOCKTAKE_SAM3_URL' | 'PINE_FLAT_MAP_RUNNER_URL' | 'PINE_STOCKTAKE_LIDAR_URL'): string {
+function requiredEndpoint(name: 'PINE_FLAT_MAP_RUNNER_URL' | 'PINE_STOCKTAKE_LIDAR_URL'): string {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is not configured; no fallback backend is permitted`);
   return value.replace(/\/+$/, '');
@@ -195,7 +196,7 @@ function assertSamResult(value: unknown): asserts value is SamStageResult {
 }
 
 async function runSam3Stage(job: PineStocktakeJobData, record: PineJobRecord): Promise<PineStocktakeJobResult> {
-  const baseUrl = requiredEndpoint('PINE_STOCKTAKE_SAM3_URL');
+  const baseUrl = await resolvePineStocktakeSam3Endpoint();
   await assertBackendIdentity(baseUrl, SAM3_IDENTITY);
   const imageFiles = record.missionFiles.filter((file) => file.kind === 'IMAGE_LV' || file.kind === 'IMAGE_RV');
   const targets = await Promise.all(imageFiles.map(async (file) => {
