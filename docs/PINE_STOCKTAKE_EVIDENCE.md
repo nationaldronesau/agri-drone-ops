@@ -1,0 +1,115 @@
+# Pine Stocktake v1 local evidence
+
+This report records implementation, bounded infrastructure-readiness, and Gate 1-3 evidence. No production mission, full inference batch, merge, or production application release was performed. Gate 2 changed only the configured fallback GPU backend container, with the prior container retained as an exited rollback target. On 2026-08-18, stopped GPU hosts were started only for the checks below and stopped after the checks.
+
+## Source identities
+
+- AgriDrone Ops base: `83a221808f3e77d15f9dca5d72d2cfffdbc1648c` from `origin/main`.
+- Branch: `codex/agri-pine-stocktake`.
+- Worktree: `/Users/bensbigmac/agri-drone-ops-pine-stocktake`.
+- Reference logic: the eight named modules in `/Users/bensbigmac/forestry-worker-hqp-pointcloud-labeler`; no runtime dependency was added.
+- Flat Map Runner: validated at local commit `824cf071c7220f831cf3352111a43caddf8f25c8`, archive SHA-256 `6c35112fe4c0b70d8018f3133ac562e3e9ca37f64cbaa970e48e624c17ab337d`; the checkout was clean and one unpushed commit ahead of its remote.
+
+## Verification scope
+
+The focused tests use a small sealed HQP fixture. Its 8 existing-stock merges, 20 new-cluster review items, 4 ambiguous records, and 130 no-coverage exceptions are regression evidence. They are not performance targets.
+
+CI model execution is mocked. Coordinate transforms, calibration parsing, mask agreement, review lineage, LiDAR cluster selection, recovery decisions, deduplication, and stored-result exports remain real calculations.
+
+Final local results on 2026-08-17:
+
+- Prisma schema validation: PASS.
+- Prisma client generation: PASS.
+- Python service syntax compilation: PASS.
+- Repository unit tests: PASS, 22 files and 174 tests.
+- Sealed Pine Stocktake integration: PASS, 2 tests with real geometry, calibration, review, clustering, recovery, deduplication, and export logic.
+- Chromium operator journey: PASS, 1 test covering mission association, third-exemplar approval, detection queue, review, rapid map, calibrated LiDAR queue, projected overlay, and exports.
+- Next.js production build: PASS, 102 pages generated.
+- Pine Stocktake filtered type check: PASS, no Pine Stocktake diagnostics.
+- Repository-wide standalone type check: NOT PASS due to existing unrelated errors; see validation limits.
+
+## Shared GPU readiness evidence
+
+Bounded live checks on 2026-08-18 used the configured AgriDrone GPU pool. AWS could not start the preferred `g5.2xlarge` because the availability zone returned `InsufficientInstanceCapacity`. The configured private fallback `i-0644d9ad40d75e0b8` (`g4dn.4xlarge`, Tesla T4) started successfully.
+
+- SAM3 service: PASS on port 8000, CUDA available.
+- Repository and revision: PASS, cached `facebook/sam3` revision `3c879f39826c281e95690f02c7821c4de09afae7`.
+- SAM3 weight: PASS, `model.safetensors` SHA-256 independently calculated as `6d06f0a5f84e435071fe6603e61d0b4cc7b40e0d39d487cfd4d67d8cc11cc14a`.
+- YOLO service: PASS on port 8001, CUDA available.
+- Pine YOLO model: PASS, `pine-saplings-yolo11n-seg-glasshouse-v1` completed a real inference and entered the service cache.
+- Pine YOLO weight SHA-256: `a2d3b6e15285d4964e6267d983350cbd0a8ed0dcdb64e03d92ace03ab4b18a45`.
+- VPC path: PASS. The running AgriDrone application host reached the fallback at `172.31.19.222` on ports 8000 and 8001.
+- Focused lifecycle and inference tests after the repair: PASS, 4 files and 26 tests.
+- Focused lint: PASS for the changed AWS, YOLO, and test files.
+
+The repair adds `YOLO_USE_SAM3_INSTANCE_POOL=true`. With this flag, fixed YOLO URLs are ignored, a YOLO request starts the configured GPU pool, and the service is discovered on port 8001. EC2 discovery now permits the private address of a private-only fallback. The flag is not enabled in production until this branch is reviewed and deployed.
+
+## Gate 1 pinned Pine Stocktake SAM3 canary
+
+Gate 1 ran on 2026-08-18 from source commit `eb933a0e70217ee6adb54cc2f5eb9213afb093ee`. Both configured production-pool starts were blocked by AWS capacity: `i-0e3d24beceebd0b2f` (`g5.2xlarge`, `ap-southeast-2a`) and `i-0644d9ad40d75e0b8` (`g4dn.4xlarge`, `ap-southeast-2b`) returned `InsufficientInstanceCapacity`. A bounded side-by-side canary therefore ran on legacy host `i-04a662566087d9c4f` (`g4dn.xlarge`, Tesla T4) without changing the live port-8000 service.
+
+- Deployment archive SHA-256: `5d9ccab7ed065256a96b05a447c5dab34dd37c3ef781a43ef177eeaa46178d63`.
+- Runtime boundary: transient source service on loopback port 8010 using `/opt/sam3-api/venv`; this was not a production pool or immutable container deployment.
+- Identity endpoint: PASS for `facebook/sam3`, revision `3c879f39826c281e95690f02c7821c4de09afae7`, weight SHA-256 `6d06f0a5f84e435071fe6603e61d0b4cc7b40e0d39d487cfd4d67d8cc11cc14a`, and method `pine-stocktake-v1`.
+- Canary target: `DJI_20260409105624_0004`, native canary frame 6144 x 4096, SHA-256 `e28c3ed2a0c9e0ade57f40f04b99f6d302d295bfc6faa3bf665ab59e166bb001`.
+- External exemplars: PASS. Three approved crowns came from `DJI_20260409105625_0005`, `DJI_20260409105630_0010`, and `DJI_20260409105633_0013`; none came from the target image.
+- Independent execution: PASS. Three isolated inference runs processed 40 native tiles each using 1024-pixel tiles and 768-pixel stride.
+- Native coverage: PASS. Tile manifests covered all 6144 x 4096 pixels, including boundary placement at x=5120 and y=3072, with no source-frame downsampling.
+- Native results: PASS. All 349 candidate polygons remained inside the target frame.
+- Agreement: PASS. The 0.70 grouping produced 26 one-of-three, 16 two-of-three, and 97 three-of-three groups.
+- Service result SHA-256: `bc0287faddf31a29697302d244e42725e683b6ef19db64f76ecf924f5e71a710`.
+- Sealed evidence-file SHA-256: `65a2b34bd81b7ad35ae754d3794cd5b4351f1acc725528210ac4b827e7a7a177`.
+- Host cleanup: the root volume was full, so 1.0 GB of archived system journals was vacuumed and the package cache was cleaned. No imagery, model weights, review data, or source data was deleted.
+- Shutdown: the canary and legacy model services were stopped before the host shutdown request. All three GPU hosts were confirmed in the EC2 `stopped` state.
+
+Gate 1 service-package canary: PASS. Gate 1 production deployment: NOT PASS. AWS capacity prevented deployment to the configured pool, and the legacy host could not produce an immutable container image because its root volume was 99% full after bounded cleanup. The Pine Stocktake endpoint must not be called production-ready until an identity-pinned image is deployed to the configured pool and verified there.
+
+## Gate 2 immutable GPU backend deployment
+
+Gate 2 ran on 2026-08-18 on configured fallback `i-0644d9ad40d75e0b8` (`g4dn.4xlarge`, Tesla T4). The preferred `i-0e3d24beceebd0b2f` again returned `InsufficientInstanceCapacity`; the fallback started successfully. The fallback root volume was initially 99% full. Bounded cleanup removed 17.23 GB of obsolete Docker build cache, 3.36 GB of pip cache, 376 MB of archived journals, and the package cache. The running image, model volume, Hugging Face cache, imagery, review data, and source data were preserved.
+
+- Pinned runtime base: `sam3-modern-sam3-service@sha256:f8e2d46fc25a45f0f101972bc7e5295f5541fed87da3c6265e3ddc730f9a9082`.
+- Final source commit: `c7061001b4d1954c2c1283940bde72ed7a8fd37e`.
+- Final deployment archive SHA-256: `1afae0de659b10def35f2e3cb9c74f365fa12fcae2277cfa9cd16e83fa483364`.
+- Final image digest: `sha256:07a4af92c4528b17511f1ce78c3eafced0aac5c0bec2fcdb81ef2e3e8218d0a2`.
+- Image labels: PASS for source commit, `pine-stocktake-v1`, `facebook/sam3`, pinned revision, and pinned weight SHA-256.
+- Runtime dependencies: PASS for CUDA, Torch `2.10.0+cu128`, Transformers `5.14.0`, Ultralytics `8.4.12`, SAM3 imports, and `pip check`.
+- Final native canary: PASS. Three external exemplars ran independently over 40 tiles each on the same 6144 x 4096 target. All 347 candidates had valid native coordinates.
+- Final agreement: PASS. The 0.70 grouping produced 27 one-of-three, 16 two-of-three, and 96 three-of-three groups.
+- Final service-result SHA-256: `06da503e53d1d2f22bf1a44c8d34bc30db3a2f3744a21347de8f860133344b66`.
+- Final sealed evidence-file SHA-256: `1783350c978bd16b2eaa569bf3b3da43584fb8835e165780eefc13d788ffc121`.
+- Shared GPU lifecycle repair: PASS. Pine now unloads before YOLO takes the GPU, and Pine jobs unload competing generic SAM3, concept SAM3, and YOLO models first. Focused tests passed, 3 files and 23 tests.
+- Post-repair repository verification: PASS, 24 unit-test files and 182 tests; Python syntax compilation, focused ESLint, and the 102-page Next.js production build also passed.
+- Live unload: PASS. The final image released the loaded Pine model and reduced process GPU memory from 6,586 MiB to 424 MiB.
+- Existing SAM3 compatibility: PASS. The legacy warmup loaded on CUDA in about 9.3 seconds using the existing runtime secret; the secret was not copied into the image.
+- Cutover: PASS. The final digest serves port 8000 with `unless-stopped`; the former image remains as exited container `sam3-service-rollback-f8e2d46`.
+- VPC path: PASS. AgriDrone application host `i-00453ba6ba625650d` reached the exact Pine identity and CUDA-ready status through `172.31.19.222:8000`; SSM command `567419c7-2126-4a18-8ddf-14c3e72d6d7f` completed successfully.
+- Restart: PASS. A container restart returned the same image digest, exact Pine identity, CUDA device, and loaded legacy predictor.
+- Shutdown: all configured and canary GPU hosts were confirmed in the EC2 `stopped` state after evidence capture.
+
+Gate 2 configured-fallback deployment: PASS. The image is stored only on the fallback host; it was not pushed to a shared registry because no dedicated Pine repository exists and this gate did not authorize new storage infrastructure. The preferred pool host therefore cannot yet pull the digest.
+
+## Gate 3 registry and production-routing gate
+
+Gate 3 ran on 2026-08-18 with a three-attempt infrastructure limit for each approved GPU host. It did not start a mission or alter the production application or database.
+
+- On-demand Pine routing code: PASS. `PINE_STOCKTAKE_USE_SAM3_INSTANCE_POOL=true` now starts and discovers only the configured `SAM3_INSTANCE_ID` or `SAM3_INSTANCE_IDS` pool. The worker then checks the pinned Pine identity before it submits work.
+- No silent endpoint fallback: PASS. In pool mode a fixed `PINE_STOCKTAKE_SAM3_URL` is ignored. Capacity, readiness, discovery, and identity failures stop the Pine stage.
+- Local verification: PASS. The full repository suite passed with 25 test files and 186 tests, including four new endpoint-routing tests. Focused ESLint, the Pine operator end-to-end journey, and the 102-page Next.js production build passed. The standalone type check reported no diagnostics for the changed Pine files. Existing unrelated repository type errors remain.
+- Dedicated registry creation: BLOCKED. Both available identities in AWS account `066807178268` were denied `ecr:CreateRepository` for `agri-pine-stocktake-sam3`. No repository was created.
+- Shared-registry publication: BLOCKED. The existing `forestsmart` repository had no conflicting `pine-stocktake-c706100` tag, but the exact Gate 2 image remained only on the stopped fallback host. It was not rebuilt or replaced with a different digest.
+- Preferred host `i-0e3d24beceebd0b2f`: BLOCKED. All three bounded starts returned `InsufficientInstanceCapacity` for `g5.2xlarge` in `ap-southeast-2a`.
+- Fallback host `i-0644d9ad40d75e0b8`: BLOCKED. All three bounded starts returned `InsufficientInstanceCapacity` for `g4dn.4xlarge` in `ap-southeast-2b`.
+- Production application audit: BLOCKED for release. SSM commands `bbd336c2-f284-445c-b24a-39b5def0de60`, `b445620a-4b55-4686-801f-2453808dcc4a`, and `c88aecad-8957-4ee2-a473-ef769a305fe6` completed successfully against `i-00453ba6ba625650d`.
+- Live application identity: Docker image ID `sha256:3992e25e533a09fc7858864ca25ac61a857e0f3e31f2b02a86b85959b327f132`, started `2026-07-23T05:22:38Z`. The bundle has no Pine worker, Pine routes, Pine process entry, Pine environment variables, or Pine schema migration.
+- Live database state: the deployed bundle reports 21 migrations and an up-to-date MySQL schema for that older release. Gate 3 did not run the Pine migration.
+- Shutdown state: neither approved GPU entered `pending` or `running`; no GPU stop repair was required.
+
+Gate 3 code readiness: PASS. Gate 3 registry publication: BLOCKED by ECR permission and GPU capacity. Gate 3 production routing: BLOCKED because the live application does not contain this branch or its migration. Enabling it would require a reviewed production application release and schema change.
+
+## Local validation limits
+
+- Gate 2 proved an immutable image, live fallback-host deployment, VPC reachability, and the one-target three-exemplar canary. Gate 3 added and locally verified automatic pool routing, but AWS capacity prevented a stopped-host runtime proof. Shared-registry distribution and a full native mission batch remain unproved.
+- The Flat Map and calibrated LiDAR workers are identity-checked job contracts. No remote runner job or production LiDAR mapping run was started.
+- This branch adds the Pine Stocktake BullMQ worker to the PM2 process list. The older live application does not yet contain that entry. Flat Map and calibrated LiDAR stages still require reachable, identity-pinned service deployments before the production workflow can be declared operational.
+- The application build succeeds because the existing Next.js configuration skips type validation. The standalone repository type check has pre-existing errors outside Pine Stocktake. A filtered check reports no Pine Stocktake errors. Fixing unrelated type debt would require a broader AgriDrone change and is outside this branch.

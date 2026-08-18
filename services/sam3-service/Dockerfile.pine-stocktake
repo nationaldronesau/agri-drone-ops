@@ -1,0 +1,28 @@
+# Pine Stocktake SAM3 runtime.
+#
+# The configured GPU pool already carries this immutable CUDA/SAM3 base image.
+# Pin the local base by digest so a build cannot silently select another runtime.
+ARG BASE_IMAGE=sam3-modern-sam3-service@sha256:f8e2d46fc25a45f0f101972bc7e5295f5541fed87da3c6265e3ddc730f9a9082
+FROM ${BASE_IMAGE}
+
+ARG SOURCE_COMMIT=unknown
+LABEL org.opencontainers.image.title="AgriDrone Pine Stocktake SAM3" \
+      org.opencontainers.image.revision="${SOURCE_COMMIT}" \
+      au.com.nationaldrones.agridrone.method="pine-stocktake-v1" \
+      au.com.nationaldrones.agridrone.sam3.repository="facebook/sam3" \
+      au.com.nationaldrones.agridrone.sam3.revision="3c879f39826c281e95690f02c7821c4de09afae7" \
+      au.com.nationaldrones.agridrone.sam3.weight-sha256="6d06f0a5f84e435071fe6603e61d0b4cc7b40e0d39d487cfd4d67d8cc11cc14a"
+
+USER root
+RUN python3 -m pip install --no-cache-dir --upgrade "transformers==5.14.0"
+
+COPY --chown=app:app app/ /app/app/
+
+USER app
+ENV HF_HOME=/app/.cache/huggingface \
+    PRELOAD_MODEL=false
+
+HEALTHCHECK --interval=30s --timeout=30s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8000/api/v1/ready || exit 1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

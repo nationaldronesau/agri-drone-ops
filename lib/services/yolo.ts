@@ -121,6 +121,7 @@ class YOLOServiceError extends Error {
 
 export class YOLOService {
   private explicitBaseUrl: string | null;
+  private useSharedGpuPool: boolean;
   private cachedBaseUrl: string | null = null;
   private lastResolvedAt = 0;
   private resolvePromise: Promise<string | null> | null = null;
@@ -131,8 +132,17 @@ export class YOLOService {
   private apiKey?: string;
   private detectEndpoint: '/api/v1/yolo/detect' | '/api/v1/detect' | null = null;
 
-  constructor(options?: { baseUrl?: string; timeout?: number; apiKey?: string }) {
-    const configuredUrl = options?.baseUrl || process.env.YOLO_SERVICE_URL || null;
+  constructor(options?: {
+    baseUrl?: string;
+    timeout?: number;
+    apiKey?: string;
+    useSharedGpuPool?: boolean;
+  }) {
+    this.useSharedGpuPool =
+      options?.useSharedGpuPool ?? process.env.YOLO_USE_SAM3_INSTANCE_POOL === 'true';
+    const configuredUrl = this.useSharedGpuPool
+      ? null
+      : options?.baseUrl || process.env.YOLO_SERVICE_URL || null;
     this.explicitBaseUrl = configuredUrl ? configuredUrl.replace(/\/$/, '') : null;
     this.timeout = options?.timeout || 30000;
     this.apiKey = options?.apiKey || process.env.YOLO_SERVICE_API_KEY;
@@ -169,6 +179,14 @@ export class YOLOService {
         ? `YOLO auto-discovery unavailable: ${configError}`
         : 'YOLO service URL not configured';
       return null;
+    }
+
+    if (this.useSharedGpuPool && !awsSam3Service.isReady()) {
+      const started = await awsSam3Service.startInstance();
+      if (!started) {
+        this.lastResolveError = 'Unable to start the shared SAM3/YOLO GPU instance pool';
+        return null;
+      }
     }
 
     let ip = awsSam3Service.getStatus().ipAddress;

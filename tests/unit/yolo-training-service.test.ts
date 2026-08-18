@@ -5,6 +5,7 @@ import {
   YOLOService,
   resolveYoloServiceModelName,
 } from '@/lib/services/yolo';
+import { awsSam3Service } from '@/lib/services/aws-sam3';
 
 describe('yolo training service', () => {
   const originalFetch = global.fetch;
@@ -76,6 +77,55 @@ describe('yolo training service', () => {
       name: 'YOLOServiceError',
       statusCode: 503,
       message: 'Failed to connect to YOLO service: connect ECONNREFUSED',
+    });
+  });
+
+  it('starts and discovers the shared GPU pool before a YOLO request', async () => {
+    vi.spyOn(awsSam3Service, 'isConfigured').mockReturnValue(true);
+    vi.spyOn(awsSam3Service, 'isReady').mockReturnValue(false);
+    const startInstance = vi.spyOn(awsSam3Service, 'startInstance').mockResolvedValue(true);
+    vi.spyOn(awsSam3Service, 'getStatus').mockReturnValue({
+      ipAddress: '172.31.19.222',
+    } as ReturnType<typeof awsSam3Service.getStatus>);
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        status: 'healthy',
+        gpu_available: true,
+        active_training_jobs: 0,
+        cached_models: [],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+    global.fetch = fetchMock as typeof fetch;
+
+    const service = new YOLOService({
+      baseUrl: 'http://stopped-legacy-host:8001',
+      useSharedGpuPool: true,
+      timeout: 1000,
+    });
+
+    await expect(service.checkHealth()).resolves.toMatchObject({ status: 'healthy' });
+    expect(startInstance).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe('http://172.31.19.222:8001/health');
+  });
+
+  it('reports a clear error when the shared GPU pool cannot start', async () => {
+    vi.spyOn(awsSam3Service, 'isConfigured').mockReturnValue(true);
+    vi.spyOn(awsSam3Service, 'isReady').mockReturnValue(false);
+    vi.spyOn(awsSam3Service, 'startInstance').mockResolvedValue(false);
+
+    const service = new YOLOService({
+      useSharedGpuPool: true,
+      timeout: 1000,
+    });
+
+    await expect(service.checkHealth()).rejects.toMatchObject({
+      name: 'YOLOServiceError',
+      statusCode: 503,
+      message: 'Unable to start the shared SAM3/YOLO GPU instance pool',
     });
   });
 

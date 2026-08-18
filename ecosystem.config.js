@@ -41,5 +41,13 @@ module.exports = {
         NODE_ENV: "production",
       },
     },
+    {
+      name: "pine-stocktake-worker",
+      script: "npm",
+      args: "run worker:pine-stocktake",
+      env: {
+        NODE_ENV: "production",
+      },
+    },
   ],
 };

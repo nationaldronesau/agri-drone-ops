@@ -3,8 +3,9 @@ from fastapi import APIRouter
 import time
 import logging
 
-from ..sam3_predictor import get_predictor
 from ..config import get_device
+from ..pine_stocktake import pine_sam3
+from ..sam3_predictor import get_predictor
 from .segment import unload_model as unload_segment_model
 
 logger = logging.getLogger(__name__)
@@ -131,8 +132,9 @@ async def unload_model():
     predictor = get_predictor()
     predictor_result = predictor.unload_model()
     segment_result = unload_segment_model()
+    pine_result = pine_sam3.unload()
 
-    success = predictor_result.get("success") and segment_result.get("success")
+    success = predictor_result.get("success") and segment_result.get("success") and pine_result.get("success")
     message = "Models unloaded" if success else "Failed to unload one or more models"
 
     return {
@@ -140,4 +142,5 @@ async def unload_model():
         "message": message,
         "predictor": predictor_result,
         "segment": segment_result,
+        "pine": pine_result,
     }

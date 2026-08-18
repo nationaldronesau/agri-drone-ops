@@ -38,9 +38,10 @@ interface OrthomosaicMapProps {
   };
   controls: OrthomosaicControls;
   onControlsChange: (controls: OrthomosaicControls) => void;
+  pineStocktakeHref?: string;
 }
 
-export default function OrthomosaicMap({ orthomosaic, controls }: OrthomosaicMapProps) {
+export default function OrthomosaicMap({ orthomosaic, controls, pineStocktakeHref }: OrthomosaicMapProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<L.Map | null>(null);
   const orthomosaicLayer = useRef<L.TileLayer | null>(null);
@@ -167,11 +168,12 @@ export default function OrthomosaicMap({ orthomosaic, controls }: OrthomosaicMap
         className="w-full h-[600px] rounded-lg border border-gray-200"
         style={{ minHeight: '600px' }}
       />
+      {pineStocktakeHref && <a href={pineStocktakeHref} className="absolute right-4 top-4 rounded-md border border-emerald-600 bg-white px-3 py-2 text-sm font-medium text-emerald-700 shadow hover:bg-emerald-50">Open Pine Stocktake</a>}
       
       {/* Demo Notice */}
       <div className="absolute bottom-4 left-4 bg-white/90 backdrop-blur-sm rounded-lg p-3 shadow-lg max-w-xs">
         <div className="text-xs text-gray-600">
-          <strong>Demo Mode:</strong> Orthomosaic tiles are simulated. The blue outlined area shows where your orthomosaic imagery would be displayed once tile processing is implemented.
+          <strong>Rapid imagery only:</strong> Use this layer for navigation and comparison. Pine Stocktake uses flight calibration and LiDAR for accepted crown coordinates.
         </div>
       </div>
     </div>

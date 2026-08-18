@@ -44,13 +44,15 @@ export interface DetectionResult {
   tiling?: YoloTilingSummary;
 }
 
-const inferenceBaseUrl =
-  process.env.YOLO_INFERENCE_URL ||
-  process.env.SAM3_SERVICE_URL ||
-  process.env.SAM3_API_URL ||
-  null;
+const useSharedGpuPool = process.env.YOLO_USE_SAM3_INSTANCE_POOL === 'true';
+const inferenceBaseUrl = useSharedGpuPool ? null : process.env.YOLO_INFERENCE_URL || null;
 
-const yoloInferenceClient = inferenceBaseUrl
+const yoloInferenceClient = useSharedGpuPool
+  ? new YOLOService({
+      useSharedGpuPool: true,
+      apiKey: process.env.YOLO_SERVICE_API_KEY,
+    })
+  : inferenceBaseUrl
   ? new YOLOService({
       baseUrl: inferenceBaseUrl,
       apiKey: process.env.YOLO_SERVICE_API_KEY,

@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { MapPin, Calendar, Mountain, AlertCircle, CheckCircle, Clock, Loader2 } from 'lucide-react';
+import { MapPin, Calendar, Mountain, AlertCircle, CheckCircle, Clock, Loader2, Trees } from 'lucide-react';
 import { formatBytes, formatDate } from '@/lib/utils';
 import { OrthomosaicUploader } from '@/components/OrthomosaicUploader';
 
@@ -149,6 +149,19 @@ export default function OrthomosaicsPage() {
       </div>
 
       <div className="container mx-auto p-6 -mt-4">
+
+        <Card className="mb-6 border-emerald-200 bg-emerald-50/70">
+          <CardContent className="flex flex-col gap-4 pt-6 md:flex-row md:items-center md:justify-between">
+            <div className="flex gap-3">
+              <Trees className="mt-1 h-6 w-6 text-emerald-700" />
+              <div>
+                <h2 className="font-semibold text-gray-900">Pine Stocktake</h2>
+                <p className="mt-1 max-w-2xl text-sm text-gray-700">Run the validated cross-image exemplar, human review, rapid RGB map and calibrated LiDAR height workflow. Flat Map positions remain approximate.</p>
+              </div>
+            </div>
+            <Button asChild className="shrink-0 bg-emerald-700 hover:bg-emerald-800"><Link href="/orthomosaics/pine-stocktake/new">Start Pine Stocktake</Link></Button>
+          </CardContent>
+        </Card>
 
         {/* Upload Section */}
         <Card className="mb-8 bg-white shadow-lg border-0 rounded-lg">

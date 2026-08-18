@@ -17,6 +17,8 @@
     "worker:watch": "tsx --watch --env-file=.env workers/batch-worker.ts",
     "worker:v2": "tsx -r tsconfig-paths/register workers/batch-worker-v2.ts",
     "worker:v2:dev": "tsx -r tsconfig-paths/register --env-file=.env workers/batch-worker-v2.ts",
+    "worker:pine-stocktake": "tsx -r tsconfig-paths/register workers/pine-stocktake-worker.ts",
+    "worker:pine-stocktake:dev": "tsx -r tsconfig-paths/register --env-file=.env workers/pine-stocktake-worker.ts",
     "worker:inference": "tsx -r tsconfig-paths/register workers/inference-worker.ts",
     "worker:inference:dev": "tsx -r tsconfig-paths/register --env-file=.env workers/inference-worker.ts",
     "worker:roboflow-detection": "tsx -r tsconfig-paths/register workers/roboflow-detection-worker.ts",

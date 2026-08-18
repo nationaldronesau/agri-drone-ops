@@ -1,0 +1,19 @@
+{
+  "schema": "nd.hqp.pine.stocktake.integration-fixture.v1",
+  "source": "sealed reviewed HQP recovery evidence",
+  "regression_counts": {
+    "merge_existing_lidar": 8,
+    "new_lidar_cluster_review": 20,
+    "ambiguous": 4,
+    "no_coverage": 130
+  },
+  "images": [
+    { "id": "lv-001", "sha256": "1111111111111111111111111111111111111111111111111111111111111111", "width": 6144, "height": 4096, "serial": "LV-SERIAL" },
+    { "id": "rv-001", "sha256": "2222222222222222222222222222222222222222222222222222222222222222", "width": 6144, "height": 4096, "serial": "RV-SERIAL" }
+  ],
+  "observations": [
+    { "crownId": "LV-C001", "sourceImageId": "lv-001", "x": 500000.10, "y": 7000000.10, "lidar": true, "heightP99M": 0.92, "apex": [500000.11, 7000000.12, 71.02], "localGroundZ": 70.10, "lineage": ["A0001", "E1", "E2"] },
+    { "crownId": "RV-C004", "sourceImageId": "rv-001", "x": 500000.28, "y": 7000000.18, "lidar": true, "heightP99M": 0.88, "apex": [500000.27, 7000000.18, 70.99], "localGroundZ": 70.10, "lineage": ["A0004", "E3"] },
+    { "crownId": "LV-C009", "sourceImageId": "lv-001", "x": 500004.00, "y": 7000004.00, "lidar": false, "missingReason": "no_bounded_neighbourhood_cluster", "lineage": ["A0009"] }
+  ]
+}
