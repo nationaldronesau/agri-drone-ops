@@ -1,6 +1,6 @@
 # Pine Stocktake v1 local evidence
 
-This report records local implementation evidence only. No production mission, cloud job, deployment, push, merge, AWS change, or external data write was performed.
+This report records implementation and bounded infrastructure-readiness evidence. No production mission, inference batch, deployment, merge, or external data write was performed. On 2026-08-18, one stopped GPU fallback was started for the readiness checks below and stopped after the checks.
 
 ## Source identities
 
@@ -28,9 +28,25 @@ Final local results on 2026-08-17:
 - Pine Stocktake filtered type check: PASS, no Pine Stocktake diagnostics.
 - Repository-wide standalone type check: NOT PASS due to existing unrelated errors; see validation limits.
 
+## Shared GPU readiness evidence
+
+Bounded live checks on 2026-08-18 used the configured AgriDrone GPU pool. AWS could not start the preferred `g5.2xlarge` because the availability zone returned `InsufficientInstanceCapacity`. The configured private fallback `i-0644d9ad40d75e0b8` (`g4dn.4xlarge`, Tesla T4) started successfully.
+
+- SAM3 service: PASS on port 8000, CUDA available.
+- Repository and revision: PASS, cached `facebook/sam3` revision `3c879f39826c281e95690f02c7821c4de09afae7`.
+- SAM3 weight: PASS, `model.safetensors` SHA-256 independently calculated as `6d06f0a5f84e435071fe6603e61d0b4cc7b40e0d39d487cfd4d67d8cc11cc14a`.
+- YOLO service: PASS on port 8001, CUDA available.
+- Pine YOLO model: PASS, `pine-saplings-yolo11n-seg-glasshouse-v1` completed a real inference and entered the service cache.
+- Pine YOLO weight SHA-256: `a2d3b6e15285d4964e6267d983350cbd0a8ed0dcdb64e03d92ace03ab4b18a45`.
+- VPC path: PASS. The running AgriDrone application host reached the fallback at `172.31.19.222` on ports 8000 and 8001.
+- Focused lifecycle and inference tests after the repair: PASS, 4 files and 26 tests.
+- Focused lint: PASS for the changed AWS, YOLO, and test files.
+
+The repair adds `YOLO_USE_SAM3_INSTANCE_POOL=true`. With this flag, fixed YOLO URLs are ignored, a YOLO request starts the configured GPU pool, and the service is discovered on port 8001. EC2 discovery now permits the private address of a private-only fallback. The flag is not enabled in production until this branch is reviewed and deployed.
+
 ## Local validation limits
 
-- The SAM3 end-to-end browser test mocks GPU execution. The pinned service lane compiles, but no full native mission or paid compute was started.
+- The bounded GPU check proved the pinned SAM3 cache and the existing SAM3 and YOLO endpoints. The Pine Stocktake browser test still mocks full native mission execution. The live GPU image does not yet contain this branch's `/api/v1/pine-stocktake` endpoint.
 - The Flat Map and calibrated LiDAR workers are identity-checked job contracts. No remote runner job or production LiDAR mapping run was started.
 - The production PM2 process list starts the Pine Stocktake BullMQ worker. Flat Map and calibrated LiDAR stages still require reachable, identity-pinned service deployments before the production workflow can be declared operational.
 - The application build succeeds because the existing Next.js configuration skips type validation. The standalone repository type check has pre-existing errors outside Pine Stocktake. A filtered check reports no Pine Stocktake errors. Fixing unrelated type debt would require a broader AgriDrone change and is outside this branch.

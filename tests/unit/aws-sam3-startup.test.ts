@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_SAM3_STARTUP_TIMEOUT_MS,
   isRetryableSam3StartError,
+  resolveSam3InstanceIp,
   resolveSam3InstanceIds,
   resolveSam3StartupTimeoutMs,
   tryStartSam3InstancePool,
@@ -40,6 +41,17 @@ describe('SAM3 EC2 start retry classification', () => {
 });
 
 describe('SAM3 EC2 instance pool', () => {
+  it('uses a private address for a private-only fallback host', () => {
+    expect(resolveSam3InstanceIp({ PrivateIpAddress: '172.31.19.222' })).toBe('172.31.19.222');
+  });
+
+  it('keeps the public address when both addresses exist', () => {
+    expect(resolveSam3InstanceIp({
+      PublicIpAddress: '13.239.221.10',
+      PrivateIpAddress: '172.31.3.135',
+    })).toBe('13.239.221.10');
+  });
+
   it('keeps the legacy instance first and de-duplicates configured fallbacks', () => {
     expect(resolveSam3InstanceIds(' i-fallback-b, i-primary, i-fallback-c ', 'i-primary')).toEqual([
       'i-primary',

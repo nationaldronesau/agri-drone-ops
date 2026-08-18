@@ -95,6 +95,13 @@ export interface Sam3InstancePoolStartResult {
   lastError?: unknown;
 }
 
+export function resolveSam3InstanceIp(instance: {
+  PublicIpAddress?: string;
+  PrivateIpAddress?: string;
+}): string | null {
+  return instance.PublicIpAddress || instance.PrivateIpAddress || null;
+}
+
 export async function tryStartSam3InstancePool(
   instanceIds: string[],
   attemptStart: (instanceId: string) => Promise<unknown>,
@@ -431,7 +438,8 @@ class AWSSAM3Service {
   }
 
   /**
-   * Query EC2 API to discover the current public IP of the instance
+   * Query EC2 API to discover the current reachable IP of the instance.
+   * Pool fallbacks can be private-only and are reached from the app VPC.
    */
   async discoverInstanceIp(): Promise<string | null> {
     if (SAM3_INSTANCE_IDS.length === 0 || !this.ec2Client) return null;
@@ -454,7 +462,7 @@ class AWSSAM3Service {
         if (instance.InstanceId) {
           this.setActiveInstance(instance.InstanceId);
         }
-        this.instanceIp = instance.PublicIpAddress || null;
+        this.instanceIp = resolveSam3InstanceIp(instance);
         this.updateEC2State(instance.State?.Name);
         console.log(`[AWS-SAM3] Active instance ${this.activeInstanceId} IP: ${this.instanceIp}, State: ${instance.State?.Name}`);
       }
